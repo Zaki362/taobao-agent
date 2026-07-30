@@ -6,6 +6,14 @@ export type MpcStatus = {
   available: boolean;
   message: string;
   permissions_scope: string[];
+  executor_devices?: {
+    online: number;
+    registered: number;
+    capabilities: {
+      module_search: { registered: number; online: number; available: boolean };
+      add_to_cart: { registered: number; online: number; available: boolean };
+    };
+  };
 };
 
 export type HostedWorkerStatus = {

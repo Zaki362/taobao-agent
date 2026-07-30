@@ -5,6 +5,7 @@ import { ensureSession } from "@/lib/agent/orchestrator";
 import { getRuntimeRepository } from "@/lib/runtime";
 import { getLlmTelemetrySnapshot } from "@/lib/llm/telemetry";
 import { evaluateRuntimeHealth } from "@/lib/runtime/monitoring";
+import { isExecutorDeviceOnline, summarizeExecutorDevices } from "@/lib/runtime/executor-status";
 
 export async function GET(request: NextRequest) {
   try {
@@ -31,11 +32,7 @@ export async function GET(request: NextRequest) {
           0
         ) / completedJobs.length)
       : 0;
-    const activeDevices = devices.filter((device) =>
-      device.status !== "revoked" &&
-      Boolean(device.last_heartbeat_at) &&
-      now - Date.parse(device.last_heartbeat_at!) < 45_000
-    );
+    const executorDevices = summarizeExecutorDevices(devices, now);
 
     const jobMetrics = {
       total: jobs.length,
@@ -47,12 +44,18 @@ export async function GET(request: NextRequest) {
       oldest_pending_ms: pendingJobs.length
         ? Math.max(...pendingJobs.map((job) => now - Date.parse(job.created_at)))
         : 0,
-      average_duration_ms: averageDurationMs
+      average_duration_ms: averageDurationMs,
+      pending_by_type: {
+        module_search: pendingJobs.filter((job) => job.job_type === "module_search").length,
+        add_to_cart: pendingJobs.filter((job) => job.job_type === "add_to_cart").length
+      }
     };
     const deviceMetrics = {
-      total: devices.filter((device) => device.status !== "revoked").length,
-      online: activeDevices.length,
-      last_heartbeat_at: activeDevices
+      total: executorDevices.registered,
+      online: executorDevices.online,
+      capabilities: executorDevices.capabilities,
+      last_heartbeat_at: devices
+        .filter((device) => isExecutorDeviceOnline(device, now))
         .map((device) => device.last_heartbeat_at)
         .filter((value): value is string => Boolean(value))
         .sort()

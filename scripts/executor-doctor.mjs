@@ -80,7 +80,7 @@ await check("scenecart_api", async () => {
   if (!response.ok || payload.status !== "healthy") {
     throw new Error(payload.error || `HTTP ${response.status}`);
   }
-  return `${apiBaseUrl} · runtime=${payload.runtime_store} · backend=${payload.executor_backend}`;
+  return `${apiBaseUrl} · runtime=${payload.runtime_store} · backend=${payload.effective_executor_backend}`;
 });
 
 await check("device_token", async () => {

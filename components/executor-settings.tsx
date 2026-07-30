@@ -27,8 +27,22 @@ type Readiness = {
   demo_cart_fallback: boolean;
   ready_for_production: boolean;
   operational_for_shopping: boolean;
+  executor_capabilities: {
+    registered: number;
+    online: number;
+    capabilities: {
+      module_search: { registered: number; online: number; available: boolean };
+      add_to_cart: { registered: number; online: number; available: boolean };
+    };
+  };
   checks: ReadinessCheck[];
 };
+
+function capabilityLabel(capability: string) {
+  if (capability === "module_search") return "商品搜索";
+  if (capability === "add_to_cart") return "真实加购";
+  return capability;
+}
 
 function deviceStatus(device: Device) {
   if (device.status === "revoked") return "已撤销";
@@ -45,9 +59,12 @@ export function ExecutorSettings() {
   const [readiness, setReadiness] = useState<Readiness | null>(null);
   const [copied, setCopied] = useState("");
   const [lastCheckedAt, setLastCheckedAt] = useState("");
+  const [enableCartCapability, setEnableCartCapability] = useState(false);
 
   const activeDevices = devices.filter((device) => device.status !== "revoked");
   const onlineDevices = activeDevices.filter((device) => deviceStatus(device) === "在线");
+  const searchAvailable = readiness?.executor_capabilities.capabilities.module_search.available ?? false;
+  const cartAvailable = readiness?.executor_capabilities.capabilities.add_to_cart.available ?? false;
   const doctorCommand = `SCENECART_API_URL='${apiUrl}' SCENECART_DEVICE_TOKEN='${token || "你的设备令牌"}' npm run executor:doctor`;
   const workerCommand = `SCENECART_API_URL='${apiUrl}' SCENECART_DEVICE_TOKEN='${token || "你的设备令牌"}' npm run worker:local`;
 
@@ -81,7 +98,10 @@ export function ExecutorSettings() {
       const response = await fetch("/api/executor/devices", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: "这台 Mac 的淘宝执行器" })
+        body: JSON.stringify({
+          name: "这台 Mac 的淘宝执行器",
+          capabilities: enableCartCapability ? ["module_search", "add_to_cart"] : ["module_search"]
+        })
       });
       const payload = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(payload.error || "注册执行器失败");
@@ -169,6 +189,12 @@ export function ExecutorSettings() {
             </span>
             <span className={`rounded-full px-3 py-1.5 font-semibold ${onlineDevices.length ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-700"}`}>
               {onlineDevices.length ? `${onlineDevices.length} 台设备在线` : "等待本地执行器"}
+            </span>
+            <span className={`rounded-full px-3 py-1.5 font-semibold ${searchAvailable ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-700"}`}>
+              {searchAvailable ? "真实搜索可用" : "搜索能力未连接"}
+            </span>
+            <span className={`rounded-full px-3 py-1.5 font-semibold ${cartAvailable ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-700"}`}>
+              {cartAvailable ? "真实加购可用" : "加购能力未连接"}
             </span>
             <span>{!readiness ? "正在读取加购策略" : readiness.demo_cart_fallback ? "允许演示加购回退" : "仅接受真实加购结果"}</span>
             <span>{activeDevices.length} 台有效设备</span>
@@ -273,7 +299,7 @@ export function ExecutorSettings() {
             <div key={device.id} className="subtle-card flex flex-wrap items-center justify-between gap-3 p-4">
               <div>
                 <p className="font-medium">{device.name}</p>
-                <p className="mt-1 text-xs text-muted-foreground">{device.capabilities.join("、")} · {deviceStatus(device)}</p>
+                <p className="mt-1 text-xs text-muted-foreground">{device.capabilities.map(capabilityLabel).join("、")} · {deviceStatus(device)}</p>
               </div>
               <div className="flex flex-wrap items-center gap-3">
                 <p className="text-xs text-muted-foreground">最近心跳：{device.last_heartbeat_at ? new Date(device.last_heartbeat_at).toLocaleString("zh-CN", { hour12: false }) : "尚未连接"}</p>
@@ -286,6 +312,20 @@ export function ExecutorSettings() {
             </div>
           ))}
           {devices.length === 0 ? <p className="text-sm text-muted-foreground">还没有已注册设备。</p> : null}
+          <label className="flex items-start gap-3 rounded-[18px] border border-border/80 bg-white px-4 py-3 text-sm">
+            <input
+              type="checkbox"
+              checked={enableCartCapability}
+              onChange={(event) => setEnableCartCapability(event.target.checked)}
+              className="mt-1 h-4 w-4 rounded border-border accent-primary"
+            />
+            <span>
+              <span className="font-medium text-foreground">允许这台设备执行真实加购</span>
+              <span className="mt-1 block text-xs leading-5 text-muted-foreground">
+                默认只授予商品搜索。开启后仍会在每次加购前要求用户显式确认，不包含下单或付款权限。
+              </span>
+            </span>
+          </label>
           <Button onClick={register} disabled={busy}>{busy ? "正在注册" : "注册当前设备"}</Button>
           {error ? <p className="rounded-[16px] bg-red-50 px-4 py-3 text-sm text-red-700">{error}</p> : null}
         </CardContent>

@@ -80,7 +80,7 @@ async function verifyStartup() {
   if (!response.ok || payload.status !== "healthy") {
     throw new Error(payload.error || `SceneCart API health check failed with ${response.status}`);
   }
-  process.stdout.write(`[local-executor] startup checks passed; qoder=session-ready; runtime=${payload.runtime_store}; backend=${payload.executor_backend}\n`);
+  process.stdout.write(`[local-executor] startup checks passed; qoder=session-ready; runtime=${payload.runtime_store}; backend=${payload.effective_executor_backend}\n`);
 }
 
 function parseJson(text) {

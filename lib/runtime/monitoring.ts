@@ -18,9 +18,17 @@ interface RuntimeHealthInput {
     completed: number;
     failed: number;
     oldest_pending_ms: number;
+    pending_by_type?: {
+      module_search: number;
+      add_to_cart: number;
+    };
   };
   devices: {
     online: number;
+    capabilities?: {
+      module_search: { online: number };
+      add_to_cart: { online: number };
+    };
   };
   llm: {
     calls: number;
@@ -52,6 +60,29 @@ export function evaluateRuntimeHealth(input: RuntimeHealthInput) {
       `当前有 ${queuedWork} 个待执行或执行中任务，没有在线设备领取。`,
       "在淘宝与 Qoder 所在电脑运行 executor:doctor，确认全部通过后启动 worker:local。"
     ));
+  }
+
+  if (input.devices.online > 0) {
+    const pendingSearch = input.jobs.pending_by_type?.module_search ?? 0;
+    const pendingCart = input.jobs.pending_by_type?.add_to_cart ?? 0;
+    if (pendingSearch > 0 && (input.devices.capabilities?.module_search.online ?? 0) === 0) {
+      incidents.push(incident(
+        "search_capability_unavailable",
+        "critical",
+        "搜索任务没有匹配的执行器",
+        `当前有 ${pendingSearch} 个淘宝搜索任务等待，但在线设备均未声明 module_search 能力。`,
+        "在执行器设置页注册搜索能力，或启动具备 module_search 能力的本地 Worker。"
+      ));
+    }
+    if (pendingCart > 0 && (input.devices.capabilities?.add_to_cart.online ?? 0) === 0) {
+      incidents.push(incident(
+        "cart_capability_unavailable",
+        "critical",
+        "加购任务没有匹配的执行器",
+        `当前有 ${pendingCart} 个已确认加购任务等待，但在线设备均未声明 add_to_cart 能力。`,
+        "确认淘宝账号支持加购后，启动具备 add_to_cart 能力的本地 Worker。"
+      ));
+    }
   }
 
   if (input.jobs.oldest_pending_ms >= 180_000) {

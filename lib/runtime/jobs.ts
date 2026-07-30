@@ -10,7 +10,8 @@ import {
 import { isProductCandidate } from "@/lib/session/guards";
 import { persistSession } from "@/lib/session/repository";
 
-const DEFAULT_CAPABILITIES: RuntimeJobType[] = ["module_search", "add_to_cart"];
+const ALLOWED_CAPABILITIES: RuntimeJobType[] = ["module_search", "add_to_cart"];
+const MINIMUM_CAPABILITIES: RuntimeJobType[] = ["module_search"];
 export const DEFAULT_JOB_LEASE_MS = 5 * 60 * 1000;
 
 function stableDigest(value: string) {
@@ -71,17 +72,18 @@ function attachOrReviveTask(state: SessionState, nextTask: HostedExecutionTask, 
 export async function registerExecutorDevice(
   userId: string,
   name: string,
-  capabilities: RuntimeJobType[] = DEFAULT_CAPABILITIES
+  capabilities: RuntimeJobType[] = MINIMUM_CAPABILITIES
 ) {
   const repository = getRuntimeRepository();
   const token = createOpaqueToken();
   const now = new Date().toISOString();
+  const grantedCapabilities = capabilities.filter((item) => ALLOWED_CAPABILITIES.includes(item));
   const device = await repository.createDevice({
     id: randomUUID(),
     user_id: userId,
     name: name.trim().slice(0, 80) || "本地淘宝执行器",
     token_hash: hashOpaqueToken(token),
-    capabilities: capabilities.filter((item) => DEFAULT_CAPABILITIES.includes(item)),
+    capabilities: grantedCapabilities.length ? grantedCapabilities : MINIMUM_CAPABILITIES,
     status: "offline",
     created_at: now,
     updated_at: now

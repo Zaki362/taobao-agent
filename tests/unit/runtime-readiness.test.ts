@@ -1,8 +1,13 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { inspectRuntimeReadiness } from "@/lib/runtime/readiness";
+import { localRuntimeRepository, resetLocalRuntimeForTests } from "@/lib/runtime/local-repository";
 
 const originalProductMode = process.env.SCENECART_PRODUCT_MODE;
 const originalBackend = process.env.TAOBAO_EXECUTION_BACKEND;
+
+beforeEach(() => {
+  resetLocalRuntimeForTests();
+});
 
 afterEach(() => {
   if (originalProductMode === undefined) delete process.env.SCENECART_PRODUCT_MODE;
@@ -38,5 +43,29 @@ describe("production readiness", () => {
     expect(readiness.effective_executor_backend).toBe("local_executor");
     expect(checks.get("executor_backend")?.status).toBe("fail");
     expect(checks.get("executor_backend")?.detail).toContain("已阻断配置的 backend=qoder_cli");
+  });
+
+  it("does not report full shopping operations when only search capability is online", async () => {
+    const now = new Date().toISOString();
+    await localRuntimeRepository.createDevice({
+      id: "search-only-device",
+      user_id: "capability-user",
+      name: "search only",
+      token_hash: "search-only-token",
+      capabilities: ["module_search"],
+      status: "online",
+      last_heartbeat_at: now,
+      created_at: now,
+      updated_at: now
+    });
+
+    const readiness = await inspectRuntimeReadiness("capability-user");
+    const checks = new Map(readiness.checks.map((item) => [item.id, item]));
+    expect(checks.get("executor_online")?.status).toBe("pass");
+    expect(checks.get("executor_search_capability")?.status).toBe("pass");
+    expect(checks.get("executor_cart_capability")?.status).toBe("warn");
+    expect(readiness.executor_capabilities.capabilities.module_search.available).toBe(true);
+    expect(readiness.executor_capabilities.capabilities.add_to_cart.available).toBe(false);
+    expect(readiness.operational_for_shopping).toBe(false);
   });
 });

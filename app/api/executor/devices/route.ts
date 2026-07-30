@@ -6,11 +6,12 @@ import { registerExecutorDevice } from "@/lib/runtime/jobs";
 import type { RuntimeJobType } from "@/lib/runtime/types";
 
 const ALLOWED_CAPABILITIES: RuntimeJobType[] = ["module_search", "add_to_cart"];
+const DEFAULT_CAPABILITIES: RuntimeJobType[] = ["module_search"];
 
 function capabilities(value: unknown) {
-  if (!Array.isArray(value)) return ALLOWED_CAPABILITIES;
+  if (!Array.isArray(value)) return DEFAULT_CAPABILITIES;
   const filtered = value.filter((item): item is RuntimeJobType => ALLOWED_CAPABILITIES.includes(item as RuntimeJobType));
-  return filtered.length ? [...new Set(filtered)] : ALLOWED_CAPABILITIES;
+  return filtered.length ? [...new Set(filtered)] : DEFAULT_CAPABILITIES;
 }
 
 export async function GET() {

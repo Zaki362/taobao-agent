@@ -87,6 +87,21 @@ test("authenticated new-car workflow reaches recommendations through the durable
   });
   expect(heartbeatResponse.ok()).toBeTruthy();
 
+  const mcpStatusResponse = await page.request.get("/api/mcp/status");
+  expect(mcpStatusResponse.ok()).toBeTruthy();
+  const mcpStatus = await mcpStatusResponse.json() as {
+    available: boolean;
+    executor_devices: {
+      capabilities: {
+        module_search: { available: boolean };
+        add_to_cart: { available: boolean };
+      };
+    };
+  };
+  expect(mcpStatus.available).toBe(true);
+  expect(mcpStatus.executor_devices.capabilities.module_search.available).toBe(true);
+  expect(mcpStatus.executor_devices.capabilities.add_to_cart.available).toBe(true);
+
   const readinessResponse = await page.request.get("/api/runtime/readiness");
   expect(readinessResponse.ok()).toBeTruthy();
   const readiness = await readinessResponse.json() as {

@@ -27,11 +27,19 @@ type RuntimeMetrics = {
     cancelled: number;
     oldest_pending_ms: number;
     average_duration_ms: number;
+    pending_by_type: {
+      module_search: number;
+      add_to_cart: number;
+    };
   };
   devices: {
     total: number;
     online: number;
     last_heartbeat_at: string | null;
+    capabilities: {
+      module_search: { registered: number; online: number; available: boolean };
+      add_to_cart: { registered: number; online: number; available: boolean };
+    };
   };
   llm: {
     calls: number;
@@ -252,7 +260,7 @@ export function HostedConsole() {
         </div>
 
         {runtimeMetrics?.available ? (
-          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-6">
             <InfoBlock label="队列积压" value={`${runtimeMetrics.jobs.pending} 个待领取`} />
             <InfoBlock label="执行中" value={`${runtimeMetrics.jobs.active} 个任务`} />
             <InfoBlock label="失败 / 取消" value={`${runtimeMetrics.jobs.failed} / ${runtimeMetrics.jobs.cancelled}`} />
@@ -260,6 +268,10 @@ export function HostedConsole() {
             <InfoBlock
               label="本地执行器"
               value={`${runtimeMetrics.devices.online} / ${runtimeMetrics.devices.total} 在线`}
+            />
+            <InfoBlock
+              label="能力覆盖"
+              value={`搜索 ${runtimeMetrics.devices.capabilities.module_search.online} · 加购 ${runtimeMetrics.devices.capabilities.add_to_cart.online}`}
             />
           </div>
         ) : null}

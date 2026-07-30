@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { localRuntimeRepository, resetLocalRuntimeForTests } from "@/lib/runtime/local-repository";
-import { applyCompletedRuntimeJob, applyFailedRuntimeJob, enqueueModuleSearchJob } from "@/lib/runtime/jobs";
+import { applyCompletedRuntimeJob, applyFailedRuntimeJob, enqueueModuleSearchJob, registerExecutorDevice } from "@/lib/runtime/jobs";
 import { decideNextAgentAction } from "@/lib/agent/decision-engine";
 import { createSessionFixture } from "@/tests/fixtures/session";
 import type { ExecutorDevice } from "@/lib/runtime/types";
@@ -51,6 +51,11 @@ describe("durable job queue contract", () => {
     expect(duplicateAfterCompletion.status).toBe("completed");
   });
 
+  it("grants only search capability when device registration omits an explicit scope", async () => {
+    const registered = await registerExecutorDevice("least-privilege-user", "least privilege device");
+    expect(registered.device.capabilities).toEqual(["module_search"]);
+  });
+
   it("returns an expired lease to the pending queue", async () => {
     await localRuntimeRepository.createDevice(device);
     await localRuntimeRepository.createJob({
@@ -90,6 +95,38 @@ describe("durable job queue contract", () => {
     });
     await localRuntimeRepository.claimJob(device, 30_000);
     expect(await localRuntimeRepository.cancelJob("job-already-claimed", device.user_id)).toBeNull();
+  });
+
+  it("claims only jobs supported by the device capability set", async () => {
+    const searchOnlyDevice = { ...device, id: "search-only-device", capabilities: ["module_search"] as const };
+    await localRuntimeRepository.createDevice({
+      ...searchOnlyDevice,
+      capabilities: [...searchOnlyDevice.capabilities]
+    });
+    await localRuntimeRepository.createJob({
+      id: "cart-higher-priority",
+      user_id: device.user_id,
+      session_id: "session-capability",
+      job_type: "add_to_cart",
+      idempotency_key: "capability-cart",
+      payload: {},
+      priority: 200
+    });
+    await localRuntimeRepository.createJob({
+      id: "search-lower-priority",
+      user_id: device.user_id,
+      session_id: "session-capability",
+      job_type: "module_search",
+      idempotency_key: "capability-search",
+      payload: {},
+      priority: 100
+    });
+
+    expect((await localRuntimeRepository.claimJob({
+      ...searchOnlyDevice,
+      capabilities: [...searchOnlyDevice.capabilities]
+    }, 30_000))?.id).toBe("search-lower-priority");
+    expect((await localRuntimeRepository.getJob("cart-higher-priority"))?.status).toBe("pending");
   });
 
   it("does not retry a terminal executor configuration error", async () => {

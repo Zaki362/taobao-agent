@@ -3,6 +3,7 @@ import { isAuthenticationRequired, useSecureAuthCookie } from "@/lib/auth/reques
 import { query } from "@/lib/runtime/database";
 import { getRuntimeRepository, runtimeStoreMode } from "@/lib/runtime";
 import { allowDemoCartFallback, getProductMode } from "@/lib/runtime/product-mode";
+import { summarizeExecutorDevices } from "@/lib/runtime/executor-status";
 
 export type ReadinessStatus = "pass" | "fail" | "warn";
 
@@ -37,12 +38,6 @@ function validProductionOrigin(value: string | undefined) {
     .map((item) => item.trim())
     .filter(Boolean)
     .every((origin) => /^https:\/\//i.test(origin) && !/localhost|127\.0\.0\.1/i.test(origin));
-}
-
-function onlineDevice(lastHeartbeatAt?: string) {
-  if (!lastHeartbeatAt) return false;
-  const heartbeat = Date.parse(lastHeartbeatAt);
-  return Number.isFinite(heartbeat) && Date.now() - heartbeat < 45_000;
 }
 
 export async function inspectRuntimeReadiness(userId?: string) {
@@ -167,30 +162,59 @@ export async function inspectRuntimeReadiness(userId?: string) {
     "配置 DEEPSEEK_API_KEY，并确保 DEEPSEEK_DISABLED 不是 true"
   ));
 
+  let executorCapabilities = summarizeExecutorDevices([]);
   if (userId) {
     const devices = await getRuntimeRepository().listDevices(userId);
-    const onlineCount = devices.filter((device) => device.status !== "revoked" && onlineDevice(device.last_heartbeat_at)).length;
+    executorCapabilities = summarizeExecutorDevices(devices);
     checks.push(check(
       "executor_online",
       "本地执行器在线",
-      onlineCount > 0 ? "pass" : "warn",
+      executorCapabilities.online > 0 ? "pass" : "warn",
       false,
-      onlineCount > 0 ? `${onlineCount} 台本地执行器在线` : "当前账号没有在线执行器",
+      executorCapabilities.online > 0 ? `${executorCapabilities.online} 台本地执行器在线` : "当前账号没有在线执行器",
       "在淘宝与 Qoder 所在电脑运行 npm run executor:doctor 和 npm run worker:local"
     ));
-  } else {
     checks.push(check(
-      "executor_online",
-      "本地执行器在线",
-      "warn",
+      "executor_search_capability",
+      "真实商品搜索能力",
+      executorCapabilities.capabilities.module_search.available ? "pass" : "warn",
       false,
-      "登录后才能检查当前账号的执行器",
-      "登录产品并打开 /settings/executor"
+      executorCapabilities.capabilities.module_search.available
+        ? `${executorCapabilities.capabilities.module_search.online} 台在线设备可执行淘宝搜索`
+        : "当前没有具备商品搜索能力的在线设备",
+      "注册包含 module_search 能力的设备，并启动对应本地执行器"
     ));
+    checks.push(check(
+      "executor_cart_capability",
+      "真实淘宝加购能力",
+      executorCapabilities.capabilities.add_to_cart.available ? "pass" : "warn",
+      false,
+      executorCapabilities.capabilities.add_to_cart.available
+        ? `${executorCapabilities.capabilities.add_to_cart.online} 台在线设备可执行显式确认后的真实加购`
+        : "当前没有具备真实加购能力的在线设备",
+      "确认淘宝账号与 Skill 支持加购，再注册包含 add_to_cart 能力的设备"
+    ));
+  } else {
+    for (const [id, label] of [
+      ["executor_online", "本地执行器在线"],
+      ["executor_search_capability", "真实商品搜索能力"],
+      ["executor_cart_capability", "真实淘宝加购能力"]
+    ] as const) {
+      checks.push(check(
+        id,
+        label,
+        "warn",
+        false,
+        "登录后才能检查当前账号的执行器能力",
+        "登录产品并打开 /settings/executor"
+      ));
+    }
   }
 
   const readyForProduction = checks.every((item) => !item.required || item.status === "pass");
-  const executorReady = checks.find((item) => item.id === "executor_online")?.status === "pass";
+  const executorReady =
+    executorCapabilities.capabilities.module_search.available &&
+    executorCapabilities.capabilities.add_to_cart.available;
   return {
     product_mode: productMode,
     demo_cart_fallback: demoCartFallback,
@@ -198,6 +222,7 @@ export async function inspectRuntimeReadiness(userId?: string) {
     effective_executor_backend: executor,
     ready_for_production: readyForProduction,
     operational_for_shopping: readyForProduction && executorReady,
+    executor_capabilities: executorCapabilities,
     checked_at: new Date().toISOString(),
     checks
   };

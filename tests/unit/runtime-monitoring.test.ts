@@ -9,9 +9,16 @@ function input() {
       active: 0,
       completed: 0,
       failed: 0,
-      oldest_pending_ms: 0
+      oldest_pending_ms: 0,
+      pending_by_type: { module_search: 0, add_to_cart: 0 }
     },
-    devices: { online: 0 },
+    devices: {
+      online: 0,
+      capabilities: {
+        module_search: { online: 0 },
+        add_to_cart: { online: 0 }
+      }
+    },
     llm: { calls: 0, connected: 0, fallback: 0 },
     agentRuntime: createSessionFixture().agent_runtime
   };
@@ -34,6 +41,19 @@ describe("runtime monitoring", () => {
     expect(health.incidents.map((item) => item.code)).toEqual(
       expect.arrayContaining(["executor_offline_with_work", "queue_stalled"])
     );
+  });
+
+  it("reports an online executor that cannot claim the queued job type", () => {
+    const state = input();
+    state.devices.online = 1;
+    state.devices.capabilities.module_search.online = 1;
+    state.jobs.pending = 1;
+    state.jobs.pending_by_type.add_to_cart = 1;
+
+    const health = evaluateRuntimeHealth(state);
+    expect(health.status).toBe("critical");
+    expect(health.incidents.map((item) => item.code)).toContain("cart_capability_unavailable");
+    expect(health.incidents.map((item) => item.code)).not.toContain("executor_offline_with_work");
   });
 
   it("waits for enough samples before reporting failure and fallback rates", () => {
