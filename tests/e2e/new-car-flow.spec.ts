@@ -130,6 +130,54 @@ test("authenticated new-car workflow reaches recommendations through the durable
     await expect(page.getByText("Agent Runtime 2.0")).toBeVisible();
     await expect(page.getByText("运行健康诊断")).toBeVisible();
     await expect(page.getByText("本地执行器队列", { exact: false }).first()).toBeVisible();
+
+    stopExecutor = true;
+    await executor;
+    const persistedSessionId = await page.evaluate(() => {
+      const raw = window.localStorage.getItem("scenecart-dashboard-state");
+      if (!raw) return "";
+      return String((JSON.parse(raw) as { sessionId?: string }).sessionId ?? "");
+    });
+    expect(persistedSessionId).not.toBe("");
+    const sessionsResponse = await page.request.get("/api/sessions");
+    const sessionList = await sessionsResponse.json() as {
+      sessions: Array<{
+        session_id: string;
+        shopping_plan: { modules: Array<{ module_id: string }> };
+      }>;
+    };
+    const currentSession = sessionList.sessions.find((session) => session.session_id === persistedSessionId)!;
+    expect(currentSession).toBeTruthy();
+    const retryModule = currentSession.shopping_plan.modules[0];
+    const retryKeyword = `E2E 失败恢复 ${Date.now()}`;
+    const queuedForFailure = await page.request.post("/api/modules/search", {
+      headers: { Origin: "http://127.0.0.1:3100" },
+      data: {
+        session_id: currentSession.session_id,
+        module_id: retryModule.module_id,
+        keyword_override: retryKeyword
+      }
+    });
+    expect(queuedForFailure.ok(), await queuedForFailure.text()).toBeTruthy();
+    const failedClaim = await page.request.post("/api/executor/jobs/claim", {
+      headers: { Authorization: `Bearer ${deviceToken}` },
+      data: {}
+    });
+    const { job: failedJob } = await failedClaim.json() as { job: { id: string } | null };
+    expect(failedJob).not.toBeNull();
+    const failedResolution = await page.request.post(`/api/executor/jobs/${failedJob!.id}/resolve`, {
+      headers: { Authorization: `Bearer ${deviceToken}` },
+      data: { status: "failed", error: "E2E terminal executor failure", retryable: false }
+    });
+    expect(failedResolution.ok()).toBeTruthy();
+
+    await page.reload();
+    const retryButton = page.getByRole("button", { name: "重新入队" }).first();
+    await expect(retryButton).toBeVisible();
+    page.once("dialog", (dialog) => dialog.accept());
+    await retryButton.click();
+    await expect(page.getByRole("button", { name: "取消待执行" }).first()).toBeVisible();
+
     await page.getByRole("button", { name: "返回当前进度" }).click();
     await expect(page.getByText("确认下单清单")).toBeVisible();
   } finally {

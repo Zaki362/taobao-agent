@@ -147,7 +147,24 @@ export const localRuntimeRepository: RuntimeRepository = {
   async createJob(input) {
     const state = runtimeState();
     const existing = [...state.jobs.values()].find((job) => job.idempotency_key === input.idempotency_key);
-    if (existing) return copy(existing);
+    if (existing) {
+      if (existing.status === "failed" || existing.status === "cancelled") {
+        const now = new Date().toISOString();
+        existing.status = "pending";
+        existing.payload = copy(input.payload);
+        existing.priority = input.priority ?? 100;
+        existing.attempts = 0;
+        existing.max_attempts = input.max_attempts ?? 3;
+        existing.available_at = now;
+        existing.updated_at = now;
+        existing.error_message = undefined;
+        existing.result = undefined;
+        existing.completed_at = undefined;
+        existing.lease_owner_id = undefined;
+        existing.lease_expires_at = undefined;
+      }
+      return copy(existing);
+    }
     const now = new Date().toISOString();
     const job: RuntimeJob = {
       ...input,

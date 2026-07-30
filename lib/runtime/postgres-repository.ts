@@ -228,7 +228,19 @@ export const postgresRuntimeRepository: RuntimeRepository = {
     const result = await query(
       `INSERT INTO agent_jobs(id, user_id, session_id, job_type, idempotency_key, payload, priority, max_attempts)
        VALUES($1, $2, $3, $4, $5, $6::jsonb, $7, $8)
-       ON CONFLICT(idempotency_key) DO UPDATE SET idempotency_key = EXCLUDED.idempotency_key
+       ON CONFLICT(idempotency_key) DO UPDATE SET
+         status = CASE WHEN agent_jobs.status IN ('failed', 'cancelled') THEN 'pending' ELSE agent_jobs.status END,
+         payload = CASE WHEN agent_jobs.status IN ('failed', 'cancelled') THEN EXCLUDED.payload ELSE agent_jobs.payload END,
+         priority = CASE WHEN agent_jobs.status IN ('failed', 'cancelled') THEN EXCLUDED.priority ELSE agent_jobs.priority END,
+         attempts = CASE WHEN agent_jobs.status IN ('failed', 'cancelled') THEN 0 ELSE agent_jobs.attempts END,
+         max_attempts = CASE WHEN agent_jobs.status IN ('failed', 'cancelled') THEN EXCLUDED.max_attempts ELSE agent_jobs.max_attempts END,
+         available_at = CASE WHEN agent_jobs.status IN ('failed', 'cancelled') THEN NOW() ELSE agent_jobs.available_at END,
+         error_message = CASE WHEN agent_jobs.status IN ('failed', 'cancelled') THEN NULL ELSE agent_jobs.error_message END,
+         result = CASE WHEN agent_jobs.status IN ('failed', 'cancelled') THEN NULL ELSE agent_jobs.result END,
+         lease_owner_id = CASE WHEN agent_jobs.status IN ('failed', 'cancelled') THEN NULL ELSE agent_jobs.lease_owner_id END,
+         lease_expires_at = CASE WHEN agent_jobs.status IN ('failed', 'cancelled') THEN NULL ELSE agent_jobs.lease_expires_at END,
+         completed_at = CASE WHEN agent_jobs.status IN ('failed', 'cancelled') THEN NULL ELSE agent_jobs.completed_at END,
+         updated_at = CASE WHEN agent_jobs.status IN ('failed', 'cancelled') THEN NOW() ELSE agent_jobs.updated_at END
        RETURNING *`,
       [
         input.id,

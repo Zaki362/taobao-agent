@@ -44,8 +44,11 @@ describe("durable job queue contract", () => {
 
     const completed = await localRuntimeRepository.completeJob(first.id, device.id, { results: [] });
     const replay = await localRuntimeRepository.completeJob(first.id, device.id, { results: [] });
+    const duplicateAfterCompletion = await localRuntimeRepository.createJob({ ...input, id: "job-after-completion" });
     expect(completed.alreadyCompleted).toBe(false);
     expect(replay.alreadyCompleted).toBe(true);
+    expect(duplicateAfterCompletion.id).toBe(first.id);
+    expect(duplicateAfterCompletion.status).toBe("completed");
   });
 
   it("returns an expired lease to the pending queue", async () => {
@@ -111,6 +114,20 @@ describe("durable job queue contract", () => {
     expect(failed.status).toBe("failed");
     expect(failed.attempts).toBe(1);
     expect(await localRuntimeRepository.claimJob(device, 30_000)).toBeNull();
+
+    const failedState = await localRuntimeRepository.getSession(state.session_id, device.user_id);
+    const retried = await enqueueModuleSearchJob(failedState!, {
+      moduleId: module.module_id,
+      moduleName: module.module_name,
+      keyword: module.search_strategy!.primary_keyword
+    });
+    await localRuntimeRepository.saveSession(failedState!);
+
+    expect(retried.id).toBe(job.id);
+    expect(retried.status).toBe("pending");
+    expect(retried.attempts).toBe(0);
+    expect(failedState?.hosted_tasks.find((task) => task.task_id === job.id)?.status).toBe("pending");
+    expect((await localRuntimeRepository.claimJob(device, 30_000))?.id).toBe(job.id);
 
     await fs.unlink(path.join(process.cwd(), ".data", "sessions", `${state.session_id}.json`)).catch(() => undefined);
   });

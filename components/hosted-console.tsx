@@ -154,6 +154,42 @@ export function HostedConsole() {
     }
   }
 
+  async function retryTask(task: SessionState["hosted_tasks"][number]) {
+    if (!selectedSession) return;
+    const actionLabel = task.task_type === "add_to_cart" ? "重新尝试真实加购" : "重新执行淘宝搜索";
+    if (!window.confirm(`${actionLabel}会重新进入本地执行器队列，确定继续吗？`)) return;
+    setBusy(true);
+    setErrorMessage("");
+    try {
+      if (task.task_type === "module_search" && task.module_id) {
+        await jsonFetch("/api/modules/search", {
+          method: "POST",
+          body: JSON.stringify({
+            session_id: selectedSession.session_id,
+            module_id: task.module_id,
+            keyword_override: typeof task.payload.keyword === "string" ? task.payload.keyword : undefined
+          })
+        });
+      } else if (task.task_type === "add_to_cart" && task.product_id) {
+        await jsonFetch("/api/cart/add", {
+          method: "POST",
+          body: JSON.stringify({
+            session_id: selectedSession.session_id,
+            product_id: task.product_id,
+            confirmed: true
+          })
+        });
+      } else {
+        throw new Error("任务缺少重试所需的模块或商品信息");
+      }
+      await loadData();
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "重新入队失败");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   useEffect(() => {
     loadData().catch(() => undefined);
     const timer = window.setInterval(() => {
@@ -504,16 +540,28 @@ export function HostedConsole() {
                         <div key={task.task_id} className="rounded-[18px] border border-border/80 bg-white p-3 text-sm shadow-sm">
                           <div className="flex items-start justify-between gap-3">
                             <p className="font-medium">{task.title}</p>
-                            {task.status === "pending" && selectedSession.execution_mode === "local_executor" ? (
-                              <Button
-                                variant="outline"
-                                size="sm"
-                                disabled={busy}
-                                onClick={() => cancelTask(task.task_id)}
-                              >
-                                取消待执行
-                              </Button>
-                            ) : null}
+                            <div className="flex flex-wrap gap-2">
+                              {task.status === "pending" && selectedSession.execution_mode === "local_executor" ? (
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  disabled={busy}
+                                  onClick={() => cancelTask(task.task_id)}
+                                >
+                                  取消待执行
+                                </Button>
+                              ) : null}
+                              {(task.status === "failed" || task.status === "cancelled") && selectedSession.execution_mode === "local_executor" ? (
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  disabled={busy}
+                                  onClick={() => retryTask(task)}
+                                >
+                                  重新入队
+                                </Button>
+                              ) : null}
+                            </div>
                           </div>
                           <p className="mt-1 text-muted-foreground">{task.description}</p>
                           <p className="mt-1 text-xs text-muted-foreground">{task.status.toUpperCase()} · {formatTime(task.updated_at)}</p>

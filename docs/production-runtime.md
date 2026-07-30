@@ -105,6 +105,7 @@ pending -> leased -> running -> completed
 - 过期租约会自动返回 `pending`，达到最大次数后转为 `failed`。
 - 完成接口可安全重放，已经完成的任务返回 `already_completed=true`。
 - 只有 `pending` 任务可以由用户取消；已被执行器领取的任务不会伪装成可撤销。
+- `completed` 任务始终幂等去重；`failed/cancelled` 任务只有在用户再次点击搜索、加购或执行台“重新入队”后才会清空旧错误并重置尝试次数。
 - 搜索空结果和最终失败会写入模块搜索轨迹，Agent 会跳过该模块继续执行，不阻塞整条工作流。
 
 ## 6. Agent Runtime 2.0
@@ -124,11 +125,11 @@ pending -> leased -> running -> completed
 - `GET /api/runtime/health`：检查运行时与数据库连接。
 - `GET /api/runtime/jobs?session_id=...`：查看当前会话任务。
 - `GET /api/runtime/events/stream?session_id=...`：检查 SSE 事件。
-- `GET /api/runtime/metrics?session_id=...`：检查积压、耗时、失败/取消数量与在线设备。
+- `GET /api/runtime/metrics?session_id=...`：检查积压、耗时、失败/取消数量、在线设备和分级运行告警。
 - `/settings/executor`：查看设备、最后心跳和撤销令牌。
 - `/hosted`：查看会话需求、Agent 决策、工具日志和候选回填状态。
 
-建议为生产环境增加进程守护（systemd、launchd 或容器 supervisor），并对失败率、任务等待时长、租约恢复次数、DeepSeek fallback 比例和 SSE 断线率建立监控。
+应用已经对“有任务但无执行器”、队列等待过久、任务失败率、DeepSeek fallback 和 Guardrail 拒绝率生成会话级告警。正式环境仍应增加进程守护（systemd、launchd 或容器 supervisor），并把这些告警接入外部监控与通知渠道。
 
 仓库 `.github/workflows/quality.yml` 已提供 PostgreSQL 16 集成验证、migration 检查、单元测试、生产构建和端到端测试。正式发布应将该 workflow 设为主分支必需检查。
 

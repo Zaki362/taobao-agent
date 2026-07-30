@@ -47,6 +47,27 @@ function taskForJob(input: {
   };
 }
 
+function attachOrReviveTask(state: SessionState, nextTask: HostedExecutionTask, jobStatus: string) {
+  const existing = state.hosted_tasks.find((task) => task.task_id === nextTask.task_id);
+  if (!existing) {
+    state.hosted_tasks.unshift(nextTask);
+    return false;
+  }
+
+  const requeued =
+    jobStatus === "pending" &&
+    (existing.status === "failed" || existing.status === "cancelled");
+  if (requeued) {
+    existing.status = "pending";
+    existing.description = nextTask.description;
+    existing.payload = nextTask.payload;
+    existing.result_summary = undefined;
+    existing.error_message = undefined;
+    existing.updated_at = new Date().toISOString();
+  }
+  return requeued;
+}
+
 export async function registerExecutorDevice(
   userId: string,
   name: string,
@@ -105,25 +126,23 @@ export async function enqueueModuleSearchJob(
     max_attempts: 3
   });
 
-  if (!state.hosted_tasks.some((task) => task.task_id === job.id)) {
-    state.hosted_tasks.unshift(taskForJob({
-      id: job.id,
-      type: "module_search",
-      state,
-      moduleId: input.moduleId,
-      moduleName: input.moduleName,
-      title: `为「${input.moduleName}」执行本地淘宝搜索`,
-      description: `本地执行器将使用 Qoder/Taobao skill 搜索“${input.keyword}”，完成后自动回填候选商品。`,
-      payload
-    }));
-  }
+  const requeued = attachOrReviveTask(state, taskForJob({
+    id: job.id,
+    type: "module_search",
+    state,
+    moduleId: input.moduleId,
+    moduleName: input.moduleName,
+    title: `为「${input.moduleName}」执行本地淘宝搜索`,
+    description: `本地执行器将使用 Qoder/Taobao skill 搜索“${input.keyword}”，完成后自动回填候选商品。`,
+    payload
+  }), job.status);
   state.execution_mode = "local_executor";
   state.mcp_status = "hosted";
   await repository.appendEvent({
     user_id: state.owner_id,
     session_id: state.session_id,
     job_id: job.id,
-    event_type: "job.created",
+    event_type: requeued ? "job.requeued" : "job.created",
     payload: { job_type: job.job_type, module_id: input.moduleId, module_name: input.moduleName }
   });
   return job;
@@ -151,24 +170,22 @@ export async function enqueueAddToCartJob(
     priority: 200,
     max_attempts: 2
   });
-  if (!state.hosted_tasks.some((task) => task.task_id === job.id)) {
-    state.hosted_tasks.unshift(taskForJob({
-      id: job.id,
-      type: "add_to_cart",
-      state,
-      moduleId: input.moduleId,
-      moduleName: input.moduleName,
-      productId: input.productId,
-      title: `将「${input.title}」加入淘宝购物车`,
-      description: "本地执行器将在用户已确认的前提下完成真实加购。",
-      payload
-    }));
-  }
+  const requeued = attachOrReviveTask(state, taskForJob({
+    id: job.id,
+    type: "add_to_cart",
+    state,
+    moduleId: input.moduleId,
+    moduleName: input.moduleName,
+    productId: input.productId,
+    title: `将「${input.title}」加入淘宝购物车`,
+    description: "本地执行器将在用户已确认的前提下完成真实加购。",
+    payload
+  }), job.status);
   await repository.appendEvent({
     user_id: state.owner_id,
     session_id: state.session_id,
     job_id: job.id,
-    event_type: "job.created",
+    event_type: requeued ? "job.requeued" : "job.created",
     payload: { job_type: job.job_type, product_id: input.productId }
   });
   return job;

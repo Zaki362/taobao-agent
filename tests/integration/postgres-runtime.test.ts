@@ -142,6 +142,19 @@ describeWithDatabase("PostgreSQL production runtime contract", () => {
     );
     expect(failed.status).toBe("failed");
     expect(failed.attempts).toBe(1);
-    expect(await postgresRuntimeRepository.claimJob(device, 30_000)).toBeNull();
+
+    const retried = await postgresRuntimeRepository.createJob({
+      id: randomUUID(),
+      user_id: userId,
+      session_id: sessionId,
+      job_type: "module_search",
+      idempotency_key: `integration:${sessionId}:terminal-failure`,
+      payload: { retry: true },
+      max_attempts: 3
+    });
+    expect(retried.id).toBe(terminalJobId);
+    expect(retried.status).toBe("pending");
+    expect(retried.attempts).toBe(0);
+    expect((await postgresRuntimeRepository.claimJob(device, 30_000))?.id).toBe(terminalJobId);
   });
 });

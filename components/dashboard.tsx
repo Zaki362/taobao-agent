@@ -360,6 +360,8 @@ export function Dashboard() {
           eventType = "后台任务执行失败，可在执行台查看原因";
         } else if (payload.event_type === "job.retry_scheduled") {
           eventType = "后台任务正在自动重试";
+        } else if (payload.event_type === "job.requeued") {
+          eventType = "任务已重新进入本地执行器队列";
         }
       } catch {
         // The persisted session remains the source of truth when event metadata is unavailable.
@@ -377,6 +379,7 @@ export function Dashboard() {
 
     for (const eventName of [
       "job.created",
+      "job.requeued",
       "job.claimed",
       "job.completed",
       "job.failed",
