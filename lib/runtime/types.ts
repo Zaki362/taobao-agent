@@ -116,6 +116,7 @@ export interface RuntimeRepository {
     errorMessage: string,
     retryDelayMs?: number
   ): Promise<RuntimeJob>;
+  cancelJob(jobId: string, userId?: string): Promise<RuntimeJob | null>;
   recoverExpiredJobs(): Promise<number>;
 
   appendEvent(input: Omit<ExecutionEvent, "id" | "created_at">): Promise<ExecutionEvent>;

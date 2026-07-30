@@ -242,6 +242,18 @@ export const localRuntimeRepository: RuntimeRepository = {
     return copy(job);
   },
 
+  async cancelJob(jobId, userId) {
+    const job = runtimeState().jobs.get(jobId);
+    if (!job || job.status !== "pending") return null;
+    if (userId && job.user_id && job.user_id !== userId) return null;
+    const now = new Date().toISOString();
+    job.status = "cancelled";
+    job.error_message = "用户在执行器领取前取消任务";
+    job.completed_at = now;
+    job.updated_at = now;
+    return copy(job);
+  },
+
   async recoverExpiredJobs() {
     let recovered = 0;
     const now = Date.now();

@@ -37,6 +37,7 @@ import {
   validateShoppingPlanOutput,
   validateAgentDecisionOutput
 } from "@/lib/llm/validation";
+import { recordLlmCall, type LlmTaskName } from "@/lib/llm/telemetry";
 
 const DEEPSEEK_BASE_URL = "https://api.deepseek.com/chat/completions";
 const REQUEST_TIMEOUT_MS = 20_000;
@@ -44,7 +45,7 @@ const REVIEW_TIMEOUT_MS = 8_000;
 const PLAN_REVIEW_TIMEOUT_MS = 6_000;
 const AGENT_DECISION_TIMEOUT_MS = 8_000;
 
-type StructuredTask = "parse_scene" | "personalize_template" | "refine_plan" | "review_candidates" | "review_plan" | "decide_next_action";
+type StructuredTask = LlmTaskName;
 type LlmMode = "connected" | "mock";
 
 function getStructuredModel(task: StructuredTask) {
@@ -367,8 +368,17 @@ async function deepseekJson<T>(
   timeoutMs = REQUEST_TIMEOUT_MS
 ): Promise<{ data: T; mode: LlmMode }> {
   const apiKey = process.env.DEEPSEEK_API_KEY;
+  const startedAt = Date.now();
+  const model = getStructuredModel(task);
+  const finish = (data: T, mode: LlmMode, reason?: string) => {
+    recordLlmCall({ task, model, mode, durationMs: Date.now() - startedAt, reason });
+    return { data, mode };
+  };
+  if (process.env.DEEPSEEK_DISABLED === "true") {
+    return finish(fallback, "mock", "explicitly_disabled");
+  }
   if (!apiKey) {
-    return { data: fallback, mode: "mock" };
+    return finish(fallback, "mock", "api_key_missing");
   }
 
   try {
@@ -379,7 +389,7 @@ async function deepseekJson<T>(
         Authorization: `Bearer ${apiKey}`
       },
       body: JSON.stringify({
-        model: getStructuredModel(task),
+        model,
         temperature: task === "parse_scene" || task === "review_candidates" ? 0.2 : 0.3,
         messages: [
           {
@@ -399,20 +409,22 @@ async function deepseekJson<T>(
     }, timeoutMs);
 
     if (!response.ok) {
-      return { data: fallback, mode: "mock" };
+      return finish(fallback, "mock", `http_${response.status}`);
     }
 
     const payload = await response.json();
     const content = payload.choices?.[0]?.message?.content;
     if (!content) {
-      return { data: fallback, mode: "mock" };
+      return finish(fallback, "mock", "empty_content");
     }
-    return {
-      data: JSON.parse(content) as T,
-      mode: "connected"
-    };
-  } catch {
-    return { data: fallback, mode: "mock" };
+    return finish(JSON.parse(content) as T, "connected");
+  } catch (error) {
+    const reason = error instanceof Error && error.name === "AbortError"
+      ? "timeout"
+      : error instanceof SyntaxError
+        ? "invalid_json"
+        : "request_failed";
+    return finish(fallback, "mock", reason);
   }
 }
 

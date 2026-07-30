@@ -22,6 +22,9 @@ SceneCart AI 是一个正在按正式产品架构推进的“场景化购物 Age
 - 生产运行时：支持 PostgreSQL 持久化、邮箱登录、HttpOnly 会话、按用户隔离的购物 Session、持久 Job Queue 和执行事件
 - 本地执行器：Qoder/Taobao skill 不再占用 Next.js 请求；设备通过一次性令牌注册，使用心跳、任务租约、自动恢复、结果账本和幂等回填完成本机真实执行
 - 实时回填：搜索、重试和加购事件通过 SSE 推送到当前会话，页面无需轮询等待长请求
+- 可恢复事件流：SSE 使用事件游标与 `Last-Event-ID` 续传，浏览器短暂断线后不会重复丢失执行进度
+- 运行时可观测性：执行台展示队列积压、在线设备、失败/取消任务、最久等待时间与模型 guardrail fallback
+- 生产安全基线：异步 scrypt 密码哈希、认证限流、同源写请求校验、HttpOnly Cookie 和安全响应头
 - 淘宝 skill / MCP 工具层：正式路径为 `local_executor`；原有 Qoder 直连、Codex hosted 和 experimental bridge 仅保留为开发兼容路径
 - 商品搜索链路：当前主流程可串行搜索规划中的各个模块，并生成推荐商品卡片
 - 加购保守策略：高风险动作必须显式确认，服务端和 MCP executor 会双重校验；真实加购失败后回退到产品内演示购物车，保证 Demo 流程完整
@@ -68,6 +71,8 @@ npm run typecheck
 npm run build
 ```
 
+仓库包含 GitHub Actions 质量门禁，会在 PostgreSQL 16 服务上执行 migration、schema checksum 检查、真实 repository 集成测试、单元测试、生产构建和 Playwright E2E。
+
 ## 环境变量
 
 复制 `.env.example` 为 `.env.local`，按需配置：
@@ -82,6 +87,7 @@ RUNTIME_STORE=postgres
 DATABASE_URL=postgresql://...
 DATABASE_SSL=false
 AUTH_REQUIRED=true
+APP_ORIGIN=https://your-scenecart.example.com
 SCENECART_API_URL=http://127.0.0.1:3000
 SCENECART_DEVICE_TOKEN=
 ```
@@ -89,10 +95,12 @@ SCENECART_DEVICE_TOKEN=
 说明：
 
 - `DEEPSEEK_API_KEY`：填写后会尝试启用真实 DeepSeek 能力；只有实际调用成功才标记为 connected。无 key、超时、非 JSON 或接口失败都会走 mock fallback。
+- `DEEPSEEK_DISABLED=true`：仅用于自动化测试或离线诊断，显式禁止读取 `.env.local` 中的真实 Key，保证测试不会产生模型调用和费用。
 - `TAOBAO_EXECUTION_BACKEND`：正式路径使用 `local_executor`。`qoder_cli`、`codex_hosted`、`experimental_local` 只用于迁移和本地调试。
 - `RUNTIME_STORE=postgres`：启用 PostgreSQL 用户、Session、任务与事件持久化；`local` 只适合开发和自动化测试。
 - `DATABASE_URL`：PostgreSQL 连接串。配置后先运行 `npm run db:migrate`。
 - `AUTH_REQUIRED=true`：正式部署必须开启，确保 Session、设备与任务按用户隔离。
+- `APP_ORIGIN`：正式产品允许发起写请求的网页 Origin；多个地址使用逗号分隔。
 - `SCENECART_DEVICE_TOKEN`：在 `/settings/executor` 注册设备后一次性获得，配置在运行 Qoder/Taobao 的本机，不应写入仓库。
 - `QODERCLI_PATH`：可选，指定本机 qodercli 路径；默认会尝试读取当前用户目录下的 `~/.local/bin/qodercli`。
 - `TAOBAO_NATIVE_BIN`：仅 experimental local bridge 使用，可选，指定 `taobao-native` 命令名或可执行文件路径。
@@ -154,6 +162,8 @@ lib/runtime/
 scripts/
   local-executor.mjs               独立 Qoder/Taobao 执行进程
   db-migrate.mjs                   PostgreSQL migration runner
+  db-check.mjs                     schema 完整性与 migration checksum 检查
+  executor-doctor.mjs              本地执行器无副作用连接诊断
 
 lib/scenarios/
   当前保留多场景配置雏形，稳定产品入口暂以新车选购为主
@@ -179,6 +189,8 @@ lib/scenarios/
 - `POST /api/executor/jobs/:jobId/resolve`：幂等回填完成/失败结果
 - `GET /api/runtime/events/stream`：按 Session 推送执行事件的 SSE
 - `GET /api/runtime/health`：运行时、数据库和执行 backend 健康检查
+- `GET /api/runtime/metrics`：当前 Session 的任务积压、失败率与设备在线摘要
+- `POST /api/runtime/jobs/:jobId/cancel`：仅取消尚未被执行器领取的任务
 
 错误响应统一为 JSON：
 
@@ -195,6 +207,7 @@ lib/scenarios/
 
 ```bash
 npm run db:migrate
+npm run db:check
 npm run build
 npm run start
 ```
@@ -202,6 +215,10 @@ npm run start
 用户登录后打开 `/settings/executor` 注册本机设备，再在运行淘宝桌面版与 Qoder 的机器启动：
 
 ```bash
+SCENECART_API_URL=http://127.0.0.1:3000 \
+SCENECART_DEVICE_TOKEN=一次性设备令牌 \
+npm run executor:doctor
+
 SCENECART_API_URL=http://127.0.0.1:3000 \
 SCENECART_DEVICE_TOKEN=一次性设备令牌 \
 npm run worker:local
@@ -223,6 +240,7 @@ npm run worker:local
 - [淘宝 MCP Bridge 说明](./docs/taobao-mcp-bridge.md)
 - [Codex Hosted Worker 说明](./docs/codex-hosted-worker.md)
 - [生产运行时与本地执行器](./docs/production-runtime.md)
+- [正式部署指南](./docs/deployment.md)
 
 ## 推荐演示路径
 

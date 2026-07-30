@@ -48,3 +48,10 @@ export async function withTransaction<T>(callback: (client: PoolClient) => Promi
     client.release();
   }
 }
+
+export async function closeDatabasePoolForTests() {
+  if (!globalThis.__sceneCartPgPool) return;
+  const pool = globalThis.__sceneCartPgPool;
+  globalThis.__sceneCartPgPool = undefined;
+  await pool.end();
+}

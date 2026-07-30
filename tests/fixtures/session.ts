@@ -25,6 +25,10 @@ export function createSessionFixture(overrides: Partial<SessionState> = {}): Ses
       used_tool_calls: 0,
       model_decisions: 0,
       policy_decisions: 0,
+      model_proposals: 0,
+      model_rejections: 0,
+      model_failures: 0,
+      total_decision_latency_ms: 0,
       last_decision_mode: "none",
       initialized_at: new Date().toISOString()
     },

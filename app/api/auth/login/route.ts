@@ -1,20 +1,24 @@
 import { NextRequest, NextResponse } from "next/server";
-import { AUTH_COOKIE_NAME } from "@/lib/auth/request";
+import { AUTH_COOKIE_NAME, useSecureAuthCookie } from "@/lib/auth/request";
 import { loginUser } from "@/lib/auth/service";
 import { apiRouteError, requireString } from "@/lib/api/responses";
+import { clearAuthRateLimit, enforceAuthRateLimit } from "@/lib/security/rate-limit";
 
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json().catch(() => ({}));
+    const email = requireString(body.email, "email");
+    await enforceAuthRateLimit(request, { action: "login", subject: email });
     const result = await loginUser(
-      requireString(body.email, "email"),
+      email,
       requireString(body.password, "password")
     );
+    await clearAuthRateLimit(request, "login", email).catch(() => undefined);
     const response = NextResponse.json({ user: { id: result.user.id, email: result.user.email } });
     response.cookies.set(AUTH_COOKIE_NAME, result.token, {
       httpOnly: true,
       sameSite: "lax",
-      secure: process.env.NODE_ENV === "production",
+      secure: useSecureAuthCookie(),
       path: "/",
       expires: new Date(result.expiresAt)
     });

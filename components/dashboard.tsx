@@ -336,12 +336,16 @@ export function Dashboard() {
     }
 
     const sessionId = session.session_id;
+    const cursorKey = `scenecart-event-cursor:${sessionId}`;
+    const after = window.sessionStorage.getItem(cursorKey) ?? "0";
     const stream = new EventSource(
-      `/api/runtime/events/stream?session_id=${encodeURIComponent(sessionId)}`
+      `/api/runtime/events/stream?session_id=${encodeURIComponent(sessionId)}&after=${encodeURIComponent(after)}`
     );
     let refreshTimer: number | undefined;
 
     const refreshFromEvent = (event: Event) => {
+      const eventId = (event as MessageEvent).lastEventId;
+      if (eventId) window.sessionStorage.setItem(cursorKey, eventId);
       let eventType = "执行任务已更新";
       try {
         const payload = JSON.parse((event as MessageEvent).data) as {
@@ -376,7 +380,8 @@ export function Dashboard() {
       "job.claimed",
       "job.completed",
       "job.failed",
-      "job.retry_scheduled"
+      "job.retry_scheduled",
+      "job.cancelled"
     ]) {
       stream.addEventListener(eventName, refreshFromEvent);
     }

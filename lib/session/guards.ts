@@ -68,6 +68,8 @@ export function isAgentDecision(value: unknown): value is AgentDecision {
     (value.tool_cost === undefined ||
       (typeof value.tool_cost === "number" && Number.isFinite(value.tool_cost))) &&
     (value.guardrail_notes === undefined || isStringArray(value.guardrail_notes)) &&
+    (value.decision_latency_ms === undefined ||
+      (typeof value.decision_latency_ms === "number" && Number.isFinite(value.decision_latency_ms))) &&
     (value.consumed_at === undefined || typeof value.consumed_at === "string") &&
     typeof value.created_at === "string"
   );
@@ -87,6 +89,16 @@ function isAgentRuntimeState(value: unknown) {
     Number.isFinite(value.model_decisions) &&
     typeof value.policy_decisions === "number" &&
     Number.isFinite(value.policy_decisions) &&
+    typeof value.model_proposals === "number" &&
+    Number.isFinite(value.model_proposals) &&
+    typeof value.model_rejections === "number" &&
+    Number.isFinite(value.model_rejections) &&
+    typeof value.model_failures === "number" &&
+    Number.isFinite(value.model_failures) &&
+    typeof value.total_decision_latency_ms === "number" &&
+    Number.isFinite(value.total_decision_latency_ms) &&
+    (value.last_fallback_reason === undefined || typeof value.last_fallback_reason === "string") &&
+    (value.last_decision_at === undefined || typeof value.last_decision_at === "string") &&
     (value.last_decision_mode === "none" ||
       value.last_decision_mode === "deepseek" ||
       value.last_decision_mode === "policy") &&
@@ -289,7 +301,8 @@ export function isHostedExecutionTask(value: unknown): value is HostedExecutionT
     value.status === "pending" ||
     value.status === "running" ||
     value.status === "completed" ||
-    value.status === "failed";
+    value.status === "failed" ||
+    value.status === "cancelled";
 
   return (
     typeof value.task_id === "string" &&

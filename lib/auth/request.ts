@@ -4,6 +4,12 @@ import { authenticateToken } from "@/lib/auth/service";
 
 export const AUTH_COOKIE_NAME = "scenecart_session";
 
+export function useSecureAuthCookie() {
+  if (process.env.AUTH_COOKIE_SECURE === "true") return true;
+  if (process.env.AUTH_COOKIE_SECURE === "false") return false;
+  return process.env.NODE_ENV === "production";
+}
+
 export function isAuthenticationRequired() {
   return process.env.AUTH_REQUIRED === "true";
 }

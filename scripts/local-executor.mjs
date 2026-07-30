@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { constants as fsConstants } from "node:fs";
 import { promisify } from "node:util";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -36,6 +37,18 @@ async function api(path, options = {}) {
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(payload.error || `${path} failed with ${response.status}`);
   return payload;
+}
+
+async function verifyStartup() {
+  await fs.access(qoderPath, fsConstants.X_OK).catch(() => {
+    throw new Error(`Qoder CLI is not executable at ${qoderPath}. Set QODERCLI_PATH to the installed binary.`);
+  });
+  const response = await fetch(`${apiBaseUrl}/api/runtime/health`);
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok || payload.status !== "healthy") {
+    throw new Error(payload.error || `SceneCart API health check failed with ${response.status}`);
+  }
+  process.stdout.write(`[local-executor] startup checks passed; runtime=${payload.runtime_store}; backend=${payload.executor_backend}\n`);
 }
 
 function parseJson(text) {
@@ -160,6 +173,7 @@ async function heartbeat() {
   }
 }
 
+await verifyStartup();
 const heartbeatTimer = setInterval(heartbeat, 15000);
 
 async function loop() {

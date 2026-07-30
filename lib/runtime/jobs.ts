@@ -346,3 +346,30 @@ export async function applyFailedRuntimeJob(
   });
   return job;
 }
+
+export async function cancelPendingRuntimeJob(jobId: string, userId?: string) {
+  const repository = getRuntimeRepository();
+  const job = await repository.cancelJob(jobId, userId);
+  if (!job) return null;
+
+  const state = await repository.getSession(job.session_id, userId ?? job.user_id);
+  const task = state?.hosted_tasks.find((item) => item.task_id === job.id);
+  if (state && task) {
+    task.status = "cancelled";
+    task.error_message = "用户已在执行器领取前取消任务";
+    task.updated_at = new Date().toISOString();
+    if (job.job_type === "module_search") {
+      markRuntimeSearchFailure(state, job, "用户取消了本轮搜索任务");
+    }
+    await persistSession(state);
+  }
+
+  await repository.appendEvent({
+    user_id: job.user_id,
+    session_id: job.session_id,
+    job_id: job.id,
+    event_type: "job.cancelled",
+    payload: { job_type: job.job_type, reason: "cancelled_before_claim" }
+  });
+  return job;
+}

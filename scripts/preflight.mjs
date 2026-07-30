@@ -115,10 +115,12 @@ function assertEnvExample() {
     "DEEPSEEK_API_KEY",
     "DEEPSEEK_CHAT_MODEL",
     "DEEPSEEK_REASONER_MODEL",
+    "DEEPSEEK_DISABLED",
     "TAOBAO_EXECUTION_BACKEND",
     "QODERCLI_PATH",
     "TAOBAO_NATIVE_BIN",
-    "TAOBAO_MCP_BASE_URL"
+    "TAOBAO_MCP_BASE_URL",
+    "APP_ORIGIN"
   ];
 
   for (const key of required) {
@@ -143,7 +145,7 @@ function assertPackageScripts() {
   }
 
   const scripts = pkg.scripts ?? {};
-  const required = ["dev", "build", "typecheck", "preflight", "check"];
+  const required = ["dev", "build", "typecheck", "preflight", "check", "db:migrate", "db:check", "test:unit", "test:integration", "test:e2e", "worker:local", "executor:doctor"];
 
   for (const scriptName of required) {
     if (typeof scripts[scriptName] !== "string") {
@@ -193,6 +195,7 @@ function assertRequiredFiles() {
     "components/dashboard-workflow.ts",
     "lib/agent/directives.ts",
     "lib/agent/decision-engine.ts",
+    "lib/agent/runtime-v2.ts",
     "lib/agent/orchestrator.ts",
     "lib/agent/planner.ts",
     "lib/agent/search-strategy.ts",
@@ -204,7 +207,19 @@ function assertRequiredFiles() {
     "lib/llm/deepseek.ts",
     "lib/llm/prompts.ts",
     "lib/llm/validation.ts",
+    "lib/llm/telemetry.ts",
     "lib/mcp/client.ts",
+    "lib/mcp/local-executor.ts",
+    "lib/runtime/postgres-repository.ts",
+    "lib/security/rate-limit.ts",
+    "scripts/local-executor.mjs",
+    "scripts/executor-doctor.mjs",
+    "scripts/db-migrate.mjs",
+    "scripts/db-check.mjs",
+    ".github/workflows/quality.yml",
+    "Dockerfile",
+    "docker-compose.yml",
+    "docs/deployment.md",
     "lib/mcp/qoder.ts",
     "lib/session/guards.ts",
     "lib/session/store.ts",

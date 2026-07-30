@@ -19,7 +19,9 @@ export async function GET(request: NextRequest) {
     const sessionId = requireString(request.nextUrl.searchParams.get("session_id"), "session_id");
     const session = await ensureSession(sessionId, identity.userId);
     if (!session) return new Response("session not found", { status: 404 });
-    let cursor = Number(request.nextUrl.searchParams.get("after") ?? 0) || 0;
+    const queryCursor = Number(request.nextUrl.searchParams.get("after") ?? 0) || 0;
+    const headerCursor = Number(request.headers.get("last-event-id") ?? 0) || 0;
+    let cursor = Math.max(queryCursor, headerCursor);
     const repository = getRuntimeRepository();
     const stream = new ReadableStream({
       async start(controller) {

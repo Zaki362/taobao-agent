@@ -45,7 +45,12 @@ function profileDirectives(profile: AgentDirectiveProfile): AgentDirectives {
 export function applyAgentDirectiveProfile(state: SessionState, profile: AgentDirectiveProfile) {
   const directives = profileDirectives(profile);
   state.shopping_plan.agent_directives = directives;
+  const moduleCount = Math.max(1, state.shopping_plan.modules.length);
+  state.agent_runtime.max_tool_calls = profile === "conservative"
+    ? Math.max(moduleCount, 6)
+    : profile === "exploratory"
+      ? Math.min(24, moduleCount * 3 + 2)
+      : Math.min(16, moduleCount * 2 + 2);
   state.last_action = `AI执行档位：${profile}`;
   return directives;
 }
-

@@ -347,6 +347,23 @@ export const postgresRuntimeRepository: RuntimeRepository = {
     });
   },
 
+  async cancelJob(jobId, userId) {
+    const values: unknown[] = [jobId];
+    const ownerClause = userId ? "AND (user_id IS NULL OR user_id = $2)" : "";
+    if (userId) values.push(userId);
+    const result = await query(
+      `UPDATE agent_jobs SET
+         status = 'cancelled',
+         error_message = '用户在执行器领取前取消任务',
+         completed_at = NOW(),
+         updated_at = NOW()
+       WHERE id = $1 AND status = 'pending' ${ownerClause}
+       RETURNING *`,
+      values
+    );
+    return result.rowCount ? normalizeJob(result.rows[0]) : null;
+  },
+
   async recoverExpiredJobs() {
     const result = await query(
       `UPDATE agent_jobs SET

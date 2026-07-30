@@ -12,12 +12,15 @@
     "preflight": "node scripts/preflight.mjs",
     "check": "npm run preflight && npm run typecheck && npm run build",
     "db:migrate": "node scripts/db-migrate.mjs",
+    "db:check": "node scripts/db-check.mjs",
     "test": "vitest run",
     "test:unit": "vitest run tests/unit",
+    "test:integration": "vitest run --config vitest.integration.config.ts",
     "test:e2e": "playwright test",
     "bridge:taobao": "node scripts/taobao-native-bridge.mjs",
     "worker:codex": "node scripts/codex-hosted-worker.mjs",
-    "worker:local": "node scripts/local-executor.mjs"
+    "worker:local": "node scripts/local-executor.mjs",
+    "executor:doctor": "node scripts/executor-doctor.mjs"
   },
   "dependencies": {
     "class-variance-authority": "^0.7.0",

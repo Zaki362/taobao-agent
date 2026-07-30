@@ -34,6 +34,7 @@ DEEPSEEK_REASONER_MODEL=deepseek-reasoner
 ```bash
 npm install
 npm run db:migrate
+npm run db:check
 npm run check
 npm run start
 ```
@@ -46,6 +47,8 @@ npm run start
 - `executor_devices`
 - `agent_jobs`
 - `execution_events`
+
+`db/migrations/002_security_rate_limits.sql` 创建不保存邮箱或 IP 明文的认证限流表。migration runner 会保存每个 SQL 文件的 SHA-256 checksum；已执行 migration 被修改时会拒绝继续，必须新增 migration。
 
 任务领取使用 PostgreSQL 事务和 `FOR UPDATE SKIP LOCKED`，支持多个执行器并发但不会重复领取同一任务。
 
@@ -61,6 +64,15 @@ npm run start
 ## 4. 启动本地执行器
 
 在已安装 Qoder CLI、淘宝 skill 和淘宝桌面版的机器执行：
+
+```bash
+SCENECART_API_URL=https://your-scenecart.example.com \
+SCENECART_DEVICE_TOKEN=your-one-time-device-token \
+QODERCLI_PATH="$HOME/.local/bin/qodercli" \
+npm run executor:doctor
+```
+
+Doctor 只检查服务端、设备令牌和 Qoder CLI，不触发淘宝页面或账号动作。全部通过后启动：
 
 ```bash
 SCENECART_API_URL=https://your-scenecart.example.com \
@@ -90,6 +102,7 @@ pending -> leased -> running -> completed
 - `lease_owner_id` 限制只有领取设备能续租和完成任务。
 - 过期租约会自动返回 `pending`，达到最大次数后转为 `failed`。
 - 完成接口可安全重放，已经完成的任务返回 `already_completed=true`。
+- 只有 `pending` 任务可以由用户取消；已被执行器领取的任务不会伪装成可撤销。
 - 搜索空结果和最终失败会写入模块搜索轨迹，Agent 会跳过该模块继续执行，不阻塞整条工作流。
 
 ## 6. Agent Runtime 2.0
@@ -109,10 +122,13 @@ pending -> leased -> running -> completed
 - `GET /api/runtime/health`：检查运行时与数据库连接。
 - `GET /api/runtime/jobs?session_id=...`：查看当前会话任务。
 - `GET /api/runtime/events/stream?session_id=...`：检查 SSE 事件。
+- `GET /api/runtime/metrics?session_id=...`：检查积压、耗时、失败/取消数量与在线设备。
 - `/settings/executor`：查看设备、最后心跳和撤销令牌。
 - `/hosted`：查看会话需求、Agent 决策、工具日志和候选回填状态。
 
 建议为生产环境增加进程守护（systemd、launchd 或容器 supervisor），并对失败率、任务等待时长、租约恢复次数、DeepSeek fallback 比例和 SSE 断线率建立监控。
+
+仓库 `.github/workflows/quality.yml` 已提供 PostgreSQL 16 集成验证、migration 检查、单元测试、生产构建和端到端测试。正式发布应将该 workflow 设为主分支必需检查。
 
 ## 8. 验证
 

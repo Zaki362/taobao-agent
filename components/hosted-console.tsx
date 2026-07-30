@@ -16,6 +16,35 @@ type SessionListResponse = {
   sessions: SessionState[];
 };
 
+type RuntimeMetrics = {
+  available: boolean;
+  jobs: {
+    total: number;
+    pending: number;
+    active: number;
+    completed: number;
+    failed: number;
+    cancelled: number;
+    oldest_pending_ms: number;
+    average_duration_ms: number;
+  };
+  devices: {
+    total: number;
+    online: number;
+    last_heartbeat_at: string | null;
+  };
+  llm: {
+    calls: number;
+    connected: number;
+    fallback: number;
+    tasks: Array<{
+      task: string;
+      average_duration_ms: number;
+      p95_duration_ms: number;
+    }>;
+  };
+};
+
 function executionModeLabel(mode: SessionState["execution_mode"]) {
   if (mode === "qoder_cli") return "Qoder CLI 直连";
   if (mode === "local_executor") return "本地执行器队列";
@@ -26,6 +55,13 @@ function executionModeLabel(mode: SessionState["execution_mode"]) {
 function formatTime(value?: string | null) {
   if (!value) return "暂无";
   return new Date(value).toLocaleString("zh-CN", { hour12: false });
+}
+
+function formatDuration(value: number) {
+  if (!value) return "暂无";
+  if (value < 1_000) return `${value}ms`;
+  if (value < 60_000) return `${Math.round(value / 1_000)} 秒`;
+  return `${Math.round(value / 60_000)} 分钟`;
 }
 
 function InfoBlock({ label, value }: { label: string; value: string }) {
@@ -42,6 +78,7 @@ export function HostedConsole() {
   const [sessions, setSessions] = useState<SessionState[]>([]);
   const [selectedSessionId, setSelectedSessionId] = useState("");
   const [workerStatus, setWorkerStatus] = useState<HostedWorkerStatus | null>(null);
+  const [runtimeMetrics, setRuntimeMetrics] = useState<RuntimeMetrics | null>(null);
   const [busy, setBusy] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
 
@@ -74,6 +111,12 @@ export function HostedConsole() {
         : [];
       setSessions(nextSessions);
       setWorkerStatus(workerData);
+      const metricsSessionId = nextSessions.some((session) => session.session_id === selectedSessionId)
+        ? selectedSessionId
+        : nextSessions[0]?.session_id;
+      setRuntimeMetrics(metricsSessionId
+        ? await jsonFetch<RuntimeMetrics>(`/api/runtime/metrics?session_id=${encodeURIComponent(metricsSessionId)}`).catch(() => null)
+        : null);
       setSelectedSessionId((current) =>
         nextSessions.some((session) => session.session_id === current)
           ? current
@@ -81,6 +124,20 @@ export function HostedConsole() {
       );
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : "加载后端执行详情失败");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function cancelTask(taskId: string) {
+    if (!window.confirm("只会取消尚未被本地执行器领取的任务，确定继续吗？")) return;
+    setBusy(true);
+    setErrorMessage("");
+    try {
+      await jsonFetch(`/api/runtime/jobs/${encodeURIComponent(taskId)}/cancel`, { method: "POST" });
+      await loadData();
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "取消任务失败");
     } finally {
       setBusy(false);
     }
@@ -146,6 +203,32 @@ export function HostedConsole() {
               ? `兼容宿主 Worker 在线，状态：${workerStatus.state}，最近动作：${workerStatus.last_result ?? "暂无"}`
               : "当前会话没有运行中的后台任务。"}
         </div>
+
+        {runtimeMetrics?.available ? (
+          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+            <InfoBlock label="队列积压" value={`${runtimeMetrics.jobs.pending} 个待领取`} />
+            <InfoBlock label="执行中" value={`${runtimeMetrics.jobs.active} 个任务`} />
+            <InfoBlock label="失败 / 取消" value={`${runtimeMetrics.jobs.failed} / ${runtimeMetrics.jobs.cancelled}`} />
+            <InfoBlock label="最久等待" value={formatDuration(runtimeMetrics.jobs.oldest_pending_ms)} />
+            <InfoBlock
+              label="本地执行器"
+              value={`${runtimeMetrics.devices.online} / ${runtimeMetrics.devices.total} 在线`}
+            />
+          </div>
+        ) : null}
+
+        {runtimeMetrics?.available && runtimeMetrics.llm.calls > 0 ? (
+          <div className="grid gap-3 md:grid-cols-3">
+            <InfoBlock label="DeepSeek 成功" value={`${runtimeMetrics.llm.connected} / ${runtimeMetrics.llm.calls} 次`} />
+            <InfoBlock label="模型 Fallback" value={`${runtimeMetrics.llm.fallback} 次`} />
+            <InfoBlock
+              label="规划平均耗时"
+              value={formatDuration(
+                runtimeMetrics.llm.tasks.find((task) => task.task === "personalize_template")?.average_duration_ms ?? 0
+              )}
+            />
+          </div>
+        ) : null}
 
         {errorMessage ? (
           <div className="rounded-[24px] border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
@@ -213,7 +296,7 @@ export function HostedConsole() {
                   <CardHeader>
                     <CardTitle>Agent Runtime 2.0</CardTitle>
                   </CardHeader>
-                  <CardContent className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+                  <CardContent className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
                     <InfoBlock
                       label="工具预算"
                       value={`${selectedSession.agent_runtime.used_tool_calls} / ${selectedSession.agent_runtime.max_tool_calls}`}
@@ -225,7 +308,17 @@ export function HostedConsole() {
                       value={selectedSession.agent_runtime.last_decision_mode === "deepseek" ? "DeepSeek" : selectedSession.agent_runtime.last_decision_mode === "policy" ? "规则兜底" : "尚未执行"}
                     />
                     <InfoBlock label="活跃任务" value={`${activeTaskCount} 个`} />
+                    <InfoBlock label="模型提议" value={`${selectedSession.agent_runtime.model_proposals} 次`} />
+                    <InfoBlock label="Guardrail 拒绝" value={`${selectedSession.agent_runtime.model_rejections} 次`} />
+                    <InfoBlock label="模型 Fallback" value={`${selectedSession.agent_runtime.model_failures} 次`} />
                   </CardContent>
+                  {selectedSession.agent_runtime.last_fallback_reason ? (
+                    <CardContent className="pt-0">
+                      <div className="panel-muted p-4 text-xs leading-6 text-muted-foreground">
+                        最近 fallback：{selectedSession.agent_runtime.last_fallback_reason}
+                      </div>
+                    </CardContent>
+                  ) : null}
                 </Card>
 
                 <Card className="section-card">
@@ -358,7 +451,19 @@ export function HostedConsole() {
                     <CardContent className="space-y-3">
                       {selectedSession.hosted_tasks.length > 0 ? selectedSession.hosted_tasks.slice(0, 8).map((task) => (
                         <div key={task.task_id} className="rounded-[18px] border border-border/80 bg-white p-3 text-sm shadow-sm">
-                          <p className="font-medium">{task.title}</p>
+                          <div className="flex items-start justify-between gap-3">
+                            <p className="font-medium">{task.title}</p>
+                            {task.status === "pending" && selectedSession.execution_mode === "local_executor" ? (
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                disabled={busy}
+                                onClick={() => cancelTask(task.task_id)}
+                              >
+                                取消待执行
+                              </Button>
+                            ) : null}
+                          </div>
                           <p className="mt-1 text-muted-foreground">{task.description}</p>
                           <p className="mt-1 text-xs text-muted-foreground">{task.status.toUpperCase()} · {formatTime(task.updated_at)}</p>
                         </div>

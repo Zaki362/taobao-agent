@@ -5,9 +5,20 @@ import {
   recordAgentDecision
 } from "@/lib/agent/decision-engine";
 import { decideNextAgentActionV2, validateModelProposal } from "@/lib/agent/runtime-v2";
+import { applyAgentDirectiveProfile } from "@/lib/agent/directives";
 import { createSessionFixture } from "@/tests/fixtures/session";
 
 describe("Agent Runtime 2.0", () => {
+  it("expands the tool budget only when the user selects exploratory autonomy", () => {
+    const conservative = createSessionFixture();
+    const exploratory = createSessionFixture();
+    applyAgentDirectiveProfile(conservative, "conservative");
+    applyAgentDirectiveProfile(exploratory, "exploratory");
+    expect(conservative.agent_runtime.max_tool_calls).toBeGreaterThanOrEqual(conservative.shopping_plan.modules.length);
+    expect(exploratory.agent_runtime.max_tool_calls).toBeGreaterThan(conservative.agent_runtime.max_tool_calls);
+    expect(exploratory.shopping_plan.agent_directives.safety_boundaries).toContain("不自动下单或支付");
+  });
+
   it("selects the first planned module and records tool consumption", () => {
     const state = createSessionFixture();
     const decision = decideNextAgentAction(state);
@@ -70,5 +81,62 @@ describe("Agent Runtime 2.0", () => {
     });
     expect(validation.valid).toBe(false);
     expect(validation.notes).toContain("模型选择了规划外模块");
+  });
+
+  it("accepts a valid model proposal in exploration mode", async () => {
+    const state = createSessionFixture();
+    state.shopping_plan.agent_directives.autonomy_level = "探索执行";
+    const target = state.shopping_plan.modules[1];
+    const decision = await decideNextAgentActionV2(state, async () => ({
+      mode: "connected",
+      data: {
+        action: "search_module",
+        confidence: "high",
+        module_id: target.module_id,
+        reason: "该模块预期使用频率更高，先建立候选池",
+        evidence: ["预算充足", "当前没有活跃任务"],
+        expected_gain: "提高首轮方案覆盖率",
+        tool_cost: 1
+      }
+    }));
+    expect(decision.source).toBe("deepseek_runtime");
+    expect(decision.module_id).toBe(target.module_id);
+    expect(state.agent_runtime.model_proposals).toBe(1);
+    expect(state.agent_runtime.model_decisions).toBe(1);
+    expect(state.agent_runtime.model_rejections).toBe(0);
+  });
+
+  it("rejects a low-confidence model proposal and records the fallback", async () => {
+    const state = createSessionFixture();
+    state.shopping_plan.agent_directives.autonomy_level = "平衡执行";
+    const target = state.shopping_plan.modules[0];
+    const decision = await decideNextAgentActionV2(state, async () => ({
+      mode: "connected",
+      data: {
+        action: "search_module",
+        confidence: "low",
+        module_id: target.module_id,
+        reason: "不确定是否应先搜索",
+        evidence: [],
+        expected_gain: "未知",
+        tool_cost: 1
+      }
+    }));
+    expect(decision.source).not.toBe("deepseek_runtime");
+    expect(decision.guardrail_notes).toContain("模型置信度过低，使用规则兜底");
+    expect(state.agent_runtime.model_rejections).toBe(1);
+    expect(state.agent_runtime.last_fallback_reason).toContain("模型置信度过低");
+  });
+
+  it("records structured model fallback without interrupting the workflow", async () => {
+    const state = createSessionFixture();
+    state.shopping_plan.agent_directives.autonomy_level = "探索执行";
+    const decision = await decideNextAgentActionV2(state, async (_state, fallback) => ({
+      mode: "mock",
+      data: fallback
+    }));
+    expect(decision.action).toBe("search_module");
+    expect(state.agent_runtime.model_failures).toBe(1);
+    expect(state.agent_runtime.last_decision_mode).toBe("policy");
   });
 });

@@ -409,6 +409,26 @@ export function normalizeSessionState(state: SessionState): SessionState {
       policy_decisions: Number.isFinite((state as Partial<SessionState>).agent_runtime?.policy_decisions)
         ? Math.max(0, Math.round((state as Partial<SessionState>).agent_runtime?.policy_decisions ?? 0))
         : 0,
+      model_proposals: Number.isFinite((state as Partial<SessionState>).agent_runtime?.model_proposals)
+        ? Math.max(0, Math.round((state as Partial<SessionState>).agent_runtime?.model_proposals ?? 0))
+        : 0,
+      model_rejections: Number.isFinite((state as Partial<SessionState>).agent_runtime?.model_rejections)
+        ? Math.max(0, Math.round((state as Partial<SessionState>).agent_runtime?.model_rejections ?? 0))
+        : 0,
+      model_failures: Number.isFinite((state as Partial<SessionState>).agent_runtime?.model_failures)
+        ? Math.max(0, Math.round((state as Partial<SessionState>).agent_runtime?.model_failures ?? 0))
+        : 0,
+      total_decision_latency_ms: Number.isFinite((state as Partial<SessionState>).agent_runtime?.total_decision_latency_ms)
+        ? Math.max(0, Math.round((state as Partial<SessionState>).agent_runtime?.total_decision_latency_ms ?? 0))
+        : 0,
+      last_fallback_reason:
+        typeof (state as Partial<SessionState>).agent_runtime?.last_fallback_reason === "string"
+          ? (state as Partial<SessionState>).agent_runtime?.last_fallback_reason
+          : undefined,
+      last_decision_at:
+        typeof (state as Partial<SessionState>).agent_runtime?.last_decision_at === "string"
+          ? (state as Partial<SessionState>).agent_runtime?.last_decision_at
+          : undefined,
       last_decision_mode:
         (state as Partial<SessionState>).agent_runtime?.last_decision_mode === "deepseek" ||
         (state as Partial<SessionState>).agent_runtime?.last_decision_mode === "policy"

@@ -10,6 +10,11 @@ import type {
   ShoppingPlanModule
 } from "@/lib/session/types";
 
+export type AgentModelDecider = (
+  state: SessionState,
+  fallback: AgentDecisionProposal
+) => Promise<{ data: AgentDecisionProposal; mode: "connected" | "mock" }>;
+
 function proposalFromPolicy(decision: AgentDecision): AgentDecisionProposal {
   return {
     action: decision.action,
@@ -97,7 +102,8 @@ export function validateModelProposal(
 function materializeModelDecision(
   state: SessionState,
   proposal: AgentDecisionProposal,
-  guardrailNotes: string[]
+  guardrailNotes: string[],
+  decisionLatencyMs: number
 ) {
   const module = moduleById(state, proposal.module_id);
   return createAgentDecision({
@@ -111,11 +117,15 @@ function materializeModelDecision(
     evidence: proposal.evidence,
     expected_gain: proposal.expected_gain,
     tool_cost: proposal.tool_cost,
-    guardrail_notes: guardrailNotes
+    guardrail_notes: guardrailNotes,
+    decision_latency_ms: decisionLatencyMs
   });
 }
 
-export async function decideNextAgentActionV2(state: SessionState) {
+export async function decideNextAgentActionV2(
+  state: SessionState,
+  modelDecider: AgentModelDecider = decideAgentNextAction
+) {
   const policyDecision = decideNextAgentAction(state);
   const policyProposal = proposalFromPolicy(policyDecision);
   const budgetRemaining = state.agent_runtime.max_tool_calls - state.agent_runtime.used_tool_calls;
@@ -127,6 +137,8 @@ export async function decideNextAgentActionV2(state: SessionState) {
   if (budgetRemaining <= 0 && policyDecision.action !== "complete_workflow") {
     state.agent_runtime.policy_decisions += 1;
     state.agent_runtime.last_decision_mode = "policy";
+    state.agent_runtime.last_fallback_reason = "tool_budget_exhausted";
+    state.agent_runtime.last_decision_at = new Date().toISOString();
     return createAgentDecision({
       action: "complete_workflow",
       source: "policy_fallback",
@@ -142,20 +154,41 @@ export async function decideNextAgentActionV2(state: SessionState) {
   if (hardPolicyAction) {
     state.agent_runtime.policy_decisions += 1;
     state.agent_runtime.last_decision_mode = "policy";
+    state.agent_runtime.last_fallback_reason = policyDecision.action === "wait_for_tools"
+      ? "active_tool_task"
+      : "conservative_execution_policy";
+    state.agent_runtime.last_decision_at = new Date().toISOString();
     return policyDecision;
   }
 
-  const modeled = await decideAgentNextAction(state, policyProposal);
+  const startedAt = Date.now();
+  state.agent_runtime.model_proposals += 1;
+  const modeled = await modelDecider(state, policyProposal);
+  const decisionLatencyMs = Date.now() - startedAt;
+  state.agent_runtime.total_decision_latency_ms += decisionLatencyMs;
+  state.agent_runtime.last_decision_at = new Date().toISOString();
   if (modeled.mode === "connected") {
     const validation = validateModelProposal(state, modeled.data);
     if (validation.valid) {
       state.agent_runtime.model_decisions += 1;
       state.agent_runtime.last_decision_mode = "deepseek";
-      return materializeModelDecision(state, modeled.data, ["动作白名单校验通过", "工具预算校验通过"]);
+      state.agent_runtime.last_fallback_reason = undefined;
+      return materializeModelDecision(
+        state,
+        modeled.data,
+        ["动作白名单校验通过", "工具预算校验通过"],
+        decisionLatencyMs
+      );
     }
+    state.agent_runtime.model_rejections += 1;
     policyDecision.guardrail_notes = validation.notes;
+    policyDecision.decision_latency_ms = decisionLatencyMs;
+    state.agent_runtime.last_fallback_reason = validation.notes.join("；");
   } else {
+    state.agent_runtime.model_failures += 1;
     policyDecision.guardrail_notes = ["模型未返回有效结构化决策，已使用规则策略"];
+    policyDecision.decision_latency_ms = decisionLatencyMs;
+    state.agent_runtime.last_fallback_reason = "model_unavailable_or_invalid_json";
   }
 
   state.agent_runtime.policy_decisions += 1;

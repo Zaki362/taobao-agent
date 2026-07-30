@@ -23,6 +23,7 @@ export function ExecutorSettings() {
   const [token, setToken] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [apiUrl, setApiUrl] = useState("http://127.0.0.1:3000");
 
   async function load() {
     const response = await fetch("/api/executor/devices");
@@ -32,6 +33,7 @@ export function ExecutorSettings() {
   }
 
   useEffect(() => {
+    setApiUrl(window.location.origin);
     load().catch((value) => setError(value instanceof Error ? value.message : "读取执行器失败"));
   }, []);
 
@@ -114,12 +116,21 @@ export function ExecutorSettings() {
         </CardContent>
       </Card>
 
+      <Card className="section-card">
+        <CardHeader><CardTitle>连接检查</CardTitle></CardHeader>
+        <CardContent className="space-y-3 text-sm leading-7 text-muted-foreground">
+          <p>Doctor 只检查网页服务、设备令牌和 Qoder CLI，不会主动打开淘宝商品页，也不会触发加购。</p>
+          <pre className="overflow-x-auto rounded-[18px] bg-foreground p-4 text-xs leading-6 text-white">{`SCENECART_API_URL='${apiUrl}' SCENECART_DEVICE_TOKEN='你的设备令牌' npm run executor:doctor`}</pre>
+          <p>三个检查均显示 PASS 后再启动执行器。淘宝 skill 会在第一条由用户确认的搜索任务中完成真实验证。</p>
+        </CardContent>
+      </Card>
+
       {token ? (
         <Card className="section-card border-primary/20">
           <CardHeader><CardTitle>启动命令</CardTitle></CardHeader>
           <CardContent className="space-y-3">
             <p className="text-sm text-muted-foreground">请在项目终端执行。关闭页面后无法再次查看该令牌。</p>
-            <pre className="overflow-x-auto rounded-[18px] bg-foreground p-4 text-xs leading-6 text-white">{`SCENECART_DEVICE_TOKEN='${token}' npm run worker:local`}</pre>
+            <pre className="overflow-x-auto rounded-[18px] bg-foreground p-4 text-xs leading-6 text-white">{`SCENECART_API_URL='${apiUrl}' SCENECART_DEVICE_TOKEN='${token}' npm run executor:doctor\nSCENECART_API_URL='${apiUrl}' SCENECART_DEVICE_TOKEN='${token}' npm run worker:local`}</pre>
           </CardContent>
         </Card>
       ) : null}

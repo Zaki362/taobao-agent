@@ -1,0 +1,44 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: scenecart
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-scenecart-local-only}
+      POSTGRES_DB: scenecart
+    volumes:
+      - scenecart_postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U scenecart -d scenecart"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  app:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "${PORT:-3000}:3000"
+    environment:
+      RUNTIME_STORE: postgres
+      DATABASE_URL: postgresql://scenecart:${POSTGRES_PASSWORD:-scenecart-local-only}@postgres:5432/scenecart
+      DATABASE_SSL: "false"
+      AUTH_REQUIRED: "true"
+      AUTH_COOKIE_SECURE: ${AUTH_COOKIE_SECURE:-false}
+      APP_ORIGIN: ${APP_ORIGIN:-http://127.0.0.1:3000}
+      TAOBAO_EXECUTION_BACKEND: local_executor
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+      DEEPSEEK_CHAT_MODEL: ${DEEPSEEK_CHAT_MODEL:-deepseek-chat}
+      DEEPSEEK_REASONER_MODEL: ${DEEPSEEK_REASONER_MODEL:-deepseek-reasoner}
+    command: ["sh", "-c", "node scripts/db-migrate.mjs && node scripts/db-check.mjs && node server.js"]
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/api/runtime/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+volumes:
+  scenecart_postgres:

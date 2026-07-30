@@ -34,7 +34,7 @@ export async function registerUser(emailInput: string, password: string) {
     user = await repository.createUser({
       id: randomUUID(),
       email,
-      password_hash: hashPassword(password),
+      password_hash: await hashPassword(password),
       created_at: now,
       updated_at: now
     });
@@ -55,7 +55,7 @@ export async function loginUser(emailInput: string, password: string) {
   const email = normalizeEmail(emailInput);
   const repository = getRuntimeRepository();
   const user = await repository.findUserByEmail(email);
-  if (!user || !verifyPassword(password, user.password_hash)) {
+  if (!user || !(await verifyPassword(password, user.password_hash))) {
     throw new ApiRouteError("邮箱或密码不正确", 401, "invalid_credentials");
   }
   const session = await issueAuthSession(user.id);

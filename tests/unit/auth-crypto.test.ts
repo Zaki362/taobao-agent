@@ -15,12 +15,12 @@ describe("authentication crypto", () => {
     expect(validatePassword("secure-password")).toBeNull();
   });
 
-  it("hashes passwords with a random salt and verifies them safely", () => {
-    const first = hashPassword("correct horse battery staple");
-    const second = hashPassword("correct horse battery staple");
+  it("hashes passwords with a random salt and verifies them safely", async () => {
+    const first = await hashPassword("correct horse battery staple");
+    const second = await hashPassword("correct horse battery staple");
     expect(first).not.toBe(second);
-    expect(verifyPassword("correct horse battery staple", first)).toBe(true);
-    expect(verifyPassword("wrong password", first)).toBe(false);
+    expect(await verifyPassword("correct horse battery staple", first)).toBe(true);
+    expect(await verifyPassword("wrong password", first)).toBe(false);
   });
 
   it("stores only a one-way digest for opaque tokens", () => {

@@ -65,6 +65,30 @@ describe("durable job queue contract", () => {
     expect((await localRuntimeRepository.getJob("job-expiring"))?.status).toBe("pending");
   });
 
+  it("only cancels work before an executor has claimed it", async () => {
+    await localRuntimeRepository.createDevice(device);
+    const pending = await localRuntimeRepository.createJob({
+      id: "job-cancellable",
+      user_id: device.user_id,
+      session_id: "session-test",
+      job_type: "module_search",
+      idempotency_key: "cancellable-job",
+      payload: {}
+    });
+    expect((await localRuntimeRepository.cancelJob(pending.id, device.user_id))?.status).toBe("cancelled");
+
+    await localRuntimeRepository.createJob({
+      id: "job-already-claimed",
+      user_id: device.user_id,
+      session_id: "session-test",
+      job_type: "module_search",
+      idempotency_key: "claimed-job",
+      payload: {}
+    });
+    await localRuntimeRepository.claimJob(device, 30_000);
+    expect(await localRuntimeRepository.cancelJob("job-already-claimed", device.user_id)).toBeNull();
+  });
+
   it("writes an empty executor result to a terminal search trace so the Agent can continue", async () => {
     await localRuntimeRepository.createDevice(device);
     const sessionId = `session-runtime-${Date.now()}`;

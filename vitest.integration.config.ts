@@ -9,11 +9,13 @@ export default defineConfig({
   },
   test: {
     environment: "node",
-    include: ["tests/unit/**/*.test.ts"],
+    include: ["tests/integration/**/*.test.ts"],
     clearMocks: true,
     fileParallelism: false,
+    testTimeout: 30_000,
+    hookTimeout: 30_000,
     env: {
-      RUNTIME_STORE: "local",
+      RUNTIME_STORE: "postgres",
       TAOBAO_EXECUTION_BACKEND: "local_executor",
       DEEPSEEK_API_KEY: "",
       DEEPSEEK_DISABLED: "true"

@@ -62,6 +62,12 @@ async function runExecutorUntilStopped(
 }
 
 test("authenticated new-car workflow reaches recommendations through the durable executor", async ({ page }) => {
+  const blockedCrossSiteRequest = await page.request.post("/api/auth/login", {
+    headers: { Origin: "https://malicious.example" },
+    data: { email: "blocked@example.com", password: "blocked-password" }
+  });
+  expect(blockedCrossSiteRequest.status()).toBe(403);
+
   await page.goto("/login");
   await page.getByRole("button", { name: "还没有账号？创建账号" }).click();
   await page.getByLabel("邮箱").fill(`e2e-${Date.now()}@example.com`);
@@ -70,6 +76,7 @@ test("authenticated new-car workflow reaches recommendations through the durable
   await expect(page).toHaveURL(/\/$/);
 
   const deviceResponse = await page.request.post("/api/executor/devices", {
+    headers: { Origin: "http://127.0.0.1:3100" },
     data: { name: "Playwright 淘宝执行器", capabilities: ["module_search", "add_to_cart"] }
   });
   expect(deviceResponse.status()).toBe(201);

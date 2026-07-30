@@ -1,6 +1,8 @@
-import { createHash, randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
+import { createHash, randomBytes, scrypt, timingSafeEqual } from "node:crypto";
+import { promisify } from "node:util";
 
 const KEY_LENGTH = 64;
+const scryptAsync = promisify(scrypt);
 
 export function normalizeEmail(value: string) {
   return value.trim().toLowerCase();
@@ -16,17 +18,21 @@ export function validatePassword(value: string) {
   return null;
 }
 
-export function hashPassword(password: string) {
+export async function hashPassword(password: string) {
   const salt = randomBytes(16);
-  const hash = scryptSync(password, salt, KEY_LENGTH);
+  const hash = await scryptAsync(password, salt, KEY_LENGTH) as Buffer;
   return `scrypt:${salt.toString("base64url")}:${hash.toString("base64url")}`;
 }
 
-export function verifyPassword(password: string, encoded: string) {
+export async function verifyPassword(password: string, encoded: string) {
   const [algorithm, saltValue, hashValue] = encoded.split(":");
   if (algorithm !== "scrypt" || !saltValue || !hashValue) return false;
   const expected = Buffer.from(hashValue, "base64url");
-  const actual = scryptSync(password, Buffer.from(saltValue, "base64url"), expected.length);
+  const actual = await scryptAsync(
+    password,
+    Buffer.from(saltValue, "base64url"),
+    expected.length
+  ) as Buffer;
   return actual.length === expected.length && timingSafeEqual(actual, expected);
 }
 

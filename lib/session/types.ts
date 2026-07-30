@@ -3,7 +3,7 @@ export type PriorityStyle = "实用优先" | "舒适优先" | "安全优先" | "
 export type RecommendationType = "稳妥推荐" | "性价比推荐" | "升级推荐";
 export type MCPStatus = "hosted" | "connected" | "unavailable";
 export type HostedTaskType = "module_search" | "add_to_cart";
-export type HostedTaskStatus = "pending" | "running" | "completed" | "failed";
+export type HostedTaskStatus = "pending" | "running" | "completed" | "failed" | "cancelled";
 export type ScenarioId = "new-car" | "camping" | "room-decor" | "dorm-move-in" | "moving-setup";
 export type WorkflowStage =
   | "landing"
@@ -193,6 +193,7 @@ export interface AgentDecision {
   expected_gain?: string;
   tool_cost?: number;
   guardrail_notes?: string[];
+  decision_latency_ms?: number;
   created_at: string;
   consumed_at?: string;
 }
@@ -213,6 +214,12 @@ export interface AgentRuntimeState {
   used_tool_calls: number;
   model_decisions: number;
   policy_decisions: number;
+  model_proposals: number;
+  model_rejections: number;
+  model_failures: number;
+  total_decision_latency_ms: number;
+  last_fallback_reason?: string;
+  last_decision_at?: string;
   last_decision_mode: "deepseek" | "policy" | "none";
   initialized_at: string;
 }

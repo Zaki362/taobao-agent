@@ -22,7 +22,7 @@ export default defineConfig({
       name: "desktop-chrome",
       use: {
         ...devices["Desktop Chrome"],
-        channel: "chrome"
+        channel: process.env.CI ? undefined : "chrome"
       }
     }
   ],
@@ -36,7 +36,8 @@ export default defineConfig({
       AUTH_REQUIRED: "true",
       RUNTIME_STORE: "local",
       TAOBAO_EXECUTION_BACKEND: "local_executor",
-      DEEPSEEK_API_KEY: ""
+      DEEPSEEK_API_KEY: "",
+      DEEPSEEK_DISABLED: "true"
     }
   }
 });
