@@ -2,50 +2,19 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Activity, Database, RefreshCcw, ShoppingCart, Sparkles, Store } from "lucide-react";
+import { RefreshCcw } from "lucide-react";
+import { jsonFetch } from "@/components/dashboard-api";
+import { HostedWorkerStatus } from "@/components/dashboard-types";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { isRenderableSessionState } from "@/lib/session/guards";
 import { SessionState } from "@/lib/session/types";
 import { formatCurrency } from "@/lib/utils";
 
 type SessionListResponse = {
   sessions: SessionState[];
 };
-
-type HostedWorkerStatus = {
-  online: boolean;
-  updated_at: string | null;
-  started_at: string | null;
-  state: string;
-  mode: string | null;
-  interval_ms: number | null;
-  pid: number | null;
-  api_base_url: string | null;
-  last_task_id: string | null;
-  last_task_type: string | null;
-  last_result: string | null;
-  last_error: string | null;
-};
-
-async function jsonFetch<T>(url: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(url, {
-    ...init,
-    headers: {
-      "Content-Type": "application/json",
-      ...(init?.headers ?? {})
-    }
-  });
-
-  const text = await response.text();
-  const payload = text ? JSON.parse(text) : {};
-
-  if (!response.ok) {
-    throw new Error(typeof payload.error === "string" ? payload.error : response.statusText);
-  }
-
-  return payload as T;
-}
 
 function executionModeLabel(mode: SessionState["execution_mode"]) {
   if (mode === "qoder_cli") return "Qoder CLI 直连";
@@ -96,9 +65,16 @@ export function HostedConsole() {
         jsonFetch<SessionListResponse>("/api/sessions"),
         jsonFetch<HostedWorkerStatus>("/api/hosted/worker-status").catch(() => null)
       ]);
-      setSessions(Array.isArray(sessionData.sessions) ? sessionData.sessions : []);
+      const nextSessions = Array.isArray(sessionData.sessions)
+        ? sessionData.sessions.filter(isRenderableSessionState)
+        : [];
+      setSessions(nextSessions);
       setWorkerStatus(workerData);
-      setSelectedSessionId((current) => current || sessionData.sessions?.[0]?.session_id || "");
+      setSelectedSessionId((current) =>
+        nextSessions.some((session) => session.session_id === current)
+          ? current
+          : nextSessions[0]?.session_id || ""
+      );
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : "加载后端执行详情失败");
     } finally {
@@ -230,6 +206,38 @@ export function HostedConsole() {
                     <CardTitle>当前购物规划</CardTitle>
                   </CardHeader>
                   <CardContent className="space-y-3">
+                    <div className="subtle-card p-4">
+                      <div className="flex flex-wrap items-start justify-between gap-3">
+                        <div>
+                          <p className="label-text">Agent 方案自检</p>
+                          <p className="mt-2 text-sm font-medium">{selectedSession.plan_review.summary}</p>
+                        </div>
+                        <Badge variant={selectedSession.plan_review.status === "ready" ? "success" : selectedSession.plan_review.status === "risky" ? "danger" : "secondary"}>
+                          {selectedSession.plan_review.status === "ready" ? "方案可执行" : selectedSession.plan_review.status === "risky" ? "建议先调整" : "需要留意"}
+                        </Badge>
+                      </div>
+                      <div className="mt-3 grid gap-2 text-xs leading-5 text-muted-foreground md:grid-cols-3">
+                        <p>预算：{selectedSession.plan_review.budget_comment}</p>
+                        <p>关键词：{selectedSession.plan_review.keyword_comment}</p>
+                        <p>模块：{selectedSession.plan_review.module_comment}</p>
+                      </div>
+                    </div>
+                    {selectedSession.last_refinement ? (
+                      <div className="subtle-card border-primary/15 bg-primary/5 p-4">
+                        <div className="flex flex-wrap items-start justify-between gap-3">
+                          <div>
+                            <p className="label-text">最近一次调整影响</p>
+                            <p className="mt-2 text-sm font-medium">{selectedSession.last_refinement.summary}</p>
+                          </div>
+                          <Badge variant="secondary">{selectedSession.last_refinement.quick_action}</Badge>
+                        </div>
+                        <div className="mt-3 grid gap-2 text-xs leading-5 text-muted-foreground md:grid-cols-3">
+                          <p>重搜：{selectedSession.last_refinement.impacted_modules.length} 个模块</p>
+                          <p>复用：{selectedSession.last_refinement.reusable_modules.length} 个模块</p>
+                          <p>移除：{selectedSession.last_refinement.removed_modules.length} 个模块</p>
+                        </div>
+                      </div>
+                    ) : null}
                     {selectedSession.shopping_plan.modules.map((module) => (
                       <div key={module.module_id} className="subtle-card p-5">
                         <div className="flex items-start justify-between gap-4">
@@ -253,6 +261,69 @@ export function HostedConsole() {
                 </Card>
 
                 <div className="grid gap-6 xl:grid-cols-2">
+                  <Card className="section-card xl:col-span-2">
+                    <CardHeader>
+                      <CardTitle>Agent 自主决策历史</CardTitle>
+                    </CardHeader>
+                    <CardContent className="grid gap-3 md:grid-cols-2">
+                      {selectedSession.agent_decisions.length > 0 ? (
+                        [...selectedSession.agent_decisions].reverse().slice(0, 10).map((decision) => (
+                          <div key={decision.decision_id} className="rounded-[20px] border border-primary/10 bg-primary/[0.035] p-4 text-sm">
+                            <div className="flex flex-wrap items-center justify-between gap-2">
+                              <p className="font-medium">{decision.module_name ?? "全局决策"}</p>
+                              <Badge variant="outline">{decision.action}</Badge>
+                            </div>
+                            <p className="mt-2 text-xs leading-5 text-muted-foreground">{decision.reason}</p>
+                            <p className="mt-2 text-[11px] text-muted-foreground">
+                              来源：{decision.source} · 置信度：{decision.confidence} · {formatTime(decision.created_at)}
+                            </p>
+                          </div>
+                        ))
+                      ) : (
+                        <div className="panel-muted p-4 text-sm text-muted-foreground md:col-span-2">
+                          当前还没有 Agent 自主决策。开始搜索后，这里会记录每次搜索、补搜、跳过和结束判断。
+                        </div>
+                      )}
+                    </CardContent>
+                  </Card>
+
+                  <Card className="section-card xl:col-span-2">
+                    <CardHeader>
+                      <CardTitle>Agent 搜索决策轨迹</CardTitle>
+                    </CardHeader>
+                    <CardContent className="grid gap-3 md:grid-cols-2">
+                      {Object.values(selectedSession.module_search_traces ?? {}).length > 0 ? (
+                        Object.values(selectedSession.module_search_traces ?? {}).slice(0, 8).map((trace) => (
+                          <div key={trace.module_id} className="rounded-[20px] border border-border/80 bg-white p-4 text-sm shadow-sm">
+                            <div className="flex flex-wrap items-center justify-between gap-2">
+                              <p className="font-medium">{trace.module_name}</p>
+                              <Badge variant={trace.status === "ready" ? "success" : trace.status === "failed" ? "danger" : "secondary"}>
+                                {trace.status === "ready"
+                                  ? "可用"
+                                  : trace.status === "recovered"
+                                    ? "已补搜"
+                                    : trace.status === "failed"
+                                      ? "失败"
+                                      : "偏薄"}
+                              </Badge>
+                            </div>
+                            <p className="mt-2 text-xs leading-5 text-muted-foreground">{trace.ai_decision_summary}</p>
+                            <div className="mt-3 grid gap-1 text-xs leading-5 text-muted-foreground">
+                              <p>首轮词：{trace.primary_keyword}</p>
+                              <p>尝试词：{trace.searched_keywords.join("、") || "暂无"}</p>
+                              <p>候选数：{trace.candidate_count} 件</p>
+                              <p>下一步：{trace.next_action}</p>
+                            </div>
+                          </div>
+                        ))
+                      ) : (
+                        <div className="panel-muted p-4 text-sm text-muted-foreground md:col-span-2">
+                          当前会话还没有搜索决策轨迹。完成任一模块搜索后，这里会展示 Agent 的关键词尝试、补搜原因与候选池复盘。
+                        </div>
+                      )}
+                    </CardContent>
+                  </Card>
+
                   <Card className="section-card">
                     <CardHeader>
                       <CardTitle>执行进度</CardTitle>
@@ -277,16 +348,22 @@ export function HostedConsole() {
                       <CardTitle>执行细节日志</CardTitle>
                     </CardHeader>
                     <CardContent className="space-y-3">
-                      {selectedSession.tool_logs.slice(0, 12).map((log) => (
-                        <div key={log.id} className="rounded-[18px] border border-border/80 bg-white p-3 text-sm shadow-sm">
-                          <div className="flex items-center justify-between gap-3">
-                            <p className="font-medium">{log.module_name ? `[${log.module_name}] ` : ""}{log.tool_name}</p>
-                            <span className="text-xs text-muted-foreground">{log.status.toUpperCase()} · {log.duration_ms}ms</span>
+                      {selectedSession.tool_logs.length > 0 ? (
+                        selectedSession.tool_logs.slice(0, 12).map((log) => (
+                          <div key={log.id} className="rounded-[18px] border border-border/80 bg-white p-3 text-sm shadow-sm">
+                            <div className="flex items-center justify-between gap-3">
+                              <p className="font-medium">{log.module_name ? `[${log.module_name}] ` : ""}{log.tool_name}</p>
+                              <span className="text-xs text-muted-foreground">{log.status.toUpperCase()} · {log.duration_ms}ms</span>
+                            </div>
+                            <p className="mt-2 text-xs text-muted-foreground">输入：{log.input_summary}</p>
+                            <p className="mt-1 text-xs text-muted-foreground">输出：{log.output_summary}</p>
                           </div>
-                          <p className="mt-2 text-xs text-muted-foreground">输入：{log.input_summary}</p>
-                          <p className="mt-1 text-xs text-muted-foreground">输出：{log.output_summary}</p>
+                        ))
+                      ) : (
+                        <div className="panel-muted p-4 text-sm text-muted-foreground">
+                          当前会话还没有工具调用日志。
                         </div>
-                      ))}
+                      )}
                     </CardContent>
                   </Card>
                 </div>

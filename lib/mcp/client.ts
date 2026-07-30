@@ -1,14 +1,17 @@
 import fs from "node:fs";
+import { homedir } from "node:os";
 import { liveMcpAdapter } from "@/lib/mcp/live";
 import { qoderMcpAdapter } from "@/lib/mcp/qoder";
 
 export type ExecutorBackend = "codex_hosted" | "experimental_local" | "qoder_cli";
 
+const DEFAULT_QODERCLI_PATH = `${homedir()}/.local/bin/qodercli`;
+
 export function getExecutionBackend(): ExecutorBackend {
   if (process.env.TAOBAO_EXECUTION_BACKEND === "qoder_cli") {
     return "qoder_cli";
   }
-  if (process.env.QODERCLI_PATH || fs.existsSync("/Users/guohuaz/.local/bin/qodercli")) {
+  if (process.env.QODERCLI_PATH || fs.existsSync(DEFAULT_QODERCLI_PATH)) {
     return "qoder_cli";
   }
   return process.env.TAOBAO_EXECUTION_BACKEND === "experimental_local"

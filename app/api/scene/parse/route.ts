@@ -1,23 +1,19 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextRequest } from "next/server";
 import { parseOnly } from "@/lib/agent/orchestrator";
-import { ScenarioId } from "@/lib/session/types";
+import { apiOk, apiRouteError, requireString } from "@/lib/api/responses";
+import { isScenarioId } from "@/lib/scenarios";
 
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json().catch(() => ({}));
-    const rawInput = typeof body.raw_input === "string" ? body.raw_input : "";
-    const scenarioId = typeof body.scenario_id === "string" ? (body.scenario_id as ScenarioId) : "new-car";
+    const rawInput = requireString(body.raw_input, "raw_input");
+    const scenarioId = isScenarioId(body.scenario_id) ? body.scenario_id : "new-car";
     const parsed = await parseOnly(rawInput, scenarioId);
-    return NextResponse.json({
+    return apiOk({
       scene_brief: parsed.data,
       deepseek_mode: parsed.mode
     });
   } catch (error) {
-    return NextResponse.json(
-      {
-        error: error instanceof Error ? error.message : "scene parse failed"
-      },
-      { status: 500 }
-    );
+    return apiRouteError(error, "scene parse failed");
   }
 }

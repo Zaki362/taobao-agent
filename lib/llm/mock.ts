@@ -1,4 +1,5 @@
 import {
+  PlanQualityReview,
   PlanningModule,
   ProductCandidate,
   QuickAction,
@@ -6,6 +7,7 @@ import {
   ShoppingPlan
 } from "@/lib/session/types";
 import { getScenarioConfig } from "@/lib/scenarios";
+import { searchIntentForModule } from "@/lib/agent/search-intents";
 
 export function mockParseScene(input: string, scenarioId: SceneBrief["scenario_id"] = "new-car"): SceneBrief {
   const scenario = getScenarioConfig(scenarioId);
@@ -80,15 +82,46 @@ export function mockPersonalizeTemplate(
         ratio -= 0.04;
       }
 
+      const searchKeyword = searchIntentForModule(scene, module);
+      const includeTerms = module.typical_item_types.slice(0, 3);
+      const excludeTerms = [...scene.avoid_items, ...scene.already_have].slice(0, 5);
+      const mustHaveSignals = [module.module_name, ...includeTerms].filter(Boolean).slice(0, 4);
+      const rejectSignals = excludeTerms.slice(0, 4);
+      const alternateKeywords = module.typical_item_types
+        .slice(1, 4)
+        .map((item) => [scene.vehicle_type, item, scene.priority_style.replace("优先", "")]
+          .filter(Boolean)
+          .join(" ")
+          .replace(/\s+/g, " ")
+          .trim())
+        .filter((item) => item && item !== searchKeyword);
+
       return {
         ...module,
         priority,
         budget_allocation: Math.max(60, Math.round(scene.budget * ratio)),
-        rationale: `${module.module_name}围绕${scene.priority_style}进行调整，优先覆盖当前场景里最容易立刻使用到的用品。`,
+        rationale: `结合“${scene.user_stage}”“${scene.priority_style}”和预算 ${scene.budget}，${module.module_name}被放在当前优先级，用来覆盖最容易马上产生价值的购买点。`,
         recommendation_strategy:
           scene.priority_style === "性价比优先"
-            ? "优先筛选高销量、评价稳定、单件不过度溢价的款式。"
-            : "优先找功能明确、口碑稳定、适合当前场景起步阶段购买的商品。",
+            ? "优先筛选高销量、评价稳定、单件不过度溢价的款式，并避免把预算消耗在低频升级项上。"
+            : "优先找功能明确、口碑稳定、适合当前阶段起步购买的商品，再用少量预算保留体验提升空间。",
+        search_keyword: searchKeyword,
+        search_strategy: {
+          primary_keyword: searchKeyword,
+          alternate_keywords: alternateKeywords.slice(0, 3),
+          include_terms: includeTerms,
+          exclude_terms: excludeTerms,
+          ranking_focus:
+            scene.priority_style === "性价比优先"
+              ? ["价格贴近预算", "店铺可信度", "标题匹配核心品类"]
+              : ["适配当前阶段", "店铺可信度", "功能明确"],
+          must_have_signals: mustHaveSignals,
+          reject_signals: rejectSignals,
+          quality_checks: ["商品图片完整", "详情链接可打开", "店铺信息明确", "规格描述清楚"],
+          price_band: `建议控制在 ${Math.max(30, Math.round(scene.budget * ratio * 0.45))}-${Math.max(80, Math.round(scene.budget * ratio * 1.15))} 元区间`,
+          reasoning: `优先用“${searchKeyword}”搜索，再用${includeTerms.join("、") || module.module_name}判断是否贴合模块。`,
+          failure_recovery: "如果首轮结果为空，换用更具体的品类词并保留车型/预算约束。"
+        },
         status: "ready" as const
       };
     })
@@ -103,7 +136,46 @@ export function mockPersonalizeTemplate(
   return {
     modules,
     overall_rationale: `以“${scene.priority_style}”为主线，先覆盖${scenario.name}的高频需求，再按预算保留少量升级空间。`,
-    personalization_summary: `DeepSeek 负责在${scenario.name}标准模板上做模块裁剪、排序和预算微调，保持结构稳定但更贴合当前场景。`
+    personalization_summary: `系统已在${scenario.name}标准模板上做模块裁剪、排序和预算微调，保持结构稳定但更贴合当前场景。`,
+    execution_strategy: {
+      module_sequence: modules.map((module) => module.module_id),
+      budget_guardrails: [
+        `总预算控制在 ${scene.budget} 元内，优先满足前两个高频模块。`,
+        "单个升级类商品只有在核心模块预算未超支时再考虑。"
+      ],
+      tradeoffs: [
+        "装饰和低频升级项默认后置，避免首购阶段分散预算。",
+        "已有物品相关模块会降低优先级，避免重复购买。"
+      ],
+      search_notes: [
+        "每个模块使用不同搜索词，先拿搜索摘要，不主动打开大量详情页。",
+        "优先看店铺可信度、标题匹配度和价格是否贴近模块预算。"
+      ],
+      stop_rules: [
+        "每个模块拿到稳妥、性价比、升级三档候选后即可停止扩搜。",
+        "如果搜索结果明显触及排除项，应跳过该候选并保留预算。"
+      ]
+    },
+    agent_directives: {
+      autonomy_level: scene.priority_style === "性价比优先" ? "探索执行" : "平衡执行",
+      search_depth: scene.budget >= 2000 ? "标准搜索" : "轻量搜索",
+      detail_policy: "默认先读取搜索摘要，不主动打开大量详情页；只有候选风险较高或用户点击详情时再进入商品页。",
+      recovery_policy: "某个模块搜索失败时，使用备用关键词补搜一次；仍失败则跳过该模块继续后续模块。",
+      rerank_rules: [
+        "优先保留标题和模块意图高度匹配的商品",
+        "优先保留价格落在模块预算区间内的商品",
+        "同档位中优先选择店铺可信度更高的商品"
+      ],
+      user_confirmation_points: [
+        "加入购物车前必须由用户确认",
+        "打开外部淘宝详情页前保持用户可控"
+      ],
+      safety_boundaries: [
+        "不读取订单历史、地址、手机号、聊天记录等敏感数据",
+        "不自动下单或支付",
+        "真实工具失败时回退为产品内演示清单"
+      ]
+    }
   };
 }
 
@@ -139,6 +211,50 @@ export function mockRefineScene(scene: SceneBrief, action: QuickAction): SceneBr
     return { ...scene, avoid_items: Array.from(new Set([...scene.avoid_items, action])) };
   }
   return scene;
+}
+
+export function mockReviewShoppingPlan(scene: SceneBrief, plan: ShoppingPlan): PlanQualityReview {
+  const allocated = plan.modules.reduce((sum, module) => sum + module.budget_allocation, 0);
+  const budgetDelta = Math.abs(allocated - scene.budget);
+  const keywords = plan.modules
+    .map((module) => module.search_keyword?.trim() || module.search_strategy?.primary_keyword?.trim())
+    .filter(Boolean);
+  const uniqueKeywordCount = new Set(keywords).size;
+  const missingSignalModules = plan.modules.filter((module) => !module.search_strategy?.must_have_signals?.length);
+  const risks: string[] = [];
+
+  if (budgetDelta > Math.max(80, scene.budget * 0.08)) {
+    risks.push("预算分配与总预算存在偏差，建议确认是否需要重新压缩或放宽。");
+  }
+  if (uniqueKeywordCount < keywords.length) {
+    risks.push("部分模块搜索关键词相似，可能导致候选商品重复。");
+  }
+  if (missingSignalModules.length > 0) {
+    risks.push("少数模块缺少明确验收信号，搜索结果需要更依赖人工确认。");
+  }
+
+  return {
+    status: risks.length >= 2 ? "needs_attention" : "ready",
+    source: "heuristic",
+    summary:
+      risks.length > 0
+        ? "规划整体可执行，但有少量预算或搜索质量点需要在确认前留意。"
+        : "规划整体稳定，可以进入搜索执行阶段。",
+    strengths: [
+      "已按场景模板拆成可执行模块",
+      "已为模块配置差异化搜索词和预算",
+      "已保留加购前用户确认边界"
+    ],
+    risks: risks.length ? risks : ["当前为规划级自检，实际规格仍需在商品详情页确认。"],
+    improvement_suggestions:
+      risks.length > 0
+        ? ["如预算偏紧，优先保留前两个高频模块", "如搜索结果重复，可使用备用词补搜"]
+        : ["先按当前顺序搜索，再根据候选池复盘决定是否补搜"],
+    budget_comment: `当前模块预算合计 ${allocated} 元，用户预算 ${scene.budget} 元。`,
+    keyword_comment: `已生成 ${uniqueKeywordCount} 组有效搜索意图。`,
+    module_comment: `当前保留 ${plan.modules.length} 个模块，执行顺序由 Agent 策略控制。`,
+    generated_at: new Date().toISOString()
+  };
 }
 
 export function mockExplainProductFit(moduleName: string, product: Pick<ProductCandidate, "title" | "recommendation_type">) {

@@ -17,7 +17,6 @@ export type WorkflowStage =
   | "review_results"
   | "cart_review"
   | "refining"
-  | "confirm_refine"
   | "carting";
 export type QuickAction = string;
 
@@ -43,12 +42,48 @@ export interface PlanningModule {
   optional?: boolean;
 }
 
+export interface ModuleSearchStrategy {
+  primary_keyword: string;
+  alternate_keywords: string[];
+  include_terms: string[];
+  exclude_terms: string[];
+  ranking_focus: string[];
+  must_have_signals: string[];
+  reject_signals: string[];
+  quality_checks: string[];
+  price_band: string;
+  reasoning: string;
+  failure_recovery: string;
+}
+
+export interface PlanExecutionStrategy {
+  module_sequence: string[];
+  budget_guardrails: string[];
+  tradeoffs: string[];
+  search_notes: string[];
+  stop_rules: string[];
+}
+
+export type AgentAutonomyLevel = "保守执行" | "平衡执行" | "探索执行";
+export type AgentSearchDepth = "轻量搜索" | "标准搜索" | "深度搜索";
+
+export interface AgentDirectives {
+  autonomy_level: AgentAutonomyLevel;
+  search_depth: AgentSearchDepth;
+  detail_policy: string;
+  recovery_policy: string;
+  rerank_rules: string[];
+  user_confirmation_points: string[];
+  safety_boundaries: string[];
+}
+
 export interface ShoppingPlanModule extends PlanningModule {
   priority: number;
   budget_allocation: number;
   rationale: string;
   recommendation_strategy: string;
   search_keyword?: string;
+  search_strategy?: ModuleSearchStrategy;
   status: "pending" | "ready" | "refined";
 }
 
@@ -56,6 +91,23 @@ export interface ShoppingPlan {
   modules: ShoppingPlanModule[];
   overall_rationale: string;
   personalization_summary: string;
+  execution_strategy: PlanExecutionStrategy;
+  agent_directives: AgentDirectives;
+}
+
+export type PlanQualityStatus = "ready" | "needs_attention" | "risky";
+
+export interface PlanQualityReview {
+  status: PlanQualityStatus;
+  source: "heuristic" | "deepseek";
+  summary: string;
+  strengths: string[];
+  risks: string[];
+  improvement_suggestions: string[];
+  budget_comment: string;
+  keyword_comment: string;
+  module_comment: string;
+  generated_at: string;
 }
 
 export interface ProductCandidate {
@@ -72,6 +124,92 @@ export interface ProductCandidate {
   fit_reason: string;
   recommendation_type: RecommendationType;
   module_id: string;
+}
+
+export type ModuleCandidateReviewStatus = "ready" | "needs_detail_check" | "thin" | "needs_refine";
+
+export interface ModuleCandidateReview {
+  module_id: string;
+  status: ModuleCandidateReviewStatus;
+  source: "heuristic" | "deepseek";
+  summary: string;
+  strengths: string[];
+  caveats: string[];
+  next_action: string;
+  suggested_keyword?: string;
+  generated_at: string;
+}
+
+export type ModuleSearchTraceStatus = "ready" | "recovered" | "thin" | "failed";
+export type ModuleSearchAttemptStatus = "success" | "error" | "skipped";
+
+export interface ModuleSearchAttempt {
+  keyword: string;
+  reason: string;
+  result_count: number;
+  status: ModuleSearchAttemptStatus;
+  error_message?: string;
+  created_at: string;
+}
+
+export interface ModuleSearchTrace {
+  module_id: string;
+  module_name: string;
+  status: ModuleSearchTraceStatus;
+  primary_keyword: string;
+  searched_keywords: string[];
+  attempts: ModuleSearchAttempt[];
+  result_count: number;
+  candidate_count: number;
+  review_status?: ModuleCandidateReviewStatus;
+  review_summary?: string;
+  recovery_keyword?: string;
+  ai_decision_summary: string;
+  next_action: string;
+  generated_at: string;
+  updated_at: string;
+}
+
+export type AgentDecisionAction =
+  | "search_module"
+  | "retry_module"
+  | "skip_module"
+  | "wait_for_tools"
+  | "complete_workflow";
+
+export type AgentDecisionSource = "plan_strategy" | "candidate_review" | "policy_fallback";
+export type AgentDecisionConfidence = "high" | "medium" | "low";
+
+export interface AgentDecision {
+  decision_id: string;
+  action: AgentDecisionAction;
+  source: AgentDecisionSource;
+  confidence: AgentDecisionConfidence;
+  module_id?: string;
+  module_name?: string;
+  keyword_override?: string;
+  reason: string;
+  evidence: string[];
+  created_at: string;
+}
+
+export type RefinementModuleDecisionType = "needs_search" | "reused" | "removed";
+
+export interface RefinementModuleDecision {
+  module_id: string;
+  module_name: string;
+  decision: RefinementModuleDecisionType;
+  reason: string;
+}
+
+export interface RefinementImpactSummary {
+  quick_action: QuickAction;
+  summary: string;
+  impacted_modules: string[];
+  reusable_modules: string[];
+  removed_modules: string[];
+  module_decisions: RefinementModuleDecision[];
+  generated_at: string;
 }
 
 export interface MCPToolLog {
@@ -125,10 +263,15 @@ export interface SessionState {
   scene_brief: SceneBrief;
   base_template: PlanningModule[];
   shopping_plan: ShoppingPlan;
+  plan_review: PlanQualityReview;
   module_candidates: Record<string, ProductCandidate[]>;
+  module_reviews: Record<string, ModuleCandidateReview>;
+  module_search_traces: Record<string, ModuleSearchTrace>;
+  agent_decisions: AgentDecision[];
   selected_items: SelectedItem[];
   tool_logs: MCPToolLog[];
   hosted_tasks: HostedExecutionTask[];
+  last_refinement?: RefinementImpactSummary;
   execution_mode: ExecutionMode;
   permissions_scope: string[];
   deepseek_status: "connected" | "mock";

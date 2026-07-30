@@ -1,18 +1,28 @@
 import { runCartExecutor } from "@/lib/agent/cart";
+import { decideNextAgentAction, recordAgentDecision, removeModuleAgentDecisions } from "@/lib/agent/decision-engine";
+import { AgentDirectiveProfile, applyAgentDirectiveProfile } from "@/lib/agent/directives";
 import { runDeepSeekPlanner, runTemplatePlannerForScenario } from "@/lib/agent/planner";
+import { reviewPlanWithAgent } from "@/lib/agent/plan-reviewer";
 import { runModuleSearch } from "@/lib/agent/product-matcher";
 import { getDefaultSceneInput, runSceneParser, sceneSummary } from "@/lib/agent/scene";
 import { runRefiner } from "@/lib/agent/refiner";
 import { getExecutionBackend } from "@/lib/mcp/client";
 import { getSession, saveSession } from "@/lib/session/store";
-import { QuickAction, ScenarioId, SceneBrief, SessionState } from "@/lib/session/types";
+import { ModuleSearchStrategy, PlanQualityReview, QuickAction, ScenarioId, SceneBrief, SessionState } from "@/lib/session/types";
 import { getScenarioConfig } from "@/lib/scenarios";
 
 function generateSessionId() {
-  return `session-${Date.now()}`;
+  return `session-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
-function createBaseState(rawInput: string, sceneBrief: SceneBrief, deepseekMode: "connected" | "mock", baseTemplate: Awaited<ReturnType<typeof runTemplatePlannerForScenario>>, shoppingPlan: Awaited<ReturnType<typeof runDeepSeekPlanner>>["data"]): SessionState {
+function createBaseState(
+  rawInput: string,
+  sceneBrief: SceneBrief,
+  deepseekMode: "connected" | "mock",
+  baseTemplate: Awaited<ReturnType<typeof runTemplatePlannerForScenario>>,
+  shoppingPlan: Awaited<ReturnType<typeof runDeepSeekPlanner>>["data"],
+  planReview: PlanQualityReview
+): SessionState {
   const backend = getExecutionBackend();
   const scenario = getScenarioConfig(sceneBrief.scenario_id);
   return {
@@ -21,7 +31,11 @@ function createBaseState(rawInput: string, sceneBrief: SceneBrief, deepseekMode:
     scene_brief: sceneBrief,
     base_template: baseTemplate,
     shopping_plan: shoppingPlan,
+    plan_review: planReview,
     module_candidates: {},
+    module_reviews: {},
+    module_search_traces: {},
+    agent_decisions: [],
     selected_items: [],
     tool_logs: [],
     hosted_tasks: [],
@@ -40,16 +54,22 @@ export async function initializeSession(rawInput = getDefaultSceneInput(), scena
   const parsed = await runSceneParser(rawInput, scenarioId);
   const baseTemplate = await runTemplatePlannerForScenario(parsed.data);
   const planned = await runDeepSeekPlanner(parsed.data);
-  const state = createBaseState(rawInput, parsed.data, parsed.mode, baseTemplate, planned.data);
+  const reviewed = await reviewPlanWithAgent(parsed.data, planned.data);
+  const state = createBaseState(rawInput, parsed.data, parsed.mode === "connected" || planned.mode === "connected" || reviewed.mode === "connected" ? "connected" : "mock", baseTemplate, planned.data, reviewed.data);
 
   saveSession(state);
   return state;
 }
 
-export async function createSessionFromScene(rawInput: string, sceneBrief: SceneBrief, deepseekMode: "connected" | "mock" = "mock") {
+export async function createSessionFromScene(
+  rawInput: string,
+  sceneBrief: SceneBrief,
+  parseMode: "connected" | "mock" = "mock"
+) {
   const baseTemplate = await runTemplatePlannerForScenario(sceneBrief);
   const planned = await runDeepSeekPlanner(sceneBrief);
-  const state = createBaseState(rawInput, sceneBrief, deepseekMode === "connected" || planned.mode === "connected" ? "connected" : "mock", baseTemplate, planned.data);
+  const reviewed = await reviewPlanWithAgent(sceneBrief, planned.data);
+  const state = createBaseState(rawInput, sceneBrief, parseMode === "connected" || planned.mode === "connected" || reviewed.mode === "connected" ? "connected" : "mock", baseTemplate, planned.data, reviewed.data);
   saveSession(state);
   return state;
 }
@@ -86,24 +106,45 @@ export async function refineSession(sessionId: string, action: QuickAction) {
   }
   const refined = await runRefiner(state, action);
 
-  state.current_scene_label = sceneSummary(state.scene_brief);
+  state.current_scene_label = `${getScenarioConfig(state.scene_brief.scenario_id).name} · ${sceneSummary(state.scene_brief)}`;
   saveSession(state);
   return {
     state,
-    impactedModules: refined.impactedModules
+    impactedModules: refined.impactedModules,
+    refinementImpact: refined.refinementImpact
   };
 }
 
-export async function searchModule(sessionId: string, moduleId: string) {
+export async function searchModule(
+  sessionId: string,
+  moduleId: string,
+  options?: {
+    keywordOverride?: string;
+  }
+) {
   const state = await ensureSession(sessionId);
   if (!state) {
     throw new Error("session not found");
   }
-  const candidates = await runModuleSearch(state, moduleId);
+  const candidates = await runModuleSearch(state, moduleId, options);
   saveSession(state);
   return {
     state,
     candidates
+  };
+}
+
+export async function getNextAgentAction(sessionId: string) {
+  const state = await ensureSession(sessionId);
+  if (!state) {
+    throw new Error("session not found");
+  }
+
+  const decision = recordAgentDecision(state, decideNextAgentAction(state));
+  saveSession(state);
+  return {
+    state,
+    decision
   };
 }
 
@@ -117,5 +158,113 @@ export async function addToCart(sessionId: string, productId: string) {
   return {
     state,
     result
+  };
+}
+
+export async function updateAgentDirectiveProfile(sessionId: string, profile: AgentDirectiveProfile) {
+  const state = await ensureSession(sessionId);
+  if (!state) {
+    throw new Error("session not found");
+  }
+  const directives = applyAgentDirectiveProfile(state, profile);
+  saveSession(state);
+  return {
+    state,
+    directives
+  };
+}
+
+export async function updateModuleSearchStrategy(
+  sessionId: string,
+  moduleId: string,
+  payload: {
+    primaryKeyword: string;
+    alternateKeywords?: string[];
+  }
+) {
+  const state = await ensureSession(sessionId);
+  if (!state) {
+    throw new Error("session not found");
+  }
+
+  const module = state.shopping_plan.modules.find((item) => item.module_id === moduleId);
+  if (!module) {
+    throw new Error("module not found");
+  }
+
+  const primaryKeyword = payload.primaryKeyword.replace(/\s+/g, " ").trim().slice(0, 80);
+  if (!primaryKeyword) {
+    throw new Error("primary keyword is required");
+  }
+
+  const alternateKeywords = (payload.alternateKeywords ?? [])
+    .map((item) => item.replace(/\s+/g, " ").trim().slice(0, 80))
+    .filter(Boolean)
+    .filter((item, index, list) => item !== primaryKeyword && list.indexOf(item) === index)
+    .slice(0, 4);
+
+  const previousStrategy = module.search_strategy;
+  const nextStrategy: ModuleSearchStrategy = {
+    primary_keyword: primaryKeyword,
+    alternate_keywords: alternateKeywords.length
+      ? alternateKeywords
+      : previousStrategy?.alternate_keywords ?? [],
+    include_terms:
+      previousStrategy?.include_terms?.length
+        ? previousStrategy.include_terms
+        : module.typical_item_types.slice(0, 3),
+    exclude_terms:
+      previousStrategy?.exclude_terms?.length
+        ? previousStrategy.exclude_terms
+        : [...state.scene_brief.avoid_items, ...state.scene_brief.already_have].slice(0, 5),
+    ranking_focus:
+      previousStrategy?.ranking_focus?.length
+        ? previousStrategy.ranking_focus
+        : ["匹配模块意图", "价格贴近预算", "店铺可信度"],
+    must_have_signals:
+      previousStrategy?.must_have_signals?.length
+        ? previousStrategy.must_have_signals
+        : [module.module_name, ...module.typical_item_types.slice(0, 3)].filter(Boolean).slice(0, 4),
+    reject_signals:
+      previousStrategy?.reject_signals?.length
+        ? previousStrategy.reject_signals
+        : [...state.scene_brief.avoid_items, ...state.scene_brief.already_have].slice(0, 4),
+    quality_checks:
+      previousStrategy?.quality_checks?.length
+        ? previousStrategy.quality_checks
+        : ["商品图片完整", "详情链接可打开", "店铺信息明确", "规格描述清楚"],
+    price_band:
+      previousStrategy?.price_band ||
+      `建议控制在模块预算 ${Math.round(module.budget_allocation * 0.35)}-${Math.round(module.budget_allocation * 1.1)} 元附近`,
+    reasoning: `用户在规划确认页把「${module.module_name}」首轮搜索词调整为“${primaryKeyword}”，后续搜索将优先按该任务包执行。`,
+    failure_recovery:
+      previousStrategy?.failure_recovery ||
+      "如果首轮结果为空，使用备用搜索词缩小到更明确的品类，再继续按预算和排除项筛选。"
+  };
+
+  module.search_keyword = primaryKeyword;
+  module.search_strategy = nextStrategy;
+  module.status = "refined";
+  delete state.module_candidates[moduleId];
+  delete state.module_reviews[moduleId];
+  delete state.module_search_traces[moduleId];
+  removeModuleAgentDecisions(state, moduleId);
+  state.tool_logs.push({
+    id: `strategy_update-${Date.now()}`,
+    timestamp: new Date().toISOString(),
+    tool_name: "agent_update_search_strategy",
+    input_summary: `模块：${module.module_name}；首轮搜索词：${primaryKeyword}`,
+    output_summary: alternateKeywords.length
+      ? `已保存 ${alternateKeywords.length} 个备用搜索词`
+      : "已保存主搜索词，备用词沿用 Agent 原策略",
+    status: "success",
+    duration_ms: 0,
+    mode: state.execution_mode
+  });
+
+  saveSession(state);
+  return {
+    state,
+    module
   };
 }

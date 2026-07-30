@@ -1,6 +1,7 @@
 import { getExecutionBackend } from "@/lib/mcp/client";
 import { executeMcpTool } from "@/lib/mcp/executor";
 import { queueAddToCartTask } from "@/lib/mcp/hosted";
+import { summarizeLogText, summarizeLogValue } from "@/lib/mcp/logging";
 import { ProductCandidate, SelectedItem, SessionState } from "@/lib/session/types";
 
 function normalizeProductDetailUrl(productId: string, rawUrl?: string) {
@@ -70,7 +71,7 @@ export async function runCartExecutor(state: SessionState, productId: string) {
     const fallbackItem = buildSelectedItem(state, product, {
       selectedSpec: "演示购物车默认规格",
       cartSource: "demo",
-      cartNote: error instanceof Error ? error.message : "真实加购失败，已回退到演示购物车"
+      cartNote: error instanceof Error ? summarizeLogText(error.message, 220) : "真实加购失败，已回退到演示购物车"
     });
     state.selected_items = [...state.selected_items.filter((item) => item.product_id !== productId), fallbackItem];
     state.tool_logs.unshift({
@@ -79,8 +80,10 @@ export async function runCartExecutor(state: SessionState, productId: string) {
       tool_name: "demo_cart_fallback",
       module_id: product.module_id,
       module_name: state.shopping_plan.modules.find((module) => module.module_id === product.module_id)?.module_name,
-      input_summary: JSON.stringify({ product_id: product.product_id, title: product.title }).slice(0, 180),
-      output_summary: error instanceof Error ? `真实加购失败，已回退到演示购物车：${error.message}` : "真实加购失败，已回退到演示购物车",
+      input_summary: summarizeLogValue({ product_id: product.product_id, title: product.title }, 180),
+      output_summary: error instanceof Error
+        ? summarizeLogText(`真实加购失败，已回退到演示购物车：${error.message}`, 220)
+        : "真实加购失败，已回退到演示购物车",
       status: "blocked",
       duration_ms: 0,
       mode: state.execution_mode

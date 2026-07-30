@@ -4,6 +4,33 @@ import path from "node:path";
 const HOSTED_API_BASE_URL = process.env.HOSTED_API_BASE_URL || "http://127.0.0.1:3000";
 const OUTPUT_DIR = path.join(process.cwd(), ".data", "hosted-worker");
 const STATUS_FILE = path.join(OUTPUT_DIR, "worker-status.json");
+const MAX_WORKER_STATUS_TEXT = 220;
+
+function summarizeWorkerStatusText(value, maxLength = MAX_WORKER_STATUS_TEXT) {
+  if (typeof value !== "string") {
+    return null;
+  }
+
+  const text = value
+    .replace(/sk-[A-Za-z0-9_-]{20,}/g, "[redacted-api-key]")
+    .replace(/https?:\/\/[^\s"'<>]+/g, (match) => {
+      try {
+        const url = new URL(match);
+        return `${url.origin}${url.pathname}${url.search ? "?..." : ""}`;
+      } catch {
+        return "[url]";
+      }
+    })
+    .replace(/\/Users\/[^\s"'，。；;:]+/g, "[local-path]")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  if (!text) {
+    return null;
+  }
+
+  return text.length > maxLength ? `${text.slice(0, maxLength)}...` : text;
+}
 
 async function ensureOutputDir() {
   await fs.mkdir(OUTPUT_DIR, { recursive: true });
@@ -195,8 +222,8 @@ async function resolveCommand(flags) {
     mode: "codex_proxy",
     state: "idle",
     last_task_id: payload.task_id ?? null,
-    last_result: payload.result_summary ?? null,
-    last_error: payload.error_message ?? null
+    last_result: summarizeWorkerStatusText(payload.result_summary),
+    last_error: summarizeWorkerStatusText(payload.error_message)
   });
 
   console.log("回填成功。");
@@ -240,7 +267,7 @@ async function watchCommand(flags) {
       await writeWorkerStatus({
         mode: "codex_proxy",
         state: "idle",
-        last_error: error instanceof Error ? error.message : String(error)
+        last_error: summarizeWorkerStatusText(error instanceof Error ? error.message : String(error))
       });
       console.error(`[Codex Hosted Worker] ${error instanceof Error ? error.message : String(error)}`);
     }

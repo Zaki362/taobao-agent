@@ -1,4 +1,6 @@
 import { getMcpClient } from "@/lib/mcp/client";
+import { summarizeLogText, summarizeLogValue } from "@/lib/mcp/logging";
+import { getMcpToolDefinition, validateMcpToolOutput } from "@/lib/mcp/schema";
 import { MCPToolName, MCPToolRequestMap, MCPToolResponseMap } from "@/lib/mcp/types";
 import { SessionState } from "@/lib/session/types";
 
@@ -10,11 +12,11 @@ interface MCPExecutionContext {
 }
 
 function summarizeInput(value: unknown) {
-  return JSON.stringify(value).slice(0, 180);
+  return summarizeLogValue(value, 180);
 }
 
 function summarizeOutput(value: unknown) {
-  return JSON.stringify(value).slice(0, 180);
+  return summarizeLogValue(value, 180);
 }
 
 function createLogId(toolName: MCPToolName, started: number) {
@@ -28,6 +30,18 @@ export async function executeMcpTool<T extends MCPToolName>(
   input: MCPToolRequestMap[T],
   context?: MCPExecutionContext
 ): Promise<MCPToolResponseMap[T]> {
+  const definition = getMcpToolDefinition(toolName);
+  if (!definition) {
+    throw new Error(`Unsupported MCP tool: ${String(toolName)}`);
+  }
+
+  if (definition.requires_confirmation) {
+    const confirmed = typeof input === "object" && input !== null && (input as { confirmed?: unknown }).confirmed === true;
+    if (!confirmed) {
+      throw new Error(`MCP tool ${toolName} requires explicit confirmation.`);
+    }
+  }
+
   const { client, status } = await getMcpClient();
   const started = Date.now();
 
@@ -40,7 +54,8 @@ export async function executeMcpTool<T extends MCPToolName>(
   }
 
   try {
-    const output = await client.run(toolName, input);
+    const rawOutput = await client.run(toolName, input);
+    const output = validateMcpToolOutput(toolName, rawOutput, input);
     state.tool_logs.unshift({
       id: createLogId(toolName, started),
       timestamp: new Date(started).toISOString(),
@@ -63,7 +78,7 @@ export async function executeMcpTool<T extends MCPToolName>(
       module_id: context?.module_id,
       module_name: context?.module_name,
       input_summary: summarizeInput(input),
-      output_summary: error instanceof Error ? error.message : "unknown error",
+      output_summary: error instanceof Error ? summarizeLogText(error.message, 220) : "unknown error",
       status: "error",
       duration_ms: Date.now() - started,
       mode: client.mode

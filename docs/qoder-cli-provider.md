@@ -31,7 +31,7 @@
 
 ```bash
 TAOBAO_EXECUTION_BACKEND=qoder_cli
-QODERCLI_PATH=/Users/guohuaz/.local/bin/qodercli
+QODERCLI_PATH=~/.local/bin/qodercli
 ```
 
 然后重启应用：
@@ -51,17 +51,17 @@ npm run dev
 
 ## 当前限制
 
-当前 provider 已经接好工程结构，但还没有在你的真实 Qoder 淘宝 skill 环境下跑通端到端联调。
+当前 provider 已经接好工程结构，并且搜索主链路已在真实 Qoder 淘宝 skill 环境中验证可用。
 
 也就是说：
 
 - 代码层已支持 `qoder_cli`
-- 但要真正执行成功，仍需你先完成：
-  - `qodercli /login`
-  - 确认 Qoder 当前会话或非交互模式下也能调用淘宝 skill
+- 搜索能力相对稳定，适合作为当前 Demo 主执行路径
+- 商品详情页与真实加购仍受淘宝桌面版权限、登录态和商品页跳转影响，因此产品保留演示购物车 fallback
 
 ## 建议的下一步
 
 1. 完成 `qodercli` 登录
-2. 确认 `qodercli -p ...` 非交互模式也能使用这项淘宝能力
-3. 再切换 `TAOBAO_EXECUTION_BACKEND=qoder_cli` 做联调
+2. 确认 Qoder 已安装淘宝 skill
+3. 设置 `TAOBAO_EXECUTION_BACKEND=qoder_cli`
+4. 使用产品页的串行搜索流程验证各模块候选商品

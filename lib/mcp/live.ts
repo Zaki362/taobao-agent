@@ -14,7 +14,15 @@ let cachedStatus:
 
 async function parseJson(response: Response) {
   const text = await response.text();
-  return text ? JSON.parse(text) : {};
+  if (!text) {
+    return {};
+  }
+
+  try {
+    return JSON.parse(text);
+  } catch {
+    throw new Error(`Live MCP 返回非 JSON 响应：${text.slice(0, 120)}`);
+  }
 }
 
 export const liveMcpAdapter: MCPAdapter = {

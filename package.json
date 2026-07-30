@@ -7,8 +7,10 @@
     "dev:auto": "node scripts/dev-auto.mjs",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint",
+    "lint": "npm run typecheck",
     "typecheck": "tsc --noEmit",
+    "preflight": "node scripts/preflight.mjs",
+    "check": "npm run preflight && npm run typecheck && npm run build",
     "bridge:taobao": "node scripts/taobao-native-bridge.mjs",
     "worker:codex": "node scripts/codex-hosted-worker.mjs"
   },

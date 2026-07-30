@@ -1,4 +1,6 @@
 import { ProductCandidate, SelectedItem, SessionState } from "@/lib/session/types";
+import { reviewModuleCandidates } from "@/lib/agent/candidate-reviewer";
+import { summarizeLogText } from "@/lib/mcp/logging";
 
 let hostedTaskSequence = 0;
 
@@ -21,8 +23,8 @@ function createTaskLog(
     tool_name: mode === "qoder_cli" ? "qoder_async_executor" : "codex_hosted_executor",
     module_id: moduleId,
     module_name: moduleName,
-    input_summary: title,
-    output_summary: outputSummary,
+    input_summary: summarizeLogText(title, 180),
+    output_summary: summarizeLogText(outputSummary, 220),
     status: "blocked",
     duration_ms: 0,
     mode
@@ -167,18 +169,29 @@ export function resolveHostedModuleSearchTask(
   if (!task || task.task_type !== "module_search") {
     throw new Error("hosted module search task not found");
   }
+  const resultSummary = input.result_summary ? summarizeLogText(input.result_summary, 220) : undefined;
+  const errorMessage = input.error_message ? summarizeLogText(input.error_message, 220) : undefined;
 
   task.status = input.status;
   task.updated_at = new Date().toISOString();
-  task.result_summary = input.result_summary;
-  task.error_message = input.error_message;
+  task.result_summary = resultSummary;
+  task.error_message = errorMessage;
 
   if (input.status === "completed") {
-    state.module_candidates[task.module_id ?? ""] = input.candidates ?? [];
+    const moduleId = task.module_id ?? "";
+    const candidates = (input.candidates ?? []).map((candidate) => ({
+      ...candidate,
+      module_id: moduleId || candidate.module_id
+    }));
+    state.module_candidates[moduleId] = candidates;
+    const module = state.shopping_plan.modules.find((item) => item.module_id === task.module_id);
+    if (module) {
+      state.module_reviews[module.module_id] = reviewModuleCandidates(state, module, candidates);
+    }
     createTaskLog(
       state,
       task.title,
-      input.result_summary ?? `Codex 宿主已完成搜索，返回 ${(input.candidates ?? []).length} 个候选商品。`,
+      resultSummary ?? `Codex 宿主已完成搜索，返回 ${candidates.length} 个候选商品。`,
       task.module_id,
       task.module_name
     );
@@ -188,7 +201,7 @@ export function resolveHostedModuleSearchTask(
   createTaskLog(
     state,
     task.title,
-    input.error_message ?? "Codex 宿主执行失败。",
+    errorMessage ?? "Codex 宿主执行失败。",
     task.module_id,
     task.module_name
   );
@@ -208,11 +221,13 @@ export function resolveHostedAddToCartTask(
   if (!task || task.task_type !== "add_to_cart") {
     throw new Error("hosted add-to-cart task not found");
   }
+  const resultSummary = input.result_summary ? summarizeLogText(input.result_summary, 220) : undefined;
+  const errorMessage = input.error_message ? summarizeLogText(input.error_message, 220) : undefined;
 
   task.status = input.status;
   task.updated_at = new Date().toISOString();
-  task.result_summary = input.result_summary;
-  task.error_message = input.error_message;
+  task.result_summary = resultSummary;
+  task.error_message = errorMessage;
 
   if (input.status === "completed") {
     const product = Object.values(state.module_candidates)
@@ -236,7 +251,7 @@ export function resolveHostedAddToCartTask(
     createTaskLog(
       state,
       task.title,
-      input.result_summary ?? "Codex 宿主已完成加购。",
+      resultSummary ?? "Codex 宿主已完成加购。",
       task.module_id,
       task.module_name
     );
@@ -246,7 +261,7 @@ export function resolveHostedAddToCartTask(
   createTaskLog(
     state,
     task.title,
-    input.error_message ?? "Codex 宿主加购失败。",
+    errorMessage ?? "Codex 宿主加购失败。",
     task.module_id,
     task.module_name
   );

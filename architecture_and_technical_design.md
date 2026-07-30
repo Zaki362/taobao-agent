@@ -111,10 +111,13 @@
 4. `orchestrator` 调用：
    - `runTemplatePlanner`
    - `runDeepSeekPlanner`
-5. 生成 `shopping_plan`
-6. 写入 `SessionState`
-7. 返回给前端
-8. 前端进入 `confirm_plan` 页面展示
+   - `reviewPlanWithAgent`
+5. 生成 `shopping_plan` 与 `plan_review`
+6. 后端归一化模块优先级、预算分配和搜索关键词，保留 DeepSeek 的比例意图，但保证模块预算加总等于用户预算，并让不同模块的检索意图明显区分
+7. Agent 对规划做轻量自检，检查预算、模块覆盖、关键词差异化与执行风险
+8. 写入 `SessionState`
+9. 返回给前端
+10. 前端进入 `confirm_plan` 页面展示
 
 这个模式贯穿整个系统。
 
@@ -161,9 +164,9 @@
 
 关键文件：
 
-- [app/page.tsx](/Users/guohuaz/Taobao-agent/app/page.tsx)
-- [components/dashboard.tsx](/Users/guohuaz/Taobao-agent/components/dashboard.tsx)
-- [components/hosted-console.tsx](/Users/guohuaz/Taobao-agent/components/hosted-console.tsx)
+- [app/page.tsx](./app/page.tsx)
+- [components/dashboard.tsx](./components/dashboard.tsx)
+- [components/hosted-console.tsx](./components/hosted-console.tsx)
 
 ---
 
@@ -205,18 +208,23 @@
 - `/api/scene/refine`
 - `/api/modules/search`
 - `/api/cart/add`
+- `/api/session/agent-directives`
+- `/api/session/search-strategy`
 - `/api/session/state`
 - `/api/mcp/status`
 - `/api/hosted/*`
 
+核心 API 错误响应已统一为 `{ error, code }` JSON 结构，便于前端稳定展示错误信息，也便于后续埋点和排障。
+
 关键文件：
 
-- [app/api/scene/parse/route.ts](/Users/guohuaz/Taobao-agent/app/api/scene/parse/route.ts)
-- [app/api/scene/plan/route.ts](/Users/guohuaz/Taobao-agent/app/api/scene/plan/route.ts)
-- [app/api/scene/refine/route.ts](/Users/guohuaz/Taobao-agent/app/api/scene/refine/route.ts)
-- [app/api/modules/search/route.ts](/Users/guohuaz/Taobao-agent/app/api/modules/search/route.ts)
-- [app/api/cart/add/route.ts](/Users/guohuaz/Taobao-agent/app/api/cart/add/route.ts)
-- [app/api/session/state/route.ts](/Users/guohuaz/Taobao-agent/app/api/session/state/route.ts)
+- [app/api/scene/parse/route.ts](./app/api/scene/parse/route.ts)
+- [app/api/scene/plan/route.ts](./app/api/scene/plan/route.ts)
+- [app/api/scene/refine/route.ts](./app/api/scene/refine/route.ts)
+- [app/api/modules/search/route.ts](./app/api/modules/search/route.ts)
+- [app/api/cart/add/route.ts](./app/api/cart/add/route.ts)
+- [app/api/session/state/route.ts](./app/api/session/state/route.ts)
+- [lib/api/responses.ts](./lib/api/responses.ts)
 
 ---
 
@@ -234,6 +242,8 @@
 - 模板规划
 - DeepSeek 个性化补充
 - 模块搜索调度
+- 搜索后候选池评估
+- Agent 建议补搜
 - 快捷调整后的重算
 - 加购物车执行
 - 状态写回
@@ -253,6 +263,7 @@
 - Scene Brief
 - Shopping Plan
 - Module Candidates
+- Module Reviews
 - Selected Items
 - Tool Logs
 - 更新后的 SessionState
@@ -262,6 +273,7 @@
 - 调用场景模板层提供基础结构
 - 调用 DeepSeek 层做结构化补充
 - 调用工具层做搜索与加购
+- 调用候选排序器和候选池复盘器，把搜索结果转成可决策推荐
 - 通过 session/store 持久化状态
 
 ### 当前实现状态
@@ -270,12 +282,17 @@
 
 关键文件：
 
-- [lib/agent/orchestrator.ts](/Users/guohuaz/Taobao-agent/lib/agent/orchestrator.ts)
-- [lib/agent/scene.ts](/Users/guohuaz/Taobao-agent/lib/agent/scene.ts)
-- [lib/agent/planner.ts](/Users/guohuaz/Taobao-agent/lib/agent/planner.ts)
-- [lib/agent/refiner.ts](/Users/guohuaz/Taobao-agent/lib/agent/refiner.ts)
-- [lib/agent/product-matcher.ts](/Users/guohuaz/Taobao-agent/lib/agent/product-matcher.ts)
-- [lib/agent/cart.ts](/Users/guohuaz/Taobao-agent/lib/agent/cart.ts)
+- [lib/agent/orchestrator.ts](./lib/agent/orchestrator.ts)
+- [lib/agent/scene.ts](./lib/agent/scene.ts)
+- [lib/agent/planner.ts](./lib/agent/planner.ts)
+- [lib/agent/search-strategy.ts](./lib/agent/search-strategy.ts)
+- [lib/agent/refiner.ts](./lib/agent/refiner.ts)
+- [lib/agent/candidate-ranker.ts](./lib/agent/candidate-ranker.ts)
+- [lib/agent/candidate-reviewer.ts](./lib/agent/candidate-reviewer.ts)
+- [lib/agent/product-matcher.ts](./lib/agent/product-matcher.ts)
+- [lib/agent/cart.ts](./lib/agent/cart.ts)
+
+其中 `search-strategy.ts` 是一个纯策略归一化模块，用来修复跨模块关键词重复、补齐备用搜索词和验收信号。它不依赖 DeepSeek 调用层，因此规划生成和旧 session 恢复都可以复用同一套搜索策略修复逻辑，而不会让 session/store 间接拉入模型规划器。
 
 ---
 
@@ -311,13 +328,13 @@
 
 已建立的配置层文件：
 
-- [lib/scenarios/index.ts](/Users/guohuaz/Taobao-agent/lib/scenarios/index.ts)
-- [lib/scenarios/types.ts](/Users/guohuaz/Taobao-agent/lib/scenarios/types.ts)
-- [lib/scenarios/new-car.ts](/Users/guohuaz/Taobao-agent/lib/scenarios/new-car.ts)
-- [lib/scenarios/camping.ts](/Users/guohuaz/Taobao-agent/lib/scenarios/camping.ts)
-- [lib/scenarios/room-decor.ts](/Users/guohuaz/Taobao-agent/lib/scenarios/room-decor.ts)
-- [lib/scenarios/dorm-move-in.ts](/Users/guohuaz/Taobao-agent/lib/scenarios/dorm-move-in.ts)
-- [lib/scenarios/moving-setup.ts](/Users/guohuaz/Taobao-agent/lib/scenarios/moving-setup.ts)
+- [lib/scenarios/index.ts](./lib/scenarios/index.ts)
+- [lib/scenarios/types.ts](./lib/scenarios/types.ts)
+- [lib/scenarios/new-car.ts](./lib/scenarios/new-car.ts)
+- [lib/scenarios/camping.ts](./lib/scenarios/camping.ts)
+- [lib/scenarios/room-decor.ts](./lib/scenarios/room-decor.ts)
+- [lib/scenarios/dorm-move-in.ts](./lib/scenarios/dorm-move-in.ts)
+- [lib/scenarios/moving-setup.ts](./lib/scenarios/moving-setup.ts)
 
 但当前产品稳定运行版本仍主要围绕“新车选购”。
 
@@ -334,6 +351,7 @@ DeepSeek 在系统中不做“自由 Agent”，而做“受约束的结构化�
 - parse_scene
 - personalize_template
 - refine_plan
+- review_candidates
 - explain_product_fit
 
 ### 输入输出
@@ -345,6 +363,7 @@ DeepSeek 在系统中不做“自由 Agent”，而做“受约束的结构化�
 - 模板模块
 - 快捷操作
 - 商品信息
+- 候选商品摘要
 
 #### 输出
 
@@ -352,6 +371,7 @@ DeepSeek 在系统中不做“自由 Agent”，而做“受约束的结构化�
 - 结构化 Scene Brief
 - 结构化 Shopping Plan
 - 调整后的 Scene Brief
+- 候选池质量评估
 - 商品推荐理由
 
 ### 和其他层如何协作
@@ -366,9 +386,9 @@ DeepSeek 在系统中不做“自由 Agent”，而做“受约束的结构化�
 
 关键文件：
 
-- [lib/llm/deepseek.ts](/Users/guohuaz/Taobao-agent/lib/llm/deepseek.ts)
-- [lib/llm/prompts.ts](/Users/guohuaz/Taobao-agent/lib/llm/prompts.ts)
-- [lib/llm/mock.ts](/Users/guohuaz/Taobao-agent/lib/llm/mock.ts)
+- [lib/llm/deepseek.ts](./lib/llm/deepseek.ts)
+- [lib/llm/prompts.ts](./lib/llm/prompts.ts)
+- [lib/llm/mock.ts](./lib/llm/mock.ts)
 
 ---
 
@@ -381,6 +401,7 @@ DeepSeek 在系统中不做“自由 Agent”，而做“受约束的结构化�
 - 接入加购物能力
 - 记录工具日志
 - 抽象 live / mock / qoder 执行差异
+- 对高风险动作做服务端确认校验
 
 ### 输入输出
 
@@ -409,12 +430,12 @@ DeepSeek 在系统中不做“自由 Agent”，而做“受约束的结构化�
 
 关键文件：
 
-- [lib/mcp/types.ts](/Users/guohuaz/Taobao-agent/lib/mcp/types.ts)
-- [lib/mcp/client.ts](/Users/guohuaz/Taobao-agent/lib/mcp/client.ts)
-- [lib/mcp/executor.ts](/Users/guohuaz/Taobao-agent/lib/mcp/executor.ts)
-- [lib/mcp/qoder.ts](/Users/guohuaz/Taobao-agent/lib/mcp/qoder.ts)
-- [lib/mcp/mock.ts](/Users/guohuaz/Taobao-agent/lib/mcp/mock.ts)
-- [lib/mcp/hosted.ts](/Users/guohuaz/Taobao-agent/lib/mcp/hosted.ts)
+- [lib/mcp/types.ts](./lib/mcp/types.ts)
+- [lib/mcp/client.ts](./lib/mcp/client.ts)
+- [lib/mcp/executor.ts](./lib/mcp/executor.ts)
+- [lib/mcp/qoder.ts](./lib/mcp/qoder.ts)
+- [lib/mcp/mock.ts](./lib/mcp/mock.ts)
+- [lib/mcp/hosted.ts](./lib/mcp/hosted.ts)
 
 ---
 
@@ -449,8 +470,8 @@ DeepSeek 在系统中不做“自由 Agent”，而做“受约束的结构化�
 
 关键文件：
 
-- [lib/session/types.ts](/Users/guohuaz/Taobao-agent/lib/session/types.ts)
-- [lib/session/store.ts](/Users/guohuaz/Taobao-agent/lib/session/store.ts)
+- [lib/session/types.ts](./lib/session/types.ts)
+- [lib/session/store.ts](./lib/session/store.ts)
 
 ---
 
@@ -523,6 +544,8 @@ Agent 位于前端 API 调用和具体模型/工具执行之间，是整个系�
 - 调用时机控制
 - 工具执行决策
 - 搜索顺序控制
+- 候选池质量判断
+- 高风险工具确认校验
 - 失败处理
 
 #### DeepSeek 负责
@@ -530,6 +553,7 @@ Agent 位于前端 API 调用和具体模型/工具执行之间，是整个系�
 - 场景理解
 - 模板个性化补充
 - 快捷调整重算
+- 候选池复盘
 - 推荐理由生成
 
 这是一种“规则编排 + 模型补充”的协作模式。
@@ -601,9 +625,73 @@ Agent 位于前端 API 调用和具体模型/工具执行之间，是整个系�
 
 由模板 + `personalize_template` 生成，用户确认后才开始搜索。
 
+#### Plan Review
+
+由 `plan-reviewer` 在购物规划生成后立即产出，用于在用户确认规划前做质量自检。
+
+它包含：
+
+- `status`：规划是否可执行，或是否需要留意/调整
+- `summary`：面向用户的整体判断
+- `strengths`：当前规划的优点
+- `risks`：预算、模块覆盖、关键词或执行层面的风险
+- `improvement_suggestions`：确认前或后续执行时的改进建议
+- `budget_comment`：预算分配判断
+- `keyword_comment`：搜索关键词差异化判断
+- `module_comment`：模块覆盖判断
+
+DeepSeek 可参与该自检；无 key、超时或结构不合法时，系统回退到启发式评估。这个设计让模型多承担一层“方案审阅”职责，但仍不让模型直接决定工具调用。
+
 #### Module Candidates
 
 由搜索阶段为每个模块逐步写入，用于推荐结果页展示。
+
+#### Module Reviews
+
+由 `candidate-reviewer` 在模块搜索后生成，用于判断当前候选池是否足够进入用户决策。
+
+它包含：
+
+- `status`：可继续、需确认、候选偏少或建议调整
+- `summary`：当前候选池质量摘要
+- `strengths`：候选池优点
+- `caveats`：风险与不足
+- `next_action`：下一步建议
+- `suggested_keyword`：必要时给出可直接补搜的关键词
+- `source`：标记本次评估来自启发式规则还是 DeepSeek 复盘
+
+Qoder 直连搜索完成后会优先尝试 DeepSeek 候选池复盘；无 key、超时或结构不合法时，自动回退到启发式评估。这样 AI 可以参与“看完商品后怎么判断”，但不会让搜索主链路被模型调用拖垮。
+
+#### Module Search Traces
+
+由 `product-matcher` 在每个模块搜索过程中写入 `SessionState.module_search_traces`，用于记录 Agent 的真实执行判断，而不只是保留最终商品结果。
+
+它包含：
+
+- `primary_keyword`：本模块首轮主搜索词
+- `searched_keywords`：实际尝试过的关键词
+- `attempts`：每次关键词尝试的原因、状态、返回数量和错误摘要
+- `ai_decision_summary`：面向用户可读的本模块搜索决策摘要
+- `review_status` / `review_summary`：候选池复盘结论
+- `recovery_keyword`：触发补搜时使用或建议使用的关键词
+- `next_action`：下一步建议
+
+这层的价值是把 AI 生成的 `search_strategy` 执行化：模型可以提出主搜索词、备用词、验收信号和失败恢复策略；后端 Agent 根据这些策略串行调用工具、记录尝试、在候选偏薄时补搜，并把最终决策轨迹反馈给推荐页和后端执行台。
+
+#### Last Refinement
+
+由快捷调整触发后写入 `SessionState.last_refinement`，用于解释本次调整对搜索执行的影响。
+
+它包含：
+
+- `quick_action`：用户触发的快捷调整
+- `summary`：本次调整的整体影响摘要
+- `impacted_modules`：需要重新搜索的模块
+- `reusable_modules`：规划变化不大、候选可复用的模块
+- `removed_modules`：调整后被移除的模块
+- `module_decisions`：每个模块的重搜/复用/移除原因
+
+这个状态让快捷调整不再只是“重新生成方案”，而是显式告诉用户 Agent 如何判断哪些搜索结果还能保留、哪些必须失效重搜。
 
 #### Tool Logs
 
@@ -619,12 +707,14 @@ Agent 位于前端 API 调用和具体模型/工具执行之间，是整个系�
 
 ### 4.1 DeepSeek 主要负责哪些任务
 
-DeepSeek 目前承担四类结构化任务：
+DeepSeek 目前承担六类结构化任务：
 
 1. `parse_scene`
 2. `personalize_template`
-3. `refine_plan`
-4. `explain_product_fit`
+3. `review_plan`
+4. `refine_plan`
+5. `review_candidates`
+6. `explain_product_fit`
 
 ### 4.2 各任务分别做什么
 
@@ -651,6 +741,71 @@ DeepSeek 目前承担四类结构化任务：
 - 模块重排序
 - 预算分配调整
 - 策略说明生成
+- 模块级搜索策略生成
+- 计划级执行策略生成
+
+其中 `search_strategy` 是关键结构。它不是让模型直接调用淘宝工具，而是让模型在安全边界内给工具层提供“应该怎么搜、怎么筛”的任务包：
+
+- `primary_keyword`：首轮搜索词
+- `alternate_keywords`：换一批或首轮无结果时使用的备用搜索词
+- `include_terms`：候选商品应该优先命中的关键词
+- `exclude_terms`：已有物品或不想买类别对应的规避词
+- `ranking_focus`：候选排序时应优先关注的信号
+- `price_band`：建议价格带
+- `reasoning`：该搜索策略的简短理由
+
+规划确认页会把这个任务包外显给用户，并允许用户在搜索前调整 `primary_keyword` 与 `alternate_keywords`。前端调用 `/api/session/search-strategy`，后端通过 `orchestrator.updateModuleSearchStrategy` 写回当前 session，并失效该模块旧候选、候选池复盘和搜索轨迹。这样 AI 不是只输出静态模板，而是先生成可执行策略；用户也可以在执行前纠偏策略，再交给后端规则串行调用工具。
+
+#### Agent Directives / AI 执行档位
+
+`agent_directives` 是模型策略和后端执行之间的可控边界。它不让模型直接调用工具，而是描述 Agent 后续搜索可以有多主动：
+
+- `autonomy_level`：保守执行 / 平衡执行 / 探索执行
+- `search_depth`：轻量搜索 / 标准搜索 / 深度搜索
+- `detail_policy`：是否主动进入详情页
+- `recovery_policy`：搜索失败或候选偏薄时如何恢复
+- `rerank_rules`：候选排序时的重排规则
+- `user_confirmation_points`：必须由用户确认的动作
+- `safety_boundaries`：隐私和交易边界
+
+当前实现中，用户可以在规划确认页选择“保守 / 平衡 / 探索”执行档位。前端调用 `/api/session/agent-directives`，后端通过 `lib/agent/directives.ts` 写回当前 session 的 `agent_directives`。随后 `product-matcher` 会读取这些字段决定搜索尝试次数、是否使用备用词、是否按候选池复盘建议补搜。
+
+在此基础上，`lib/agent/decision-engine.ts` 把搜索阶段升级为服务端 Agent 决策循环。前端不再自行遍历模块，而是调用 `/api/agent/next-action` 获取下一步动作。决策引擎会综合 `execution_strategy`、`agent_directives`、模块候选、`module_reviews`、`module_search_traces` 与工具任务状态，输出 `search_module`、`retry_module`、`skip_module`、`wait_for_tools` 或 `complete_workflow`。
+
+每次动作都会写入 session 的 `agent_decisions`，保存来源、置信度、理由和证据。规划顺序与候选复盘可以来自 DeepSeek，后端负责动作白名单、重复调用抑制、失败跳过和高风险确认，因此模型获得了真实的执行选择空间，但不能越过交易和隐私边界。
+
+这相当于给 AI 更多操作空间，但仍然保持三层约束：
+
+- 用户确认执行档位
+- 后端规则决定工具调用
+- 高风险动作仍需显式确认
+- `failure_recovery`：首轮结果不佳时如何收缩或改写搜索
+
+这样 AI 的操作空间从“补文案”扩大到“定义检索策略”，但工具调用顺序、权限控制和高风险动作仍由后端 Agent 编排。
+
+此外，`personalize_template` 还会输出计划级 `execution_strategy`：
+
+- `module_sequence`：建议的串行模块搜索顺序
+- `budget_guardrails`：预算纪律
+- `tradeoffs`：本轮取舍和后置原因
+- `search_notes`：给工具层的检索注意事项
+- `stop_rules`：什么时候停止扩搜
+
+后端 planner 会吸收这个策略，但仍会做预算归一化、模块 ID 白名单校验、关键词兜底和跨模块关键词差异化修复。即使模型给出过于泛化或相似的搜索词，planner 也会补充模块名和典型品类锚点，避免多个模块搜到同一批商品。
+
+#### review_plan
+
+在 `personalize_template` 生成 Shopping Plan 后，对规划做轻量质检。
+
+它不生成商品、不调用工具，只检查：
+
+- 预算分配是否贴近用户约束
+- 模块是否覆盖当前阶段高频需求
+- 搜索关键词是否足够差异化
+- AI 验收信号、拒绝信号和质量检查项是否清晰
+- 哪些风险需要用户在确认规划前知道
+
+输出写入 `SessionState.plan_review`，并显示在规划确认页。
 
 #### refine_plan
 
@@ -666,6 +821,26 @@ DeepSeek 目前承担四类结构化任务：
 #### explain_product_fit
 
 为商品卡片生成简洁的适配理由。
+
+#### review_candidates
+
+搜索完成后，DeepSeek 可以基于候选商品摘要做候选池复盘。
+
+输入只包含：
+
+- Scene Brief
+- 当前模块策略
+- 候选商品摘要，包括标题、价格、店铺、标签、卖点和风险摘要
+- 启发式规则评估结果
+
+输出 `ModuleCandidateReview`，用于说明：
+
+- 当前候选池是否足够进入用户决策
+- 有哪些优点和风险
+- 是否需要查看详情
+- 是否需要按建议关键词补搜
+
+该任务使用较短超时和严格 JSON。失败时直接保留启发式评估，不阻断搜索流程。
 
 ### 4.3 为什么要求严格 JSON 输出
 
@@ -705,6 +880,7 @@ DeepSeek 目前承担四类结构化任务：
 - `mockPersonalizeTemplate`
 - `mockRefineScene`
 - `mockExplainProductFit`
+- 启发式 `reviewModuleCandidates`
 
 会提供一个稳定的 mock 结果。
 
@@ -712,6 +888,7 @@ DeepSeek 目前承担四类结构化任务：
 
 - 确保整个产品链路始终可演示
 - 让架构随时可切换到真实模型
+- 保持状态透明：只有 DeepSeek API 实际返回可解析 JSON 时才标记为 `connected`，否则 session 会标记为 `mock`
 
 ---
 
@@ -728,6 +905,8 @@ DeepSeek 目前承担四类结构化任务：
 
 这些工具不直接暴露给前端，而由后端通过 executor 调用。
 
+executor 不只负责转发工具调用，也负责把 adapter 输出归一化成统一结构：搜索结果会过滤缺少商品 ID 或标题的脏数据、按商品 ID 去重、价格转成数字、店铺/标签/卖点裁剪到可展示范围；详情与加购输出也会补齐必要字段并校验高风险结果。这层防线让 Qoder skill、local bridge、mock adapter 的返回差异不会直接污染推荐链路和前端页面。
+
 ### 5.2 search / open detail / extract info / add to cart 如何组织
 
 #### search
@@ -736,10 +915,19 @@ DeepSeek 目前承担四类结构化任务：
 
 流程：
 
-- product-matcher 生成 search intent
+- `search-strategy` 先读取 DeepSeek 生成的 `search_strategy.primary_keyword`，缺失时回退到 `search_keyword`，再由 `searchIntentForModule` 兜底
+- `search-strategy` 对重复、相似或过于泛化的关键词做模块化锚点补强，避免多个模块搜索同一批商品
+- product-matcher 读取归一化后的 `search_strategy.primary_keyword`
 - 调用 `search_taobao_products`
+- 如果用户点击“按 Agent 建议补搜”，API 会传入 `keyword_override`，product-matcher 会把该词放到搜索队列第一位
+- 如果首轮搜索结果为空，product-matcher 可以安全尝试一个备用搜索词
 - 返回若干候选商品
+- Candidate Ranker 根据 `search_strategy.include_terms / exclude_terms / ranking_focus`、模块预算、用户偏好、已有/排除项、标题卖点和店铺信号重排结果
+- 选择稳妥推荐 / 性价比推荐 / 升级推荐三档
 - 转换成 `ProductCandidate`
+- Candidate Reviewer 生成 `ModuleCandidateReview`，必要时给出 `suggested_keyword`
+
+这里的 Candidate Ranker 不额外调用慢模型，而是把 DeepSeek 在规划阶段产出的策略信号落到商品层，避免推荐页退化成“淘宝搜索前三条”。
 
 #### open detail / extract info
 
@@ -749,8 +937,18 @@ DeepSeek 目前承担四类结构化任务：
 
 逻辑上支持，但真实链路不稳定，所以采用了：
 
+- 前端弹窗确认
+- `/api/cart/add` 服务端要求 `confirmed: true`
+- MCP executor 根据 `schema.requires_confirmation` 再次校验高风险工具参数
 - 先尝试真实加购
 - 若失败，则回退到 demo cart
+
+调试接口 `/api/mcp/run` 也不能绕过这套机制。高风险工具必须同时满足：
+
+- 请求体 `confirm_high_risk=true`
+- 工具输入 `input.confirmed=true`
+
+这样即使前端被绕过，高风险购物动作仍需要服务端显式确认。
 
 ### 5.3 live-first / mock fallback 如何设计
 
@@ -909,22 +1107,22 @@ DeepSeek 目前承担四类结构化任务：
 
 ### 前端页面
 
-- [app/page.tsx](/Users/guohuaz/Taobao-agent/app/page.tsx)
-- [app/hosted/page.tsx](/Users/guohuaz/Taobao-agent/app/hosted/page.tsx)
+- [app/page.tsx](./app/page.tsx)
+- [app/hosted/page.tsx](./app/hosted/page.tsx)
 
 ### 核心组件
 
-- [components/dashboard.tsx](/Users/guohuaz/Taobao-agent/components/dashboard.tsx)
+- [components/dashboard.tsx](./components/dashboard.tsx)
   - 主购物流程页面
-- [components/hosted-console.tsx](/Users/guohuaz/Taobao-agent/components/hosted-console.tsx)
+- [components/hosted-console.tsx](./components/hosted-console.tsx)
   - 后端执行台
 
 ### UI 基础组件
 
-- [components/ui/button.tsx](/Users/guohuaz/Taobao-agent/components/ui/button.tsx)
-- [components/ui/card.tsx](/Users/guohuaz/Taobao-agent/components/ui/card.tsx)
-- [components/ui/badge.tsx](/Users/guohuaz/Taobao-agent/components/ui/badge.tsx)
-- [components/ui/textarea.tsx](/Users/guohuaz/Taobao-agent/components/ui/textarea.tsx)
+- [components/ui/button.tsx](./components/ui/button.tsx)
+- [components/ui/card.tsx](./components/ui/card.tsx)
+- [components/ui/badge.tsx](./components/ui/badge.tsx)
+- [components/ui/textarea.tsx](./components/ui/textarea.tsx)
 
 ## 7.2 关键 API route
 
@@ -933,6 +1131,7 @@ DeepSeek 目前承担四类结构化任务：
 - `scene/refine`
 - `modules/search`
 - `cart/add`
+- `session/agent-directives`
 - `session/state`
 - `mcp/status`
 - `hosted/tasks`
@@ -941,36 +1140,38 @@ DeepSeek 目前承担四类结构化任务：
 
 ### Agent
 
-- [lib/agent/orchestrator.ts](/Users/guohuaz/Taobao-agent/lib/agent/orchestrator.ts)
-- [lib/agent/scene.ts](/Users/guohuaz/Taobao-agent/lib/agent/scene.ts)
-- [lib/agent/planner.ts](/Users/guohuaz/Taobao-agent/lib/agent/planner.ts)
-- [lib/agent/refiner.ts](/Users/guohuaz/Taobao-agent/lib/agent/refiner.ts)
-- [lib/agent/product-matcher.ts](/Users/guohuaz/Taobao-agent/lib/agent/product-matcher.ts)
-- [lib/agent/cart.ts](/Users/guohuaz/Taobao-agent/lib/agent/cart.ts)
+- [lib/agent/orchestrator.ts](./lib/agent/orchestrator.ts)
+- [lib/agent/scene.ts](./lib/agent/scene.ts)
+- [lib/agent/planner.ts](./lib/agent/planner.ts)
+- [lib/agent/search-strategy.ts](./lib/agent/search-strategy.ts)
+- [lib/agent/directives.ts](./lib/agent/directives.ts)
+- [lib/agent/refiner.ts](./lib/agent/refiner.ts)
+- [lib/agent/product-matcher.ts](./lib/agent/product-matcher.ts)
+- [lib/agent/cart.ts](./lib/agent/cart.ts)
 
 ### 模型
 
-- [lib/llm/deepseek.ts](/Users/guohuaz/Taobao-agent/lib/llm/deepseek.ts)
-- [lib/llm/prompts.ts](/Users/guohuaz/Taobao-agent/lib/llm/prompts.ts)
-- [lib/llm/mock.ts](/Users/guohuaz/Taobao-agent/lib/llm/mock.ts)
+- [lib/llm/deepseek.ts](./lib/llm/deepseek.ts)
+- [lib/llm/prompts.ts](./lib/llm/prompts.ts)
+- [lib/llm/mock.ts](./lib/llm/mock.ts)
 
 ### 工具
 
-- [lib/mcp/client.ts](/Users/guohuaz/Taobao-agent/lib/mcp/client.ts)
-- [lib/mcp/executor.ts](/Users/guohuaz/Taobao-agent/lib/mcp/executor.ts)
-- [lib/mcp/qoder.ts](/Users/guohuaz/Taobao-agent/lib/mcp/qoder.ts)
-- [lib/mcp/mock.ts](/Users/guohuaz/Taobao-agent/lib/mcp/mock.ts)
-- [lib/mcp/hosted.ts](/Users/guohuaz/Taobao-agent/lib/mcp/hosted.ts)
+- [lib/mcp/client.ts](./lib/mcp/client.ts)
+- [lib/mcp/executor.ts](./lib/mcp/executor.ts)
+- [lib/mcp/qoder.ts](./lib/mcp/qoder.ts)
+- [lib/mcp/mock.ts](./lib/mcp/mock.ts)
+- [lib/mcp/hosted.ts](./lib/mcp/hosted.ts)
 
 ### Session
 
-- [lib/session/types.ts](/Users/guohuaz/Taobao-agent/lib/session/types.ts)
-- [lib/session/store.ts](/Users/guohuaz/Taobao-agent/lib/session/store.ts)
+- [lib/session/types.ts](./lib/session/types.ts)
+- [lib/session/store.ts](./lib/session/store.ts)
 
 ### 场景配置
 
-- [lib/scenarios/index.ts](/Users/guohuaz/Taobao-agent/lib/scenarios/index.ts)
-- [lib/scenarios/types.ts](/Users/guohuaz/Taobao-agent/lib/scenarios/types.ts)
+- [lib/scenarios/index.ts](./lib/scenarios/index.ts)
+- [lib/scenarios/types.ts](./lib/scenarios/types.ts)
 
 ## 7.4 关键状态对象
 
@@ -982,6 +1183,7 @@ DeepSeek 目前承担四类结构化任务：
 - `ShoppingPlan`
 - `ShoppingPlanModule`
 - `ProductCandidate`
+- `ModuleCandidateReview`
 - `SelectedItem`
 - `MCPToolLog`
 - `HostedExecutionTask`
@@ -1070,6 +1272,7 @@ DeepSeek 目前承担四类结构化任务：
 -> `createSessionFromScene`
 -> `runTemplatePlanner`
 -> `runDeepSeekPlanner`
+-> 归一化优先级与预算总和
 -> `saveSession`
 -> 返回 session state
 
@@ -1086,9 +1289,12 @@ DeepSeek 目前承担四类结构化任务：
 #### 产出数据
 
 - 用户确认动作
+- 可选的模块搜索任务包调整
 
 #### 数据流向
 
+- 如用户调整搜索词，前端调用 `/api/session/search-strategy`
+- 后端写回模块 `search_strategy` 并清理该模块旧候选
 - 点击“开始搜索推荐商品”
 - 前端对每个模块依次调用 `/api/modules/search`
 
@@ -1105,6 +1311,8 @@ DeepSeek 目前承担四类结构化任务：
 #### 产出数据
 
 - `module_candidates[module_id]`
+- `module_reviews[module_id]`
+- `module_search_traces[module_id]`
 - `tool_logs`
 
 #### 数据流向
@@ -1112,9 +1320,15 @@ DeepSeek 目前承担四类结构化任务：
 - `/api/modules/search`
 -> `searchModule`
 -> `runModuleSearch`
--> `searchIntentForModule`
+-> 读取模块 `search_strategy.primary_keyword`；缺失时由 `search-strategy` 回退到 `search_keyword` 和 `searchIntentForModule`
+-> 如果是 Agent 建议补搜，则优先使用 `keyword_override`
 -> `executeMcpTool("search_taobao_products")`
+-> 如首轮无结果，可尝试一个备用关键词
+-> `rankCandidatesForModule`
 -> 转换为 `ProductCandidate[]`
+-> `reviewModuleCandidatesWithAgent`
+-> DeepSeek 复盘成功则写入 `source=deepseek` 的 `ModuleCandidateReview`
+-> DeepSeek 不可用则写入启发式 `ModuleCandidateReview`
 -> 写回 session
 -> 前端刷新结果
 
@@ -1293,6 +1507,7 @@ DeepSeek 目前承担四类结构化任务：
 - `POST /api/scene/refine`
 - `POST /api/modules/search`
 - `POST /api/cart/add`
+- `POST /api/mcp/run`
 - `GET /api/session/state`
 - `GET /api/mcp/status`
 
@@ -1303,6 +1518,8 @@ DeepSeek 目前承担四类结构化任务：
 - `planner`
 - `refiner`
 - `product-matcher`
+- `candidate-ranker`
+- `candidate-reviewer`
 - `cart`
 
 #### 配置 / 模板层
@@ -1314,11 +1531,13 @@ DeepSeek 目前承担四类结构化任务：
 
 - DeepSeek API
 - mock LLM fallback
+- heuristic candidate review fallback
 
 #### 工具层
 
 - MCP client
 - MCP executor
+- MCP tool schema / risk policy
 - Qoder / taobao skill
 - mock MCP adapter
 
@@ -1339,13 +1558,18 @@ DeepSeek 目前承担四类结构化任务：
 8. orchestrator -> Session Store
 9. Session Store -> API route -> 前端
 10. 推荐页 / 执行台 -> 同一个 SessionState
+11. product-matcher -> candidate-ranker -> candidate-reviewer -> module_reviews
+12. 推荐页 -> keyword_override -> `/api/modules/search` -> product-matcher
 
 ### 11.3 建议在图中强调的关键数据对象
 
 - `raw_input`
 - `SceneBrief`
 - `ShoppingPlan`
+- `ModuleSearchStrategy`
 - `module_candidates`
+- `ModuleCandidateReview`
+- `module_reviews`
 - `selected_items`
 - `tool_logs`
 - `SessionState`
@@ -1353,8 +1577,11 @@ DeepSeek 目前承担四类结构化任务：
 ### 11.4 建议在图中标注的关键设计取舍
 
 - “模板 + LLM 补充”
+- “AI 生成搜索策略，后端规则执行工具”
+- “搜索后 DeepSeek/规则复盘候选池”
+- “Agent 建议补搜，但由用户确认触发”
 - “工具调用由后端规则编排”
+- “高风险工具动作服务端确认”
 - “搜索尽量真实执行”
 - “加购失败回退 demo cart”
 - “统一 workflow，场景配置驱动”
-
