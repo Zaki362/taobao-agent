@@ -75,7 +75,8 @@ function assertNoForbiddenText() {
     },
     {
       pattern: /TAOBAO_MCP_MODE/,
-      message: "发现旧环境变量 TAOBAO_MCP_MODE，请使用 TAOBAO_EXECUTION_BACKEND"
+      message: "发现旧环境变量 TAOBAO_MCP_MODE，请使用 TAOBAO_EXECUTION_BACKEND",
+      allowedFiles: new Set(["lib/runtime/readiness.ts"])
     },
     {
       pattern: /TAOBAO_NATIVE_PATH/,
@@ -98,6 +99,9 @@ function assertNoForbiddenText() {
 
     const text = readText(file);
     for (const rule of forbidden) {
+      if (rule.allowedFiles?.has(file)) {
+        continue;
+      }
       if (rule.pattern.test(text)) {
         fail(`${file}: ${rule.message}`);
       }
@@ -145,7 +149,7 @@ function assertPackageScripts() {
   }
 
   const scripts = pkg.scripts ?? {};
-  const required = ["dev", "build", "typecheck", "preflight", "check", "db:migrate", "db:check", "test:unit", "test:integration", "test:e2e", "worker:local", "executor:doctor"];
+  const required = ["dev", "build", "typecheck", "preflight", "check", "db:migrate", "db:check", "test:unit", "test:integration", "test:e2e", "eval:agent", "worker:local", "executor:doctor"];
 
   for (const scriptName of required) {
     if (typeof scripts[scriptName] !== "string") {
@@ -185,6 +189,7 @@ function assertRequiredFiles() {
     "app/api/session/agent-directives/route.ts",
     "app/api/session/search-strategy/route.ts",
     "app/api/session/state/route.ts",
+    "app/api/runtime/readiness/route.ts",
     "app/error.tsx",
     "components/dashboard.tsx",
     "components/dashboard-api.ts",
@@ -211,6 +216,7 @@ function assertRequiredFiles() {
     "lib/mcp/client.ts",
     "lib/mcp/local-executor.ts",
     "lib/runtime/postgres-repository.ts",
+    "lib/runtime/readiness.ts",
     "lib/security/rate-limit.ts",
     "scripts/local-executor.mjs",
     "scripts/executor-doctor.mjs",
@@ -220,6 +226,8 @@ function assertRequiredFiles() {
     "Dockerfile",
     "docker-compose.yml",
     "docs/deployment.md",
+    "vitest.evaluation.config.ts",
+    "tests/evaluation/new-car-agent-quality.test.ts",
     "lib/mcp/qoder.ts",
     "lib/session/guards.ts",
     "lib/session/store.ts",

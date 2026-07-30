@@ -81,6 +81,20 @@ test("authenticated new-car workflow reaches recommendations through the durable
   });
   expect(deviceResponse.status()).toBe(201);
   const { device_token: deviceToken } = await deviceResponse.json() as { device_token: string };
+  const heartbeatResponse = await page.request.post("/api/executor/heartbeat", {
+    headers: { Authorization: `Bearer ${deviceToken}` },
+    data: {}
+  });
+  expect(heartbeatResponse.ok()).toBeTruthy();
+
+  const readinessResponse = await page.request.get("/api/runtime/readiness");
+  expect(readinessResponse.ok()).toBeTruthy();
+  const readiness = await readinessResponse.json() as {
+    ready_for_production: boolean;
+    operational_for_shopping: boolean;
+  };
+  expect(readiness.ready_for_production).toBe(false);
+  expect(readiness.operational_for_shopping).toBe(false);
 
   let stopExecutor = false;
   const executor = runExecutorUntilStopped(page.request, deviceToken, () => stopExecutor);
@@ -107,6 +121,10 @@ test("authenticated new-car workflow reaches recommendations through the durable
     await page.getByRole("button", { name: "进入下单购买" }).click();
     await expect(page.getByText("确认下单清单")).toBeVisible();
     await expect(page.getByText(/E2E 真实链路候选/).first()).toBeVisible();
+
+    await page.goto("/settings/executor");
+    await expect(page.getByText("正式运行就绪度")).toBeVisible();
+    await expect(page.getByText("仍有正式配置未完成")).toBeVisible();
 
     await page.goto("/hosted");
     await expect(page.getByText("Agent Runtime 2.0")).toBeVisible();

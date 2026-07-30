@@ -17,6 +17,8 @@
     "test:unit": "vitest run tests/unit",
     "test:integration": "vitest run --config vitest.integration.config.ts",
     "test:e2e": "playwright test",
+    "eval:agent": "vitest run --config vitest.evaluation.config.ts",
+    "eval:agent:live": "AGENT_EVAL_LIVE=true vitest run --config vitest.evaluation.config.ts",
     "bridge:taobao": "node scripts/taobao-native-bridge.mjs",
     "worker:codex": "node scripts/codex-hosted-worker.mjs",
     "worker:local": "node scripts/local-executor.mjs",

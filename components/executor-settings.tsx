@@ -12,6 +12,21 @@ type Device = {
   last_heartbeat_at?: string;
 };
 
+type ReadinessCheck = {
+  id: string;
+  label: string;
+  status: "pass" | "fail" | "warn";
+  required: boolean;
+  detail: string;
+  remediation?: string;
+};
+
+type Readiness = {
+  ready_for_production: boolean;
+  operational_for_shopping: boolean;
+  checks: ReadinessCheck[];
+};
+
 function deviceStatus(device: Device) {
   if (device.status === "revoked") return "已撤销";
   const heartbeat = device.last_heartbeat_at ? Date.parse(device.last_heartbeat_at) : 0;
@@ -24,17 +39,28 @@ export function ExecutorSettings() {
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [apiUrl, setApiUrl] = useState("http://127.0.0.1:3000");
+  const [readiness, setReadiness] = useState<Readiness | null>(null);
 
   async function load() {
-    const response = await fetch("/api/executor/devices");
-    const payload = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(payload.error || "读取执行器失败");
-    setDevices(payload.devices || []);
+    const [devicesResponse, readinessResponse] = await Promise.all([
+      fetch("/api/executor/devices"),
+      fetch("/api/runtime/readiness")
+    ]);
+    const devicesPayload = await devicesResponse.json().catch(() => ({}));
+    const readinessPayload = await readinessResponse.json().catch(() => ({}));
+    if (!devicesResponse.ok) throw new Error(devicesPayload.error || "读取执行器失败");
+    if (!readinessResponse.ok) throw new Error(readinessPayload.error || "读取发布就绪状态失败");
+    setDevices(devicesPayload.devices || []);
+    setReadiness(readinessPayload as Readiness);
   }
 
   useEffect(() => {
     setApiUrl(window.location.origin);
     load().catch((value) => setError(value instanceof Error ? value.message : "读取执行器失败"));
+    const timer = window.setInterval(() => {
+      load().catch((value) => setError(value instanceof Error ? value.message : "刷新执行器状态失败"));
+    }, 10_000);
+    return () => window.clearInterval(timer);
   }, []);
 
   async function register() {
@@ -88,6 +114,51 @@ export function ExecutorSettings() {
           <p className="mt-3 max-w-3xl text-sm leading-7 text-muted-foreground">
             网页只负责任务规划和状态展示；真实淘宝操作由本地执行器领取持久化任务后完成。设备令牌只在注册时展示一次。
           </p>
+        </CardContent>
+      </Card>
+
+      <Card className="section-card">
+        <CardHeader>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <CardTitle>正式运行就绪度</CardTitle>
+            <span className={`rounded-full px-3 py-1 text-xs font-semibold ${
+              readiness?.operational_for_shopping
+                ? "bg-emerald-50 text-emerald-700"
+                : readiness?.ready_for_production
+                  ? "bg-amber-50 text-amber-700"
+                  : "bg-red-50 text-red-700"
+            }`}>
+              {readiness?.operational_for_shopping
+                ? "可执行真实购物任务"
+                : readiness?.ready_for_production
+                  ? "服务已就绪，等待执行器"
+                  : "仍有正式配置未完成"}
+            </span>
+          </div>
+        </CardHeader>
+        <CardContent>
+          <div className="grid gap-3 md:grid-cols-2">
+            {(readiness?.checks ?? []).map((item) => (
+              <div key={item.id} className="subtle-card p-4">
+                <div className="flex items-center justify-between gap-3">
+                  <p className="font-medium">{item.label}</p>
+                  <span className={`rounded-full px-2.5 py-1 text-[11px] font-semibold ${
+                    item.status === "pass"
+                      ? "bg-emerald-50 text-emerald-700"
+                      : item.status === "warn"
+                        ? "bg-amber-50 text-amber-700"
+                        : "bg-red-50 text-red-700"
+                  }`}>
+                    {item.status === "pass" ? "通过" : item.status === "warn" ? "待连接" : "未通过"}
+                  </span>
+                </div>
+                <p className="mt-2 text-sm leading-6 text-muted-foreground">{item.detail}</p>
+                {item.status !== "pass" && item.remediation ? (
+                  <p className="mt-2 text-xs leading-5 text-foreground/70">下一步：{item.remediation}</p>
+                ) : null}
+              </div>
+            ))}
+          </div>
         </CardContent>
       </Card>
 

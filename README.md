@@ -24,6 +24,8 @@ SceneCart AI 是一个正在按正式产品架构推进的“场景化购物 Age
 - 实时回填：搜索、重试和加购事件通过 SSE 推送到当前会话，页面无需轮询等待长请求
 - 可恢复事件流：SSE 使用事件游标与 `Last-Event-ID` 续传，浏览器短暂断线后不会重复丢失执行进度
 - 运行时可观测性：执行台展示队列积压、在线设备、失败/取消任务、最久等待时间与模型 guardrail fallback
+- 发布就绪检查：`/api/runtime/readiness` 将开发态与正式可发布状态分开，逐项检查 PostgreSQL、认证、HTTPS Origin、安全 Cookie、DeepSeek、本地执行器和旧 Mock 配置
+- Agent 质量门槛：`npm run eval:agent` 离线检查多组新车需求的预算守恒、模块覆盖、优先级层次、搜索词差异化和安全边界；`npm run eval:agent:live` 才会显式调用 DeepSeek
 - 生产安全基线：异步 scrypt 密码哈希、认证限流、同源写请求校验、HttpOnly Cookie 和安全响应头
 - 淘宝 skill / MCP 工具层：正式路径为 `local_executor`；原有 Qoder 直连、Codex hosted 和 experimental bridge 仅保留为开发兼容路径
 - 商品搜索链路：当前主流程可串行搜索规划中的各个模块，并生成推荐商品卡片
@@ -189,6 +191,7 @@ lib/scenarios/
 - `POST /api/executor/jobs/:jobId/resolve`：幂等回填完成/失败结果
 - `GET /api/runtime/events/stream`：按 Session 推送执行事件的 SSE
 - `GET /api/runtime/health`：运行时、数据库和执行 backend 健康检查
+- `GET /api/runtime/readiness`：正式发布配置与当前账号本地执行器就绪度检查
 - `GET /api/runtime/metrics`：当前 Session 的任务积压、失败率与设备在线摘要
 - `POST /api/runtime/jobs/:jobId/cancel`：仅取消尚未被执行器领取的任务
 
