@@ -1,5 +1,5 @@
 import { apiOk, apiRouteError } from "@/lib/api/responses";
-import { getExecutionBackend, getMcpClient } from "@/lib/mcp/client";
+import { getConfiguredExecutionBackend, getExecutionBackend, getMcpClient } from "@/lib/mcp/client";
 import { getRequestIdentity } from "@/lib/auth/request";
 import { getRuntimeRepository } from "@/lib/runtime";
 import { allowDemoCartFallback, getProductMode } from "@/lib/runtime/product-mode";
@@ -19,6 +19,7 @@ export async function GET() {
       );
       return apiOk({
         mode: "local_executor",
+        configured_mode: getConfiguredExecutionBackend(),
         product_mode: getProductMode(),
         demo_cart_fallback: allowDemoCartFallback(),
         available: onlineDevices.length > 0,
@@ -35,6 +36,7 @@ export async function GET() {
     const { client, status } = await getMcpClient();
     return apiOk({
       mode: client.mode,
+      configured_mode: getConfiguredExecutionBackend(),
       product_mode: getProductMode(),
       demo_cart_fallback: allowDemoCartFallback(),
       available: status.available,

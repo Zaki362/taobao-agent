@@ -296,6 +296,7 @@ function assertArchitectureContracts() {
   const hostedWorker = tryReadText("scripts/codex-hosted-worker.mjs");
   const mcpRunRoute = tryReadText("app/api/mcp/run/route.ts");
   const mcpSchema = tryReadText("lib/mcp/schema.ts");
+  const mcpClient = tryReadText("lib/mcp/client.ts");
   const parseRoute = tryReadText("app/api/scene/parse/route.ts");
   const planRoute = tryReadText("app/api/scene/plan/route.ts");
   const refineRoute = tryReadText("app/api/scene/refine/route.ts");
@@ -346,6 +347,7 @@ function assertArchitectureContracts() {
     !hostedWorker ||
     !mcpRunRoute ||
     !mcpSchema ||
+    !mcpClient ||
     !parseRoute ||
     !planRoute ||
     !refineRoute ||
@@ -604,6 +606,14 @@ function assertArchitectureContracts() {
         !qoder.includes("runDirectSearch") &&
         !qoder.includes("runDirectAddToCart"),
       message: "Qoder provider 不应重新引入直接 taobao-native 实验路径，避免商品页跳转导致登录态问题"
+    },
+    {
+      ok:
+        mcpClient.includes("getConfiguredExecutionBackend") &&
+        mcpClient.includes("isFormalProductMode") &&
+        mcpClient.includes('configured !== "local_executor"') &&
+        mcpClient.includes('return "local_executor"'),
+      message: "正式产品模式必须阻断旧执行 backend，并安全收敛到 local_executor 持久任务路径"
     },
     {
       ok:

@@ -46,6 +46,8 @@ TAOBAO_EXECUTION_BACKEND=local_executor
 
 `SCENECART_PRODUCT_MODE=production` 会强制关闭演示购物车回退，即使误设 `ALLOW_DEMO_CART_FALLBACK=true` 也不会把真实加购失败伪装成成功。开发预览仍可保留该回退，但 UI 与购物清单必须明确标记“演示购物车”。
 
+正式模式也会阻断旧的 `qoder_cli`、`codex_hosted` 与 `experimental_local` 直连路径。误配置时 effective backend 会安全收敛为 `local_executor`，但 readiness 仍保持失败，直到部署环境显式配置正确。
+
 ## 回滚原则
 
 - 应用回滚使用上一版镜像，不修改已经执行的 migration 文件。

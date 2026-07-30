@@ -3,12 +3,13 @@ import { homedir } from "node:os";
 import { liveMcpAdapter } from "@/lib/mcp/live";
 import { qoderMcpAdapter } from "@/lib/mcp/qoder";
 import { localExecutorMcpAdapter } from "@/lib/mcp/local-executor";
+import { isFormalProductMode } from "@/lib/runtime/product-mode";
 
 export type ExecutorBackend = "codex_hosted" | "experimental_local" | "qoder_cli" | "local_executor";
 
 const DEFAULT_QODERCLI_PATH = `${homedir()}/.local/bin/qodercli`;
 
-export function getExecutionBackend(): ExecutorBackend {
+export function getConfiguredExecutionBackend(): ExecutorBackend {
   if (process.env.TAOBAO_EXECUTION_BACKEND === "local_executor") {
     return "local_executor";
   }
@@ -21,6 +22,14 @@ export function getExecutionBackend(): ExecutorBackend {
   return process.env.TAOBAO_EXECUTION_BACKEND === "experimental_local"
     ? "experimental_local"
     : "codex_hosted";
+}
+
+export function getExecutionBackend(): ExecutorBackend {
+  const configured = getConfiguredExecutionBackend();
+  if (isFormalProductMode() && configured !== "local_executor") {
+    return "local_executor";
+  }
+  return configured;
 }
 
 export async function getMcpClient() {

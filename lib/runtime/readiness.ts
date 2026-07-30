@@ -1,4 +1,4 @@
-import { getExecutionBackend } from "@/lib/mcp/client";
+import { getConfiguredExecutionBackend, getExecutionBackend } from "@/lib/mcp/client";
 import { isAuthenticationRequired, useSecureAuthCookie } from "@/lib/auth/request";
 import { query } from "@/lib/runtime/database";
 import { getRuntimeRepository, runtimeStoreMode } from "@/lib/runtime";
@@ -49,6 +49,7 @@ export async function inspectRuntimeReadiness(userId?: string) {
   const checks: RuntimeReadinessCheck[] = [];
   const store = runtimeStoreMode();
   const executor = getExecutionBackend();
+  const configuredExecutor = getConfiguredExecutionBackend();
   const authRequired = isAuthenticationRequired();
   const secureCookie = useSecureAuthCookie();
   const deepSeekConfigured = configured(process.env.DEEPSEEK_API_KEY) && process.env.DEEPSEEK_DISABLED !== "true";
@@ -138,11 +139,13 @@ export async function inspectRuntimeReadiness(userId?: string) {
   checks.push(check(
     "executor_backend",
     "淘宝执行架构",
-    executor === "local_executor" ? "pass" : "fail",
+    configuredExecutor === "local_executor" ? "pass" : "fail",
     true,
-    executor === "local_executor"
+    configuredExecutor === "local_executor"
       ? "真实淘宝操作通过持久任务和本地执行器运行"
-      : `当前 backend=${executor}，仍是开发兼容路径`,
+      : productMode === "production" && executor === "local_executor"
+        ? `已阻断配置的 backend=${configuredExecutor}；运行时安全回退到 local_executor，但仍需修正配置`
+        : `当前 backend=${configuredExecutor}，仍是开发兼容路径`,
     "正式环境设置 TAOBAO_EXECUTION_BACKEND=local_executor"
   ));
   checks.push(check(
@@ -191,6 +194,8 @@ export async function inspectRuntimeReadiness(userId?: string) {
   return {
     product_mode: productMode,
     demo_cart_fallback: demoCartFallback,
+    configured_executor_backend: configuredExecutor,
+    effective_executor_backend: executor,
     ready_for_production: readyForProduction,
     operational_for_shopping: readyForProduction && executorReady,
     checked_at: new Date().toISOString(),
