@@ -216,6 +216,15 @@ export const postgresRuntimeRepository: RuntimeRepository = {
     return result.rows.map(normalizeDevice);
   },
 
+  async updateDeviceCapabilities(deviceId, userId, capabilities) {
+    const result = await query(
+      `UPDATE executor_devices SET capabilities = $3::jsonb, updated_at = NOW()
+       WHERE id = $1 AND user_id = $2 AND status <> 'revoked' RETURNING *`,
+      [deviceId, userId, JSON.stringify(capabilities)]
+    );
+    return result.rowCount ? normalizeDevice(result.rows[0]) : null;
+  },
+
   async revokeDevice(deviceId, userId) {
     const result = await query(
       "UPDATE executor_devices SET status = 'revoked', updated_at = NOW() WHERE id = $1 AND user_id = $2",

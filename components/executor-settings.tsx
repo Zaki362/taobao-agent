@@ -133,6 +133,31 @@ export function ExecutorSettings() {
     }
   }
 
+  async function setCartCapability(device: Device, enabled: boolean) {
+    if (enabled && !window.confirm("开启后，这台设备可以领取你在产品中显式确认的真实淘宝加购任务。确定继续吗？")) {
+      return;
+    }
+    setBusy(true);
+    setError("");
+    try {
+      const response = await fetch("/api/executor/devices", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          device_id: device.id,
+          capabilities: enabled ? ["module_search", "add_to_cart"] : ["module_search"]
+        })
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload.error || "更新执行器权限失败");
+      await load();
+    } catch (value) {
+      setError(value instanceof Error ? value.message : "更新执行器权限失败");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function copyCommand(value: string, label: string) {
     setError("");
     try {
@@ -304,9 +329,19 @@ export function ExecutorSettings() {
               <div className="flex flex-wrap items-center gap-3">
                 <p className="text-xs text-muted-foreground">最近心跳：{device.last_heartbeat_at ? new Date(device.last_heartbeat_at).toLocaleString("zh-CN", { hour12: false }) : "尚未连接"}</p>
                 {device.status !== "revoked" ? (
-                  <Button variant="outline" size="sm" disabled={busy} onClick={() => revoke(device.id)}>
-                    撤销令牌
-                  </Button>
+                  <>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={busy}
+                      onClick={() => setCartCapability(device, !device.capabilities.includes("add_to_cart"))}
+                    >
+                      {device.capabilities.includes("add_to_cart") ? "关闭真实加购" : "开启真实加购"}
+                    </Button>
+                    <Button variant="outline" size="sm" disabled={busy} onClick={() => revoke(device.id)}>
+                      撤销令牌
+                    </Button>
+                  </>
                 ) : null}
               </div>
             </div>

@@ -55,6 +55,16 @@ describeWithDatabase("PostgreSQL production runtime contract", () => {
 
   it("enforces queue leases, idempotency, event ordering and replay-safe completion", async () => {
     await postgresRuntimeRepository.createDevice(device);
+    expect(await postgresRuntimeRepository.updateDeviceCapabilities(
+      deviceId,
+      otherUserId,
+      ["module_search"]
+    )).toBeNull();
+    expect((await postgresRuntimeRepository.updateDeviceCapabilities(
+      deviceId,
+      userId,
+      ["module_search", "add_to_cart"]
+    ))?.capabilities).toEqual(["module_search", "add_to_cart"]);
     const first = await postgresRuntimeRepository.createJob({
       id: jobId,
       user_id: userId,

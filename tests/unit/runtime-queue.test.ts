@@ -54,6 +54,16 @@ describe("durable job queue contract", () => {
   it("grants only search capability when device registration omits an explicit scope", async () => {
     const registered = await registerExecutorDevice("least-privilege-user", "least privilege device");
     expect(registered.device.capabilities).toEqual(["module_search"]);
+    expect((await localRuntimeRepository.updateDeviceCapabilities(
+      registered.device.id,
+      "other-user",
+      ["module_search", "add_to_cart"]
+    ))).toBeNull();
+    expect((await localRuntimeRepository.updateDeviceCapabilities(
+      registered.device.id,
+      "least-privilege-user",
+      ["module_search", "add_to_cart"]
+    ))?.capabilities).toEqual(["module_search", "add_to_cart"]);
   });
 
   it("returns an expired lease to the pending queue", async () => {

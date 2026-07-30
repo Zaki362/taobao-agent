@@ -1,6 +1,6 @@
 import { NextRequest } from "next/server";
 import { requireAuthenticatedIdentity } from "@/lib/auth/request";
-import { apiOk, apiRouteError, requireString } from "@/lib/api/responses";
+import { ApiRouteError, apiOk, apiRouteError, requireString } from "@/lib/api/responses";
 import { getRuntimeRepository } from "@/lib/runtime";
 import { registerExecutorDevice } from "@/lib/runtime/jobs";
 import type { RuntimeJobType } from "@/lib/runtime/types";
@@ -43,6 +43,23 @@ export async function POST(request: NextRequest) {
     }, 201);
   } catch (error) {
     return apiRouteError(error, "failed to register executor device");
+  }
+}
+
+export async function PATCH(request: NextRequest) {
+  try {
+    const identity = await requireAuthenticatedIdentity();
+    const body = await request.json().catch(() => ({}));
+    const updated = await getRuntimeRepository().updateDeviceCapabilities(
+      requireString(body.device_id, "device_id"),
+      identity.userId,
+      capabilities(body.capabilities)
+    );
+    if (!updated) throw new ApiRouteError("executor device not found", 404, "not_found");
+    const { token_hash: _tokenHash, ...device } = updated;
+    return apiOk({ device });
+  } catch (error) {
+    return apiRouteError(error, "failed to update executor capabilities");
   }
 }
 

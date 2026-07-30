@@ -136,6 +136,14 @@ export const localRuntimeRepository: RuntimeRepository = {
       .map(copy);
   },
 
+  async updateDeviceCapabilities(deviceId, userId, capabilities) {
+    const found = runtimeState().devices.get(deviceId);
+    if (!found || found.user_id !== userId || found.status === "revoked") return null;
+    found.capabilities = [...capabilities];
+    found.updated_at = new Date().toISOString();
+    return copy(found);
+  },
+
   async revokeDevice(deviceId, userId) {
     const found = runtimeState().devices.get(deviceId);
     if (!found || found.user_id !== userId) return false;

@@ -98,6 +98,11 @@ export interface RuntimeRepository {
   findDeviceByToken(tokenHash: string): Promise<ExecutorDevice | null>;
   heartbeatDevice(deviceId: string): Promise<ExecutorDevice | null>;
   listDevices(userId: string): Promise<ExecutorDevice[]>;
+  updateDeviceCapabilities(
+    deviceId: string,
+    userId: string,
+    capabilities: RuntimeJobType[]
+  ): Promise<ExecutorDevice | null>;
   revokeDevice(deviceId: string, userId: string): Promise<boolean>;
 
   createJob(input: CreateRuntimeJobInput): Promise<RuntimeJob>;

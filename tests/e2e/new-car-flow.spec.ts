@@ -77,10 +77,14 @@ test("authenticated new-car workflow reaches recommendations through the durable
 
   const deviceResponse = await page.request.post("/api/executor/devices", {
     headers: { Origin: "http://127.0.0.1:3100" },
-    data: { name: "Playwright 淘宝执行器", capabilities: ["module_search", "add_to_cart"] }
+    data: { name: "Playwright 淘宝执行器", capabilities: ["module_search"] }
   });
   expect(deviceResponse.status()).toBe(201);
-  const { device_token: deviceToken } = await deviceResponse.json() as { device_token: string };
+  const registeredDevice = await deviceResponse.json() as {
+    device_token: string;
+    device: { id: string };
+  };
+  const deviceToken = registeredDevice.device_token;
   const heartbeatResponse = await page.request.post("/api/executor/heartbeat", {
     headers: { Authorization: `Bearer ${deviceToken}` },
     data: {}
@@ -89,7 +93,7 @@ test("authenticated new-car workflow reaches recommendations through the durable
   const heartbeat = await heartbeatResponse.json() as {
     device: { capabilities: string[] };
   };
-  expect(heartbeat.device.capabilities).toEqual(["module_search", "add_to_cart"]);
+  expect(heartbeat.device.capabilities).toEqual(["module_search"]);
 
   const mcpStatusResponse = await page.request.get("/api/mcp/status");
   expect(mcpStatusResponse.ok()).toBeTruthy();
@@ -104,7 +108,19 @@ test("authenticated new-car workflow reaches recommendations through the durable
   };
   expect(mcpStatus.available).toBe(true);
   expect(mcpStatus.executor_devices.capabilities.module_search.available).toBe(true);
-  expect(mcpStatus.executor_devices.capabilities.add_to_cart.available).toBe(true);
+  expect(mcpStatus.executor_devices.capabilities.add_to_cart.available).toBe(false);
+
+  const capabilityUpdate = await page.request.patch("/api/executor/devices", {
+    headers: { Origin: "http://127.0.0.1:3100" },
+    data: {
+      device_id: registeredDevice.device.id,
+      capabilities: ["module_search", "add_to_cart"]
+    }
+  });
+  expect(capabilityUpdate.ok(), await capabilityUpdate.text()).toBeTruthy();
+  const updatedMcpStatus = await page.request.get("/api/mcp/status");
+  expect(updatedMcpStatus.ok()).toBeTruthy();
+  expect((await updatedMcpStatus.json() as typeof mcpStatus).executor_devices.capabilities.add_to_cart.available).toBe(true);
 
   const readinessResponse = await page.request.get("/api/runtime/readiness");
   expect(readinessResponse.ok()).toBeTruthy();
