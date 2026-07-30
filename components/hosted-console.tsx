@@ -43,6 +43,17 @@ type RuntimeMetrics = {
       p95_duration_ms: number;
     }>;
   };
+  health: {
+    status: "healthy" | "warning" | "critical";
+    summary: string;
+    incidents: Array<{
+      code: string;
+      severity: "warning" | "critical";
+      title: string;
+      detail: string;
+      recommendation: string;
+    }>;
+  };
 };
 
 function executionModeLabel(mode: SessionState["execution_mode"]) {
@@ -228,6 +239,46 @@ export function HostedConsole() {
               )}
             />
           </div>
+        ) : null}
+
+        {runtimeMetrics?.available ? (
+          <Card className={`section-card ${
+            runtimeMetrics.health.status === "critical"
+              ? "border-red-200"
+              : runtimeMetrics.health.status === "warning"
+                ? "border-amber-200"
+                : "border-emerald-200"
+          }`}>
+            <CardHeader>
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <CardTitle>运行健康诊断</CardTitle>
+                <Badge variant={runtimeMetrics.health.status === "healthy" ? "success" : runtimeMetrics.health.status === "critical" ? "danger" : "secondary"}>
+                  {runtimeMetrics.health.status === "healthy" ? "运行正常" : runtimeMetrics.health.status === "critical" ? "需要立即处理" : "需要关注"}
+                </Badge>
+              </div>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <p className="text-sm text-muted-foreground">{runtimeMetrics.health.summary}</p>
+              {runtimeMetrics.health.incidents.map((item) => (
+                <div key={item.code} className={`rounded-[20px] border p-4 ${
+                  item.severity === "critical"
+                    ? "border-red-200 bg-red-50/70"
+                    : "border-amber-200 bg-amber-50/70"
+                }`}>
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <p className="text-sm font-semibold">{item.title}</p>
+                    <span className={`rounded-full px-2.5 py-1 text-[11px] font-semibold ${
+                      item.severity === "critical" ? "bg-red-100 text-red-700" : "bg-amber-100 text-amber-700"
+                    }`}>
+                      {item.severity === "critical" ? "严重" : "预警"}
+                    </span>
+                  </div>
+                  <p className="mt-2 text-xs leading-5 text-muted-foreground">{item.detail}</p>
+                  <p className="mt-2 text-xs leading-5 text-foreground/75">建议：{item.recommendation}</p>
+                </div>
+              ))}
+            </CardContent>
+          </Card>
         ) : null}
 
         {errorMessage ? (

@@ -38,7 +38,7 @@ TAOBAO_EXECUTION_BACKEND=local_executor
 4. 登录后访问 `/api/runtime/readiness`，确认 `ready_for_production=true`。
 5. 注册测试设备并运行 `npm run executor:doctor`；设备在线后应得到 `operational_for_shopping=true`。
 6. 使用隔离淘宝测试账号完成一次搜索；真实加购仅在明确授权且账号能力稳定时验收。
-7. 检查执行台中的任务积压、在线设备、模型 fallback 和失败任务。
+7. 检查执行台中的任务积压、在线设备、模型 fallback、失败任务和“运行健康诊断”，不得带着严重告警发布。
 
 `health` 只回答进程和数据库是否存活；`readiness` 才会检查数据库持久化、认证、安全 Cookie、正式 HTTPS Origin、DeepSeek、`local_executor`、旧 Mock 标志和当前账号执行器状态，不能用前者代替发布验收。
 

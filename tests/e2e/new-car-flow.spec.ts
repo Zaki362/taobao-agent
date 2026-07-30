@@ -128,6 +128,7 @@ test("authenticated new-car workflow reaches recommendations through the durable
 
     await page.goto("/hosted");
     await expect(page.getByText("Agent Runtime 2.0")).toBeVisible();
+    await expect(page.getByText("运行健康诊断")).toBeVisible();
     await expect(page.getByText("本地执行器队列", { exact: false }).first()).toBeVisible();
     await page.getByRole("button", { name: "返回当前进度" }).click();
     await expect(page.getByText("确认下单清单")).toBeVisible();

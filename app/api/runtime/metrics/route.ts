@@ -4,6 +4,7 @@ import { apiOk, apiRouteError, requireString } from "@/lib/api/responses";
 import { ensureSession } from "@/lib/agent/orchestrator";
 import { getRuntimeRepository } from "@/lib/runtime";
 import { getLlmTelemetrySnapshot } from "@/lib/llm/telemetry";
+import { evaluateRuntimeHealth } from "@/lib/runtime/monitoring";
 
 export async function GET(request: NextRequest) {
   try {
@@ -36,31 +37,41 @@ export async function GET(request: NextRequest) {
       now - Date.parse(device.last_heartbeat_at!) < 45_000
     );
 
+    const jobMetrics = {
+      total: jobs.length,
+      pending: counts.pending ?? 0,
+      active: (counts.leased ?? 0) + (counts.running ?? 0),
+      completed: counts.completed ?? 0,
+      failed: counts.failed ?? 0,
+      cancelled: counts.cancelled ?? 0,
+      oldest_pending_ms: pendingJobs.length
+        ? Math.max(...pendingJobs.map((job) => now - Date.parse(job.created_at)))
+        : 0,
+      average_duration_ms: averageDurationMs
+    };
+    const deviceMetrics = {
+      total: devices.filter((device) => device.status !== "revoked").length,
+      online: activeDevices.length,
+      last_heartbeat_at: activeDevices
+        .map((device) => device.last_heartbeat_at)
+        .filter((value): value is string => Boolean(value))
+        .sort()
+        .at(-1) ?? null
+    };
+    const llmMetrics = getLlmTelemetrySnapshot();
+
     return apiOk({
       available: true,
       session_id: sessionId,
-      jobs: {
-        total: jobs.length,
-        pending: counts.pending ?? 0,
-        active: (counts.leased ?? 0) + (counts.running ?? 0),
-        completed: counts.completed ?? 0,
-        failed: counts.failed ?? 0,
-        cancelled: counts.cancelled ?? 0,
-        oldest_pending_ms: pendingJobs.length
-          ? Math.max(...pendingJobs.map((job) => now - Date.parse(job.created_at)))
-          : 0,
-        average_duration_ms: averageDurationMs
-      },
-      devices: {
-        total: devices.filter((device) => device.status !== "revoked").length,
-        online: activeDevices.length,
-        last_heartbeat_at: activeDevices
-          .map((device) => device.last_heartbeat_at)
-          .filter((value): value is string => Boolean(value))
-          .sort()
-          .at(-1) ?? null
-      },
-      llm: getLlmTelemetrySnapshot(),
+      jobs: jobMetrics,
+      devices: deviceMetrics,
+      llm: llmMetrics,
+      health: evaluateRuntimeHealth({
+        jobs: jobMetrics,
+        devices: deviceMetrics,
+        llm: llmMetrics,
+        agentRuntime: session.agent_runtime
+      }),
       generated_at: new Date(now).toISOString()
     });
   } catch (error) {

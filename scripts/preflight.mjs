@@ -217,6 +217,7 @@ function assertRequiredFiles() {
     "lib/mcp/local-executor.ts",
     "lib/runtime/postgres-repository.ts",
     "lib/runtime/readiness.ts",
+    "lib/runtime/monitoring.ts",
     "lib/security/rate-limit.ts",
     "scripts/local-executor.mjs",
     "scripts/executor-doctor.mjs",
