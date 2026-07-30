@@ -21,6 +21,14 @@ if (!deviceToken) {
 let currentJobId = null;
 let stopped = false;
 
+class ExecutorJobError extends Error {
+  constructor(message, retryable = true) {
+    super(message);
+    this.name = "ExecutorJobError";
+    this.retryable = retryable;
+  }
+}
+
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -65,6 +73,34 @@ function parseJson(text) {
     if (start >= 0 && end > start) return JSON.parse(trimmed.slice(start, end + 1));
     throw new Error("Qoder CLI output was not valid JSON");
   }
+}
+
+function processOutput(error, stdout = "", stderr = "") {
+  const candidate = error && typeof error === "object" ? error : {};
+  return [stdout, stderr, candidate.stdout, candidate.stderr, candidate.message]
+    .filter((value) => typeof value === "string" && value.trim())
+    .join("\n")
+    .trim();
+}
+
+function qoderJobError(error, stdout = "", stderr = "") {
+  const output = processOutput(error, stdout, stderr);
+  if (/upgrade required|update available/i.test(output)) {
+    return new ExecutorJobError(
+      "Qoder CLI 版本已过期，请先运行 qodercli update，确认 qodercli --version 正常后再启动执行器。",
+      false
+    );
+  }
+  if (/not logged in|please run \/login|authentication required|unauthorized/i.test(output)) {
+    return new ExecutorJobError(
+      "Qoder CLI 未登录，请在终端运行 qodercli，输入 /login 完成登录后再启动执行器。",
+      false
+    );
+  }
+  if (!output) {
+    return new ExecutorJobError("Qoder CLI 未返回内容。", true);
+  }
+  return new ExecutorJobError(output.slice(0, 1000), true);
 }
 
 async function readCachedResult(jobId) {
@@ -147,19 +183,35 @@ function cartPrompt(job) {
 
 async function executeJob(job) {
   const prompt = job.job_type === "module_search" ? searchPrompt(job) : cartPrompt(job);
-  const { stdout } = await execFileAsync(qoderPath, [
-    "-p", prompt,
-    "-q",
-    "--yolo",
-    "--allowed-tools", "Skill,Bash,Read",
-    "--max-turns", job.job_type === "module_search" ? "6" : "5",
-    "-f", "text"
-  ], {
-    env: process.env,
-    timeout: qoderTimeoutMs,
-    maxBuffer: 8 * 1024 * 1024
-  });
-  return parseJson(stdout);
+  let stdout = "";
+  let stderr = "";
+  try {
+    const output = await execFileAsync(qoderPath, [
+      "-p", prompt,
+      "-q",
+      "--yolo",
+      "--allowed-tools", "Skill,Bash,Read",
+      "--max-turns", job.job_type === "module_search" ? "6" : "5",
+      "-f", "text"
+    ], {
+      env: process.env,
+      timeout: qoderTimeoutMs,
+      maxBuffer: 8 * 1024 * 1024
+    });
+    stdout = output.stdout ?? "";
+    stderr = output.stderr ?? "";
+  } catch (error) {
+    throw qoderJobError(error);
+  }
+
+  if (!stdout.trim()) {
+    throw qoderJobError(undefined, stdout, stderr);
+  }
+  try {
+    return parseJson(stdout);
+  } catch (error) {
+    throw qoderJobError(error, stdout, stderr);
+  }
 }
 
 async function heartbeat() {
@@ -194,7 +246,11 @@ async function loop() {
         result = cached ?? await executeJob(job);
         if (!cached) await cacheResult(job.id, result);
       } catch (error) {
-        await reportResult(job.id, { status: "failed", error: error.message }).catch((resolveError) => {
+        await reportResult(job.id, {
+          status: "failed",
+          error: error.message,
+          retryable: error instanceof ExecutorJobError ? error.retryable : true
+        }).catch((resolveError) => {
           process.stderr.write(`[local-executor] failed to report ${job.id}: ${resolveError.message}\n`);
         });
         process.stderr.write(`[local-executor] job ${job.id} failed: ${error.message}\n`);

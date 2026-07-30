@@ -322,10 +322,17 @@ export async function applyCompletedRuntimeJob(jobId: string, device: ExecutorDe
 export async function applyFailedRuntimeJob(
   jobId: string,
   device: ExecutorDevice,
-  errorMessage: string
+  errorMessage: string,
+  options: { retryable?: boolean } = {}
 ) {
   const repository = getRuntimeRepository();
-  const job = await repository.failJob(jobId, device.id, errorMessage, 3_000);
+  const job = await repository.failJob(
+    jobId,
+    device.id,
+    errorMessage,
+    3_000,
+    options.retryable === false
+  );
   const state = await repository.getSession(job.session_id, job.user_id);
   const task = state?.hosted_tasks.find((item) => item.task_id === job.id);
   if (state && task) {

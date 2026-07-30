@@ -29,6 +29,49 @@ await check("qoder_cli", async () => {
   return `${qoderPath} · ${(stdout || stderr || "version available").trim().slice(0, 160)}`;
 });
 
+await check("qoder_session", async () => {
+  try {
+    const { stdout, stderr } = await execFileAsync(qoderPath, [
+      "-p",
+      "只返回严格 JSON：{\"ok\":true}",
+      "-q",
+      "--yolo",
+      "--allowed-tools",
+      "Read",
+      "--max-turns",
+      "2",
+      "-f",
+      "text"
+    ], {
+      timeout: 20_000,
+      maxBuffer: 1024 * 1024
+    });
+    const output = `${stdout ?? ""}\n${stderr ?? ""}`.trim();
+    if (/upgrade required|update available/i.test(output)) {
+      throw new Error("Qoder CLI 需要升级，请运行 qodercli update");
+    }
+    if (/not logged in|please run \/login|authentication required|unauthorized/i.test(output)) {
+      throw new Error("Qoder CLI 未登录，请运行 qodercli 后输入 /login");
+    }
+    if (!stdout.trim()) {
+      throw new Error("Qoder CLI headless 调用未返回内容");
+    }
+    return "Qoder CLI 已登录，可执行 headless Agent 请求";
+  } catch (error) {
+    const candidate = error && typeof error === "object" ? error : {};
+    const output = [candidate.stdout, candidate.stderr, candidate.message]
+      .filter((value) => typeof value === "string" && value.trim())
+      .join("\n");
+    if (/upgrade required|update available/i.test(output)) {
+      throw new Error("Qoder CLI 需要升级，请运行 qodercli update");
+    }
+    if (/not logged in|please run \/login|authentication required|unauthorized/i.test(output)) {
+      throw new Error("Qoder CLI 未登录，请运行 qodercli 后输入 /login");
+    }
+    throw error;
+  }
+});
+
 await check("scenecart_api", async () => {
   const response = await fetch(`${apiBaseUrl}/api/runtime/health`, {
     signal: AbortSignal.timeout(8_000)

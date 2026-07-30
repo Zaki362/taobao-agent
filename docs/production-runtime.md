@@ -72,6 +72,8 @@ QODERCLI_PATH="$HOME/.local/bin/qodercli" \
 npm run executor:doctor
 ```
 
+Doctor 会额外执行一次不调用淘宝工具的 Qoder headless 请求，用于提前识别 CLI 版本过旧或登录失效。若显示 `Qoder CLI 未登录`，先运行 `qodercli` 并输入 `/login`；若显示需要升级，运行 `qodercli update`。这两类配置错误会被标记为不可重试，避免真实任务重复消耗三次执行机会。
+
 Doctor 只检查服务端、设备令牌和 Qoder CLI，不触发淘宝页面或账号动作。全部通过后启动：
 
 ```bash

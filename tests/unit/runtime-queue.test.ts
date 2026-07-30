@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { localRuntimeRepository, resetLocalRuntimeForTests } from "@/lib/runtime/local-repository";
-import { applyCompletedRuntimeJob, enqueueModuleSearchJob } from "@/lib/runtime/jobs";
+import { applyCompletedRuntimeJob, applyFailedRuntimeJob, enqueueModuleSearchJob } from "@/lib/runtime/jobs";
 import { decideNextAgentAction } from "@/lib/agent/decision-engine";
 import { createSessionFixture } from "@/tests/fixtures/session";
 import type { ExecutorDevice } from "@/lib/runtime/types";
@@ -87,6 +87,32 @@ describe("durable job queue contract", () => {
     });
     await localRuntimeRepository.claimJob(device, 30_000);
     expect(await localRuntimeRepository.cancelJob("job-already-claimed", device.user_id)).toBeNull();
+  });
+
+  it("does not retry a terminal executor configuration error", async () => {
+    await localRuntimeRepository.createDevice(device);
+    const state = createSessionFixture({ session_id: "session-terminal-error" });
+    const module = state.shopping_plan.modules[0];
+    const job = await enqueueModuleSearchJob(state, {
+      moduleId: module.module_id,
+      moduleName: module.module_name,
+      keyword: module.search_strategy!.primary_keyword
+    });
+    await localRuntimeRepository.saveSession(state);
+    await localRuntimeRepository.claimJob(device, 30_000);
+
+    const failed = await applyFailedRuntimeJob(
+      job.id,
+      device,
+      "Qoder CLI 未登录",
+      { retryable: false }
+    );
+
+    expect(failed.status).toBe("failed");
+    expect(failed.attempts).toBe(1);
+    expect(await localRuntimeRepository.claimJob(device, 30_000)).toBeNull();
+
+    await fs.unlink(path.join(process.cwd(), ".data", "sessions", `${state.session_id}.json`)).catch(() => undefined);
   });
 
   it("writes an empty executor result to a terminal search trace so the Agent can continue", async () => {

@@ -121,7 +121,7 @@ export function ExecutorSettings() {
         <CardContent className="space-y-3 text-sm leading-7 text-muted-foreground">
           <p>Doctor 只检查网页服务、设备令牌和 Qoder CLI，不会主动打开淘宝商品页，也不会触发加购。</p>
           <pre className="overflow-x-auto rounded-[18px] bg-foreground p-4 text-xs leading-6 text-white">{`SCENECART_API_URL='${apiUrl}' SCENECART_DEVICE_TOKEN='你的设备令牌' npm run executor:doctor`}</pre>
-          <p>三个检查均显示 PASS 后再启动执行器。淘宝 skill 会在第一条由用户确认的搜索任务中完成真实验证。</p>
+          <p>全部检查均显示 PASS 后再启动执行器。如果提示未登录，请先运行 <code>qodercli</code> 并输入 <code>/login</code>；淘宝 skill 会在第一条由用户确认的搜索任务中完成真实验证。</p>
         </CardContent>
       </Card>
 

@@ -20,7 +20,8 @@ export async function POST(
       const job = await applyFailedRuntimeJob(
         jobId,
         device,
-        typeof body.error === "string" ? body.error : "local executor failed"
+        typeof body.error === "string" ? body.error : "local executor failed",
+        { retryable: body.retryable !== false }
       );
       return apiOk({ job, retry_scheduled: job.status === "pending" });
     }

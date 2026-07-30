@@ -325,12 +325,12 @@ export const postgresRuntimeRepository: RuntimeRepository = {
     });
   },
 
-  async failJob(jobId, deviceId, errorMessage, retryDelayMs = 2_000) {
+  async failJob(jobId, deviceId, errorMessage, retryDelayMs = 2_000, terminal = false) {
     return withTransaction(async (client) => {
       const job = await selectJobForUpdate(client, jobId);
       if (job.status === "completed") return job;
       if (job.lease_owner_id !== deviceId) throw new Error("job lease owner mismatch");
-      const shouldRetry = job.attempts < job.max_attempts;
+      const shouldRetry = !terminal && job.attempts < job.max_attempts;
       const updated = await client.query(
         `UPDATE agent_jobs SET
            status = $2,

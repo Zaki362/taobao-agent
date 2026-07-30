@@ -114,7 +114,8 @@ export interface RuntimeRepository {
     jobId: string,
     deviceId: string,
     errorMessage: string,
-    retryDelayMs?: number
+    retryDelayMs?: number,
+    terminal?: boolean
   ): Promise<RuntimeJob>;
   cancelJob(jobId: string, userId?: string): Promise<RuntimeJob | null>;
   recoverExpiredJobs(): Promise<number>;

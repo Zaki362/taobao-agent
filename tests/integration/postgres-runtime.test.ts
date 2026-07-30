@@ -118,4 +118,30 @@ describeWithDatabase("PostgreSQL production runtime contract", () => {
     expect(await postgresRuntimeRepository.cancelJob(cancellableId, otherUserId)).toBeNull();
     expect((await postgresRuntimeRepository.cancelJob(cancellableId, userId))?.status).toBe("cancelled");
   });
+
+  it("terminates non-retryable executor failures after the first attempt", async () => {
+    const terminalJobId = randomUUID();
+    await postgresRuntimeRepository.createJob({
+      id: terminalJobId,
+      user_id: userId,
+      session_id: sessionId,
+      job_type: "module_search",
+      idempotency_key: `integration:${sessionId}:terminal-failure`,
+      payload: {},
+      max_attempts: 3
+    });
+    const claimed = await postgresRuntimeRepository.claimJob(device, 30_000);
+    expect(claimed?.id).toBe(terminalJobId);
+
+    const failed = await postgresRuntimeRepository.failJob(
+      terminalJobId,
+      deviceId,
+      "Qoder CLI 未登录",
+      3_000,
+      true
+    );
+    expect(failed.status).toBe("failed");
+    expect(failed.attempts).toBe(1);
+    expect(await postgresRuntimeRepository.claimJob(device, 30_000)).toBeNull();
+  });
 });

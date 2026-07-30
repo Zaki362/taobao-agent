@@ -222,7 +222,7 @@ export const localRuntimeRepository: RuntimeRepository = {
     return { job: copy(job), alreadyCompleted: false };
   },
 
-  async failJob(jobId, deviceId, errorMessage, retryDelayMs = 2_000) {
+  async failJob(jobId, deviceId, errorMessage, retryDelayMs = 2_000, terminal = false) {
     const job = runtimeState().jobs.get(jobId);
     if (!job) throw new Error("job not found");
     if (job.status === "completed") return copy(job);
@@ -231,13 +231,14 @@ export const localRuntimeRepository: RuntimeRepository = {
     job.error_message = errorMessage.slice(0, 1000);
     job.updated_at = new Date(now).toISOString();
     job.lease_expires_at = undefined;
-    if (job.attempts < job.max_attempts) {
+    if (!terminal && job.attempts < job.max_attempts) {
       job.status = "pending";
       job.available_at = new Date(now + retryDelayMs).toISOString();
       job.lease_owner_id = undefined;
     } else {
       job.status = "failed";
       job.completed_at = new Date(now).toISOString();
+      job.lease_owner_id = undefined;
     }
     return copy(job);
   },
