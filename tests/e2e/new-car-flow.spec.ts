@@ -86,6 +86,10 @@ test("authenticated new-car workflow reaches recommendations through the durable
     data: {}
   });
   expect(heartbeatResponse.ok()).toBeTruthy();
+  const heartbeat = await heartbeatResponse.json() as {
+    device: { capabilities: string[] };
+  };
+  expect(heartbeat.device.capabilities).toEqual(["module_search", "add_to_cart"]);
 
   const mcpStatusResponse = await page.request.get("/api/mcp/status");
   expect(mcpStatusResponse.ok()).toBeTruthy();

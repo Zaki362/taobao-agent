@@ -91,7 +91,7 @@ QODERCLI_PATH="$HOME/.local/bin/qodercli" \
 npm run worker:local
 ```
 
-Worker 启动时会再次执行无副作用的 Qoder headless 会话检查；只有 Qoder 登录、服务端健康和设备令牌都通过后才开始发送心跳和领取任务。因此设置页显示“在线”代表基础执行链路已通过，而不只是本地进程存在。
+Worker 启动时会再次执行无副作用的 Qoder headless 会话检查；只有 Qoder 登录、服务端健康、设备令牌和 `module_search` 能力都通过后，才会发送鉴权心跳并开始领取任务。Doctor 会打印令牌当前拥有的商品搜索 / 真实加购能力。因此设置页显示“在线”代表基础执行链路已通过，而不只是本地进程存在。
 
 可选配置：
 

@@ -15,7 +15,13 @@ export async function POST(request: NextRequest) {
       ? await repository.renewJobLease(currentJobId, device.id, DEFAULT_JOB_LEASE_MS)
       : null;
     return apiOk({
-      device: updated ? { id: updated.id, name: updated.name, status: updated.status, last_heartbeat_at: updated.last_heartbeat_at } : null,
+      device: updated ? {
+        id: updated.id,
+        name: updated.name,
+        status: updated.status,
+        capabilities: updated.capabilities,
+        last_heartbeat_at: updated.last_heartbeat_at
+      } : null,
       lease_renewed: Boolean(renewedJob),
       server_time: new Date().toISOString()
     });

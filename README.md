@@ -238,7 +238,7 @@ SCENECART_DEVICE_TOKEN=一次性设备令牌 \
 npm run worker:local
 ```
 
-`worker:local` 在发送第一条心跳前会完成 Qoder headless 登录检查、服务端健康检查和设备令牌校验。只有这些检查通过，网页才会把设备视为在线，避免“Worker 在线但所有任务都因 Qoder 未登录失败”的误导状态。
+`worker:local` 会先完成 Qoder headless 登录、服务端健康、设备令牌与 `module_search` 能力校验，再发送鉴权心跳并开始领取任务。Doctor 会显示令牌当前拥有的商品搜索 / 真实加购能力，避免“进程在线但任务无法匹配”的误导状态。
 
 ## 当前实现边界
 

@@ -80,7 +80,19 @@ async function verifyStartup() {
   if (!response.ok || payload.status !== "healthy") {
     throw new Error(payload.error || `SceneCart API health check failed with ${response.status}`);
   }
-  process.stdout.write(`[local-executor] startup checks passed; qoder=session-ready; runtime=${payload.runtime_store}; backend=${payload.effective_executor_backend}\n`);
+  const heartbeatPayload = await api("/api/executor/heartbeat", {
+    method: "POST",
+    body: "{}"
+  });
+  const capabilities = Array.isArray(heartbeatPayload.device?.capabilities)
+    ? heartbeatPayload.device.capabilities
+    : [];
+  if (!capabilities.includes("module_search")) {
+    throw new Error("设备令牌没有 module_search 能力，请在执行器设置页重新注册搜索设备。");
+  }
+  process.stdout.write(
+    `[local-executor] startup checks passed; qoder=session-ready; runtime=${payload.runtime_store}; backend=${payload.effective_executor_backend}; capabilities=${capabilities.join(",")}\n`
+  );
 }
 
 function parseJson(text) {

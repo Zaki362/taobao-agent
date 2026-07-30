@@ -98,7 +98,14 @@ await check("device_token", async () => {
   });
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
-  return "设备令牌有效，服务端已收到心跳";
+  const capabilities = Array.isArray(payload.device?.capabilities) ? payload.device.capabilities : [];
+  if (!capabilities.includes("module_search")) {
+    throw new Error("设备令牌有效，但缺少 module_search 能力；请在设置页重新注册设备");
+  }
+  const labels = capabilities.map((capability) =>
+    capability === "module_search" ? "商品搜索" : capability === "add_to_cart" ? "真实加购" : capability
+  );
+  return `设备令牌有效，服务端已收到心跳；授权能力：${labels.join("、")}`;
 });
 
 for (const item of checks) {
