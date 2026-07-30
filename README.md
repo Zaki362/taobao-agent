@@ -27,7 +27,7 @@ SceneCart AI 是一个正在按正式产品架构推进的“场景化购物 Age
 - 可操作运行告警：执行台根据队列等待、执行器在线状态、任务失败率、模型 fallback 和 guardrail 拒绝率生成分级告警与修复建议
 - 失败任务恢复：完成任务继续幂等去重；失败或取消的搜索/加购只有在用户再次确认后才会重置并重新入队，执行台提供明确的“重新入队”入口
 - 发布就绪检查：`/api/runtime/readiness` 将开发态与正式可发布状态分开，逐项检查 PostgreSQL、认证、HTTPS Origin、安全 Cookie、DeepSeek、本地执行器和旧 Mock 配置
-- Agent 质量门槛：`npm run eval:agent` 离线检查多组新车需求的预算守恒、模块覆盖、优先级层次、搜索词差异化和安全边界；`npm run eval:agent:live` 才会显式调用 DeepSeek
+- Agent 质量门槛：`npm run eval:agent` 离线检查多组新车需求的预算守恒、模块覆盖、优先级层次、搜索词差异化和安全边界；`npm run eval:agent:live` 通过专用启动器读取本地 Key 并显式调用 DeepSeek，缺少 Key 或全部降级时会直接失败，避免产生“在线评测实际未调用模型”的假阳性
 - 生产安全基线：异步 scrypt 密码哈希、认证限流、同源写请求校验、HttpOnly Cookie 和安全响应头
 - 淘宝 skill / MCP 工具层：正式路径为 `local_executor`；原有 Qoder 直连、Codex hosted 和 experimental bridge 仅保留为开发兼容路径
 - 商品搜索链路：当前主流程可串行搜索规划中的各个模块，并生成推荐商品卡片
@@ -52,6 +52,8 @@ SceneCart AI 是一个正在按正式产品架构推进的“场景化购物 Age
 npm install
 npm run dev
 ```
+
+如果已经在 `.env.local` 配置 `SCENECART_DEVICE_TOKEN`，也可以运行 `npm run dev:auto`。它会等待网页服务健康后启动正式的 `worker:local`；未配置令牌时只启动网页并提示前往执行器设置页，不再自动启动旧 Codex hosted worker。
 
 打开：
 
@@ -228,6 +230,8 @@ SCENECART_API_URL=http://127.0.0.1:3000 \
 SCENECART_DEVICE_TOKEN=一次性设备令牌 \
 npm run worker:local
 ```
+
+`worker:local` 在发送第一条心跳前会完成 Qoder headless 登录检查、服务端健康检查和设备令牌校验。只有这些检查通过，网页才会把设备视为在线，避免“Worker 在线但所有任务都因 Qoder 未登录失败”的误导状态。
 
 ## 当前实现边界
 

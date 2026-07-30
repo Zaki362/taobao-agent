@@ -124,6 +124,8 @@ test("authenticated new-car workflow reaches recommendations through the durable
 
     await page.goto("/settings/executor");
     await expect(page.getByText("正式运行就绪度")).toBeVisible();
+    await expect(page.getByText("四步完成连接")).toBeVisible();
+    await expect(page.getByText("1 台设备在线")).toBeVisible();
     await expect(page.getByText("仍有正式配置未完成")).toBeVisible();
 
     await page.goto("/hosted");

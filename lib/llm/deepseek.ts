@@ -37,7 +37,7 @@ import {
   validateShoppingPlanOutput,
   validateAgentDecisionOutput
 } from "@/lib/llm/validation";
-import { recordLlmCall, type LlmTaskName } from "@/lib/llm/telemetry";
+import { downgradeLastLlmCall, recordLlmCall, type LlmTaskName } from "@/lib/llm/telemetry";
 
 const DEEPSEEK_BASE_URL = "https://api.deepseek.com/chat/completions";
 const REQUEST_TIMEOUT_MS = 20_000;
@@ -196,7 +196,7 @@ function normalizeExecutionStrategy(
   };
 }
 
-function normalizeAgentDirectives(
+export function normalizeAgentDirectives(
   value: unknown,
   fallback: ShoppingPlan["agent_directives"]
 ): ShoppingPlan["agent_directives"] {
@@ -222,12 +222,14 @@ function normalizeAgentDirectives(
     rerank_rules: asStringArray(source.rerank_rules).length
       ? uniqueStringArray(asStringArray(source.rerank_rules), 4)
       : fallback.rerank_rules,
-    user_confirmation_points: asStringArray(source.user_confirmation_points).length
-      ? uniqueStringArray(asStringArray(source.user_confirmation_points), 3)
-      : fallback.user_confirmation_points,
-    safety_boundaries: asStringArray(source.safety_boundaries).length
-      ? uniqueStringArray(asStringArray(source.safety_boundaries), 4)
-      : fallback.safety_boundaries
+    user_confirmation_points: uniqueStringArray([
+      ...fallback.user_confirmation_points,
+      ...asStringArray(source.user_confirmation_points)
+    ], 5),
+    safety_boundaries: uniqueStringArray([
+      ...fallback.safety_boundaries,
+      ...asStringArray(source.safety_boundaries)
+    ], 6)
   };
 }
 
@@ -432,6 +434,9 @@ export async function parseScene(input: string, scenarioId: ScenarioId): Promise
   const fallback = mockParseScene(input, scenarioId);
   const result = await deepseekJson<SceneBrief>("parse_scene", parseScenePrompt(input, scenarioId), fallback);
   const validation = result.mode === "connected" ? validateSceneBriefOutput(result.data) : { valid: true };
+  if (result.mode === "connected" && !validation.valid) {
+    downgradeLastLlmCall("parse_scene", `schema_validation_failed:${validation.reason ?? "unknown"}`);
+  }
   const data = validation.valid ? normalizeSceneBrief(result.data, fallback) : fallback;
   return {
     data,
@@ -452,6 +457,9 @@ export async function personalizeTemplate(
     fallback
   );
   const validation = result.mode === "connected" ? validateShoppingPlanOutput(result.data, template) : { valid: true };
+  if (result.mode === "connected" && !validation.valid) {
+    downgradeLastLlmCall("personalize_template", `schema_validation_failed:${validation.reason ?? "unknown"}`);
+  }
   const data = validation.valid ? normalizeShoppingPlan(result.data, fallback) : fallback;
   return {
     data,
@@ -467,6 +475,9 @@ export async function refinePlan(
   const fallback = mockRefineScene(safeScene, action);
   const result = await deepseekJson<SceneBrief>("refine_plan", refinePlanPrompt(safeScene, action), fallback);
   const validation = result.mode === "connected" ? validateSceneBriefOutput(result.data) : { valid: true };
+  if (result.mode === "connected" && !validation.valid) {
+    downgradeLastLlmCall("refine_plan", `schema_validation_failed:${validation.reason ?? "unknown"}`);
+  }
   const data = validation.valid ? normalizeSceneBrief(result.data, fallback) : fallback;
   return {
     data,
@@ -487,6 +498,9 @@ export async function reviewShoppingPlan(
     PLAN_REVIEW_TIMEOUT_MS
   );
   const validation = result.mode === "connected" ? validatePlanQualityReviewOutput(result.data) : true;
+  if (result.mode === "connected" && !validation) {
+    downgradeLastLlmCall("review_plan", "schema_validation_failed:plan_review_invalid");
+  }
   return {
     data: validation ? normalizePlanQualityReview(result.data, fallback) : fallback,
     mode: validation ? result.mode : "mock"
@@ -563,6 +577,9 @@ export async function reviewCandidatePool({
     REVIEW_TIMEOUT_MS
   );
   const validation = result.mode === "connected" ? validateCandidateReviewOutput(result.data) : true;
+  if (result.mode === "connected" && !validation) {
+    downgradeLastLlmCall("review_candidates", "schema_validation_failed:candidate_review_invalid");
+  }
   return {
     data: validation ? normalizeCandidateReview(result.data, fallbackReview) : fallbackReview,
     mode: validation ? result.mode : "mock"
@@ -580,6 +597,9 @@ export async function decideAgentNextAction(
     AGENT_DECISION_TIMEOUT_MS
   );
   if (result.mode !== "connected" || !validateAgentDecisionOutput(result.data)) {
+    if (result.mode === "connected") {
+      downgradeLastLlmCall("decide_next_action", "schema_validation_failed:agent_decision_invalid");
+    }
     return { data: fallback, mode: "mock" };
   }
   return {

@@ -1,7 +1,13 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { reviewPlanWithAgent } from "@/lib/agent/plan-reviewer";
 import { runDeepSeekPlanner } from "@/lib/agent/planner";
+import { decideNextAgentActionV2 } from "@/lib/agent/runtime-v2";
 import { runSceneParser } from "@/lib/agent/scene";
+import {
+  getLlmTelemetrySnapshot,
+  resetLlmTelemetryForTests
+} from "@/lib/llm/telemetry";
+import { createSessionFixture } from "@/tests/fixtures/session";
 
 const liveEvaluation = process.env.AGENT_EVAL_LIVE === "true";
 
@@ -30,6 +36,13 @@ const scenarios = [
 ];
 
 describe(`new-car Agent quality gate (${liveEvaluation ? "live DeepSeek" : "deterministic fallback"})`, () => {
+  beforeEach(() => {
+    resetLlmTelemetryForTests();
+    if (liveEvaluation && !process.env.DEEPSEEK_API_KEY) {
+      throw new Error("在线 Agent 评测缺少 DEEPSEEK_API_KEY，未执行真实模型调用");
+    }
+  });
+
   it.each(scenarios)("keeps planning constraints for $name", async (scenario) => {
     const parsed = await runSceneParser(scenario.input, "new-car");
     const planned = await runDeepSeekPlanner(parsed.data);
@@ -57,7 +70,24 @@ describe(`new-car Agent quality gate (${liveEvaluation ? "live DeepSeek" : "dete
     ).toBeGreaterThan(0);
 
     if (liveEvaluation) {
-      expect(parsed.mode === "connected" || planned.mode === "connected" || reviewed.mode === "connected").toBe(true);
+      const telemetry = getLlmTelemetrySnapshot();
+      const diagnostics = `DeepSeek 降级详情：${JSON.stringify(telemetry.tasks)}`;
+      expect(parsed.mode, diagnostics).toBe("connected");
+      expect(planned.mode, diagnostics).toBe("connected");
+      expect(reviewed.mode, diagnostics).toBe("connected");
     }
+  });
+
+  it.runIf(liveEvaluation)("uses DeepSeek reasoner for a guarded runtime decision", async () => {
+    const state = createSessionFixture();
+    state.shopping_plan.agent_directives.autonomy_level = "探索执行";
+    const decision = await decideNextAgentActionV2(state);
+    const telemetry = getLlmTelemetrySnapshot();
+
+    expect(decision.source, `Runtime 决策降级：${JSON.stringify(telemetry.tasks)}`).toBe("deepseek_runtime");
+    expect(decision.action).toBe("search_module");
+    expect(state.shopping_plan.modules.some((module) => module.module_id === decision.module_id)).toBe(true);
+    expect(state.agent_runtime.model_decisions).toBe(1);
+    expect(state.agent_runtime.model_rejections).toBe(0);
   });
 });

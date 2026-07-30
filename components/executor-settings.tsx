@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { Check, Copy, RefreshCw, ShieldCheck, Terminal, Wifi } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 
@@ -40,6 +41,13 @@ export function ExecutorSettings() {
   const [busy, setBusy] = useState(false);
   const [apiUrl, setApiUrl] = useState("http://127.0.0.1:3000");
   const [readiness, setReadiness] = useState<Readiness | null>(null);
+  const [copied, setCopied] = useState("");
+  const [lastCheckedAt, setLastCheckedAt] = useState("");
+
+  const activeDevices = devices.filter((device) => device.status !== "revoked");
+  const onlineDevices = activeDevices.filter((device) => deviceStatus(device) === "在线");
+  const doctorCommand = `SCENECART_API_URL='${apiUrl}' SCENECART_DEVICE_TOKEN='${token || "你的设备令牌"}' npm run executor:doctor`;
+  const workerCommand = `SCENECART_API_URL='${apiUrl}' SCENECART_DEVICE_TOKEN='${token || "你的设备令牌"}' npm run worker:local`;
 
   async function load() {
     const [devicesResponse, readinessResponse] = await Promise.all([
@@ -52,6 +60,7 @@ export function ExecutorSettings() {
     if (!readinessResponse.ok) throw new Error(readinessPayload.error || "读取发布就绪状态失败");
     setDevices(devicesPayload.devices || []);
     setReadiness(readinessPayload as Readiness);
+    setLastCheckedAt(new Date().toLocaleTimeString("zh-CN", { hour12: false }));
   }
 
   useEffect(() => {
@@ -102,6 +111,44 @@ export function ExecutorSettings() {
     }
   }
 
+  async function copyCommand(value: string, label: string) {
+    setError("");
+    try {
+      await navigator.clipboard.writeText(value);
+      setCopied(label);
+      window.setTimeout(() => setCopied((current) => current === label ? "" : current), 1800);
+    } catch {
+      setError("浏览器未允许复制，请手动选择命令文本。");
+    }
+  }
+
+  const setupSteps = [
+    {
+      title: "登录 Qoder CLI",
+      detail: "在本机运行 qodercli，并输入 /login。登录态只保留在你的电脑上。",
+      status: onlineDevices.length > 0 ? "done" as const : "manual" as const,
+      icon: Terminal
+    },
+    {
+      title: "注册执行设备",
+      detail: "生成仅属于当前账号和这台电脑的一次性设备令牌。",
+      status: activeDevices.length > 0 ? "done" as const : "pending" as const,
+      icon: ShieldCheck
+    },
+    {
+      title: "通过连接检查",
+      detail: "Doctor 会检查 Qoder 登录、网页服务和设备令牌，不会操作淘宝。",
+      status: onlineDevices.length > 0 ? "done" as const : "manual" as const,
+      icon: Check
+    },
+    {
+      title: "保持执行器在线",
+      detail: "启动本地 Worker 后，搜索和加购任务会在后台执行并自动回填。",
+      status: onlineDevices.length > 0 ? "done" as const : "pending" as const,
+      icon: Wifi
+    }
+  ];
+
   return (
     <div className="space-y-6">
       <Card className="hero-card">
@@ -114,6 +161,57 @@ export function ExecutorSettings() {
           <p className="mt-3 max-w-3xl text-sm leading-7 text-muted-foreground">
             网页只负责任务规划和状态展示；真实淘宝操作由本地执行器领取持久化任务后完成。设备令牌只在注册时展示一次。
           </p>
+          <div className="mt-5 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+            <span className={`rounded-full px-3 py-1.5 font-semibold ${onlineDevices.length ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-700"}`}>
+              {onlineDevices.length ? `${onlineDevices.length} 台设备在线` : "等待本地执行器"}
+            </span>
+            <span>{activeDevices.length} 台有效设备</span>
+            {lastCheckedAt ? <span>最近检测 {lastCheckedAt}</span> : null}
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card className="section-card">
+        <CardHeader>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <CardTitle>四步完成连接</CardTitle>
+              <p className="mt-2 text-sm text-muted-foreground">网页不会读取淘宝账号信息，也不能绕过本机登录和授权。</p>
+            </div>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={busy}
+              onClick={() => load().catch((value) => setError(value instanceof Error ? value.message : "刷新失败"))}
+            >
+              <RefreshCw className="mr-2 h-4 w-4" />重新检测
+            </Button>
+          </div>
+        </CardHeader>
+        <CardContent>
+          <div className="grid gap-3 md:grid-cols-2">
+            {setupSteps.map((step, index) => {
+              const Icon = step.icon;
+              const completed = step.status === "done";
+              const manual = step.status === "manual";
+              return (
+                <div key={step.title} className={`rounded-[20px] border p-4 ${completed ? "border-emerald-200 bg-emerald-50/55" : manual ? "border-amber-200 bg-amber-50/45" : "border-border bg-white"}`}>
+                  <div className="flex items-start gap-3">
+                    <span className={`mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full ${completed ? "bg-emerald-600 text-white" : manual ? "bg-amber-100 text-amber-700" : "bg-secondary text-muted-foreground"}`}>
+                      {completed ? <Check className="h-4 w-4" /> : <Icon className="h-4 w-4" />}
+                    </span>
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <p className="font-semibold">{index + 1}. {step.title}</p>
+                        {manual ? <span className="rounded-full bg-white/80 px-2 py-0.5 text-[11px] font-semibold text-amber-700">需在本机确认</span> : null}
+                      </div>
+                      <p className="mt-1 text-sm leading-6 text-muted-foreground">{step.detail}</p>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
         </CardContent>
       </Card>
 
@@ -188,20 +286,34 @@ export function ExecutorSettings() {
       </Card>
 
       <Card className="section-card">
-        <CardHeader><CardTitle>连接检查</CardTitle></CardHeader>
+        <CardHeader>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <CardTitle>连接检查</CardTitle>
+            <Button variant="outline" size="sm" onClick={() => copyCommand(doctorCommand, "doctor")}>
+              <Copy className="mr-2 h-4 w-4" />{copied === "doctor" ? "已复制" : "复制诊断命令"}
+            </Button>
+          </div>
+        </CardHeader>
         <CardContent className="space-y-3 text-sm leading-7 text-muted-foreground">
           <p>Doctor 只检查网页服务、设备令牌和 Qoder CLI，不会主动打开淘宝商品页，也不会触发加购。</p>
-          <pre className="overflow-x-auto rounded-[18px] bg-foreground p-4 text-xs leading-6 text-white">{`SCENECART_API_URL='${apiUrl}' SCENECART_DEVICE_TOKEN='你的设备令牌' npm run executor:doctor`}</pre>
+          <pre className="overflow-x-auto rounded-[18px] bg-foreground p-4 text-xs leading-6 text-white">{doctorCommand}</pre>
           <p>全部检查均显示 PASS 后再启动执行器。如果提示未登录，请先运行 <code>qodercli</code> 并输入 <code>/login</code>；淘宝 skill 会在第一条由用户确认的搜索任务中完成真实验证。</p>
         </CardContent>
       </Card>
 
       {token ? (
         <Card className="section-card border-primary/20">
-          <CardHeader><CardTitle>启动命令</CardTitle></CardHeader>
+          <CardHeader>
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <CardTitle>启动命令</CardTitle>
+              <Button variant="outline" size="sm" onClick={() => copyCommand(workerCommand, "worker")}>
+                <Copy className="mr-2 h-4 w-4" />{copied === "worker" ? "已复制" : "复制启动命令"}
+              </Button>
+            </div>
+          </CardHeader>
           <CardContent className="space-y-3">
             <p className="text-sm text-muted-foreground">请在项目终端执行。关闭页面后无法再次查看该令牌。</p>
-            <pre className="overflow-x-auto rounded-[18px] bg-foreground p-4 text-xs leading-6 text-white">{`SCENECART_API_URL='${apiUrl}' SCENECART_DEVICE_TOKEN='${token}' npm run executor:doctor\nSCENECART_API_URL='${apiUrl}' SCENECART_DEVICE_TOKEN='${token}' npm run worker:local`}</pre>
+            <pre className="overflow-x-auto rounded-[18px] bg-foreground p-4 text-xs leading-6 text-white">{`${doctorCommand}\n${workerCommand}`}</pre>
           </CardContent>
         </Card>
       ) : null}

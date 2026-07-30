@@ -59,6 +59,18 @@ export function recordLlmCall(input: {
   store.set(input.task, current);
 }
 
+export function downgradeLastLlmCall(task: LlmTaskName, reason: string) {
+  const store = telemetryStore();
+  const current = store.get(task);
+  if (!current) return;
+  if (current.connected > 0) {
+    current.connected -= 1;
+    current.fallback += 1;
+  }
+  current.last_reason = reason;
+  store.set(task, current);
+}
+
 function percentile(values: number[], ratio: number) {
   if (!values.length) return 0;
   const sorted = [...values].sort((a, b) => a - b);

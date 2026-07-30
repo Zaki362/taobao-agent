@@ -3,8 +3,12 @@ import { loadEnvConfig } from "@next/env";
 import { defineConfig } from "vitest/config";
 
 const liveEvaluation = process.env.AGENT_EVAL_LIVE === "true";
-if (liveEvaluation) {
-  loadEnvConfig(process.cwd());
+const loadedEnvironment = liveEvaluation
+  ? loadEnvConfig(process.cwd()).combinedEnv
+  : process.env;
+
+if (liveEvaluation && loadedEnvironment.DEEPSEEK_API_KEY) {
+  process.env.DEEPSEEK_API_KEY = loadedEnvironment.DEEPSEEK_API_KEY;
 }
 
 export default defineConfig({
@@ -23,7 +27,9 @@ export default defineConfig({
       RUNTIME_STORE: "local",
       TAOBAO_EXECUTION_BACKEND: "local_executor",
       DEEPSEEK_DISABLED: liveEvaluation ? "false" : "true",
-      DEEPSEEK_API_KEY: liveEvaluation ? process.env.DEEPSEEK_API_KEY ?? "" : ""
+      DEEPSEEK_CHAT_MODEL: loadedEnvironment.DEEPSEEK_CHAT_MODEL ?? "deepseek-chat",
+      DEEPSEEK_REASONER_MODEL: loadedEnvironment.DEEPSEEK_REASONER_MODEL ?? "deepseek-reasoner",
+      ...(liveEvaluation ? {} : { DEEPSEEK_API_KEY: "" })
     }
   }
 });

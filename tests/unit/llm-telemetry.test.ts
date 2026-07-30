@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import {
+  downgradeLastLlmCall,
   getLlmTelemetrySnapshot,
   recordLlmCall,
   resetLlmTelemetryForTests
@@ -21,5 +22,13 @@ describe("LLM telemetry", () => {
       last_reason: "timeout"
     });
     expect(JSON.stringify(snapshot)).not.toContain("Scene Brief");
+  });
+
+  it("counts schema-invalid connected responses as fallback", () => {
+    recordLlmCall({ task: "personalize_template", model: "deepseek-chat", mode: "connected", durationMs: 80 });
+    downgradeLastLlmCall("personalize_template", "schema_validation_failed:missing_modules");
+    const snapshot = getLlmTelemetrySnapshot();
+    expect(snapshot).toMatchObject({ calls: 1, connected: 0, fallback: 1 });
+    expect(snapshot.tasks[0].last_reason).toBe("schema_validation_failed:missing_modules");
   });
 });

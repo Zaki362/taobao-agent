@@ -51,12 +51,36 @@ async function verifyStartup() {
   await fs.access(qoderPath, fsConstants.X_OK).catch(() => {
     throw new Error(`Qoder CLI is not executable at ${qoderPath}. Set QODERCLI_PATH to the installed binary.`);
   });
+  try {
+    const { stdout, stderr } = await execFileAsync(qoderPath, [
+      "-p",
+      "只返回严格 JSON：{\"ok\":true}",
+      "-q",
+      "--yolo",
+      "--allowed-tools",
+      "Read",
+      "--max-turns",
+      "2",
+      "-f",
+      "text"
+    ], {
+      env: process.env,
+      timeout: 20_000,
+      maxBuffer: 1024 * 1024
+    });
+    if (!stdout.trim()) {
+      throw qoderJobError(undefined, stdout, stderr);
+    }
+  } catch (error) {
+    if (error instanceof ExecutorJobError) throw error;
+    throw qoderJobError(error);
+  }
   const response = await fetch(`${apiBaseUrl}/api/runtime/health`);
   const payload = await response.json().catch(() => ({}));
   if (!response.ok || payload.status !== "healthy") {
     throw new Error(payload.error || `SceneCart API health check failed with ${response.status}`);
   }
-  process.stdout.write(`[local-executor] startup checks passed; runtime=${payload.runtime_store}; backend=${payload.executor_backend}\n`);
+  process.stdout.write(`[local-executor] startup checks passed; qoder=session-ready; runtime=${payload.runtime_store}; backend=${payload.executor_backend}\n`);
 }
 
 function parseJson(text) {
@@ -225,7 +249,12 @@ async function heartbeat() {
   }
 }
 
-await verifyStartup();
+try {
+  await verifyStartup();
+} catch (error) {
+  process.stderr.write(`[local-executor] startup failed: ${error instanceof Error ? error.message : String(error)}\n`);
+  process.exit(1);
+}
 const heartbeatTimer = setInterval(heartbeat, 15000);
 
 async function loop() {

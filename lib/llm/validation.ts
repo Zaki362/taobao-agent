@@ -23,6 +23,17 @@ function hasNumberLike(value: unknown) {
   return false;
 }
 
+function hasStringListLike(value: unknown) {
+  if (Array.isArray(value)) {
+    return value.every(hasText);
+  }
+  return hasText(value);
+}
+
+function isOptionalStringListLike(value: unknown) {
+  return value === undefined || hasStringListLike(value);
+}
+
 export function validateSceneBriefOutput(value: unknown): ValidationResult {
   if (!isRecord(value)) {
     return { valid: false, reason: "Scene Brief 不是对象" };
@@ -85,9 +96,9 @@ export function validateShoppingPlanOutput(value: unknown, template: PlanningMod
   if (
     !hasText(directives.detail_policy) ||
     !hasText(directives.recovery_policy) ||
-    !Array.isArray(directives.rerank_rules) ||
-    !Array.isArray(directives.user_confirmation_points) ||
-    !Array.isArray(directives.safety_boundaries)
+    !hasStringListLike(directives.rerank_rules) ||
+    !hasStringListLike(directives.user_confirmation_points) ||
+    !hasStringListLike(directives.safety_boundaries)
   ) {
     return { valid: false, reason: "agent_directives 结构不完整" };
   }
@@ -153,13 +164,13 @@ export function validateShoppingPlanOutput(value: unknown, template: PlanningMod
         return { valid: false, reason: `模块 ${moduleId} 缺少 search_strategy.primary_keyword` };
       }
       if (
-        !Array.isArray(strategy.alternate_keywords) ||
-        !Array.isArray(strategy.include_terms) ||
-        !Array.isArray(strategy.exclude_terms) ||
-        !Array.isArray(strategy.ranking_focus) ||
-        !Array.isArray(strategy.must_have_signals) ||
-        !Array.isArray(strategy.reject_signals) ||
-        !Array.isArray(strategy.quality_checks)
+        !isOptionalStringListLike(strategy.alternate_keywords) ||
+        !isOptionalStringListLike(strategy.include_terms) ||
+        !isOptionalStringListLike(strategy.exclude_terms) ||
+        !isOptionalStringListLike(strategy.ranking_focus) ||
+        !isOptionalStringListLike(strategy.must_have_signals) ||
+        !isOptionalStringListLike(strategy.reject_signals) ||
+        !isOptionalStringListLike(strategy.quality_checks)
       ) {
         return { valid: false, reason: `模块 ${moduleId} 的 search_strategy 列表字段无效` };
       }
