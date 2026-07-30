@@ -9,7 +9,8 @@ import {
   ScenarioId,
   SceneBrief,
   SessionState,
-  ShoppingPlan
+  ShoppingPlan,
+  ShoppingPlanModule
 } from "@/lib/session/types";
 import {
   explainProductFitPrompt,
@@ -28,7 +29,7 @@ import {
   mockRefineScene
 } from "@/lib/llm/mock";
 import { normalizeSceneBriefOptions } from "@/lib/scenarios/normalize";
-import { isScenarioId } from "@/lib/scenarios";
+import { getScenarioConfig, isScenarioId } from "@/lib/scenarios";
 import {
   validateProductFitOutput,
   validateCandidateReviewOutput,
@@ -115,6 +116,11 @@ function asNumber(value: unknown, fallback: number) {
     }
   }
   return fallback;
+}
+
+function asBudgetRatio(value: unknown, fallback: number) {
+  const ratio = asNumber(value, fallback);
+  return ratio > 1 && ratio <= 100 ? ratio / 100 : ratio;
 }
 
 function asString(value: unknown, fallback: string) {
@@ -287,7 +293,22 @@ function normalizePlanQualityReview(
   };
 }
 
-function normalizeSceneBrief(value: unknown, fallback: SceneBrief): SceneBrief {
+function normalizeOptionalNotes(value: unknown, fallback: string) {
+  const originalNotes = fallback.trim();
+  const modelNotes = asString(value, "").trim();
+  if (!modelNotes || /^(无|无额外说明|暂无|none)$/i.test(modelNotes)) {
+    return originalNotes;
+  }
+  if (!originalNotes || modelNotes.includes(originalNotes)) {
+    return modelNotes;
+  }
+  if (originalNotes.includes(modelNotes)) {
+    return originalNotes;
+  }
+  return `${originalNotes}\n模型补充：${modelNotes}`;
+}
+
+export function normalizeSceneBrief(value: unknown, fallback: SceneBrief): SceneBrief {
   const source = value && typeof value === "object" ? (value as Record<string, unknown>) : {};
   return normalizeSceneBriefOptions({
     scenario_id: isScenarioId(source.scenario_id) ? source.scenario_id : fallback.scenario_id,
@@ -298,55 +319,136 @@ function normalizeSceneBrief(value: unknown, fallback: SceneBrief): SceneBrief {
     priority_style: normalizePriorityStyle(source.priority_style),
     already_have: asStringArray(source.already_have),
     avoid_items: asStringArray(source.avoid_items),
-    optional_notes: asString(source.optional_notes, fallback.optional_notes)
+    optional_notes: normalizeOptionalNotes(source.optional_notes, fallback.optional_notes)
   }, fallback);
 }
 
-function normalizeShoppingPlan(value: unknown, fallback: ShoppingPlan): ShoppingPlan {
+export function normalizeShoppingPlan(
+  value: unknown,
+  fallback: ShoppingPlan,
+  template: PlanningModule[] = fallback.modules
+): ShoppingPlan {
   const source = value && typeof value === "object" ? (value as Record<string, unknown>) : {};
   const rawModules = Array.isArray(source.modules) ? source.modules : [];
   const fallbackById = new Map(fallback.modules.map((module) => [module.module_id, module]));
+  const templateById = new Map(template.map((module) => [module.module_id, module]));
+  const normalizedModules: ShoppingPlanModule[] = rawModules.length > 0
+    ? rawModules.map((item) => {
+        const raw = item && typeof item === "object" ? (item as Record<string, unknown>) : {};
+        const rawModuleId = asString(raw.module_id, "");
+        const personalizedBase = fallbackById.get(rawModuleId);
+        const templateDefinition = templateById.get(rawModuleId);
+        const itemTypes = uniqueStringArray(asStringArray(raw.typical_item_types), 6);
+        const adaptivePrimaryKeyword = asString(
+          raw.search_keyword,
+          asString(
+            raw.search_strategy && typeof raw.search_strategy === "object"
+              ? (raw.search_strategy as Record<string, unknown>).primary_keyword
+              : undefined,
+            `${asString(raw.module_name, "专项需求")} ${itemTypes.slice(0, 3).join(" ")}`.trim()
+          )
+        );
+        const adaptiveBase: ShoppingPlanModule = {
+          module_id: rawModuleId,
+          module_name: asString(raw.module_name, "专项需求"),
+          description: asString(raw.description, "根据用户特殊使用场景补充的可选模块。"),
+          default_priority: Math.max(1, Math.min(asNumber(raw.default_priority, 50), 120)),
+          default_budget_ratio: Math.max(0.03, Math.min(asBudgetRatio(raw.default_budget_ratio, 0.1), 0.3)),
+          typical_item_types: itemTypes,
+          optional: true,
+          origin: "ai_adaptive",
+          priority: asNumber(raw.priority, 50),
+          budget_allocation: Math.max(0, asNumber(raw.budget_allocation, 0)),
+          rationale: asString(raw.rationale, "用户描述中存在基础模板未覆盖的专项需求。"),
+          recommendation_strategy: asString(raw.recommendation_strategy, "优先选择需求匹配明确、规格清楚且预算可控的商品。"),
+          search_keyword: adaptivePrimaryKeyword,
+          search_strategy: {
+            primary_keyword: adaptivePrimaryKeyword,
+            alternate_keywords: [],
+            include_terms: itemTypes.slice(0, 3),
+            exclude_terms: [],
+            ranking_focus: ["专项需求匹配", "规格明确", "预算可控"],
+            must_have_signals: itemTypes.slice(0, 4),
+            reject_signals: [],
+            quality_checks: ["商品图片完整", "详情链接可打开", "店铺信息明确", "规格描述清楚"],
+            price_band: "按模块预算控制",
+            reasoning: "围绕用户明确提出的专项使用场景搜索。",
+            failure_recovery: "首轮候选不足时，改用更明确的用品类型补搜一次。"
+          },
+          status: "ready"
+        };
+        const templateBase = templateDefinition
+          ? {
+              ...adaptiveBase,
+              ...templateDefinition,
+              module_id: templateDefinition.module_id,
+              module_name: templateDefinition.module_name,
+              description: templateDefinition.description,
+              typical_item_types: templateDefinition.typical_item_types,
+              optional: templateDefinition.optional,
+              origin: "base_template" as const
+            }
+          : undefined;
+        const isTemplateModule = Boolean(templateDefinition);
+        const base = personalizedBase ?? templateBase ?? adaptiveBase;
+        const moduleId = isTemplateModule ? templateDefinition!.module_id : rawModuleId;
+        return {
+          ...base,
+          module_id: moduleId,
+          module_name: asString(raw.module_name, base.module_name),
+          description: asString(raw.description, base.description),
+          default_priority: asNumber(raw.default_priority, base.default_priority),
+          default_budget_ratio: isTemplateModule
+            ? Math.max(0.01, Math.min(asBudgetRatio(raw.default_budget_ratio, base.default_budget_ratio), 1))
+            : Math.max(0.03, Math.min(asBudgetRatio(raw.default_budget_ratio, base.default_budget_ratio), 0.3)),
+          typical_item_types: itemTypes.length ? itemTypes : base.typical_item_types,
+          optional: isTemplateModule
+            ? (typeof raw.optional === "boolean" ? raw.optional : base.optional)
+            : true,
+          origin: isTemplateModule ? "base_template" : "ai_adaptive",
+          priority: asNumber(raw.priority, base.priority),
+          budget_allocation: asNumber(raw.budget_allocation, base.budget_allocation),
+          rationale: asString(raw.rationale, base.rationale),
+          recommendation_strategy: asString(raw.recommendation_strategy, base.recommendation_strategy),
+          search_keyword: asString(raw.search_keyword, base.search_keyword ?? ""),
+          search_strategy: normalizeSearchStrategy(raw.search_strategy, base.search_strategy),
+          status:
+            raw.status === "pending" || raw.status === "ready" || raw.status === "refined"
+              ? raw.status
+              : base.status
+        };
+      })
+    : fallback.modules.map((module) => ({ ...module, origin: module.origin ?? "base_template" }));
+  const hasModelAdaptiveModule = normalizedModules.some((module) => module.origin === "ai_adaptive");
+  const adaptiveBackfill = hasModelAdaptiveModule
+    ? []
+    : fallback.modules.filter(
+        (module) =>
+          module.origin === "ai_adaptive" &&
+          !normalizedModules.some((item) => item.module_id === module.module_id)
+      );
+  const modules = [...normalizedModules, ...adaptiveBackfill];
+  const executionStrategy = normalizeExecutionStrategy(
+    source.execution_strategy,
+    fallback.execution_strategy,
+    modules.map((module) => module.module_id)
+  );
+  const moduleSequence = [
+    ...executionStrategy.module_sequence,
+    ...modules
+      .map((module) => module.module_id)
+      .filter((moduleId) => !executionStrategy.module_sequence.includes(moduleId))
+  ];
 
   return {
     overall_rationale: asString(source.overall_rationale, fallback.overall_rationale),
     personalization_summary: asString(source.personalization_summary, fallback.personalization_summary),
-    execution_strategy: normalizeExecutionStrategy(
-      source.execution_strategy,
-      fallback.execution_strategy,
-      fallback.modules.map((module) => module.module_id)
-    ),
+    execution_strategy: {
+      ...executionStrategy,
+      module_sequence: moduleSequence
+    },
     agent_directives: normalizeAgentDirectives(source.agent_directives, fallback.agent_directives),
-    modules:
-      rawModules.length > 0
-        ? rawModules.map((item, index) => {
-            const raw = item && typeof item === "object" ? (item as Record<string, unknown>) : {};
-            const rawModuleId = asString(raw.module_id, "");
-            const base = fallbackById.get(rawModuleId) ?? fallback.modules[index] ?? fallback.modules[0];
-            const moduleId = fallbackById.has(rawModuleId) ? rawModuleId : base.module_id;
-            return {
-              ...base,
-              module_id: moduleId,
-              module_name: asString(raw.module_name, base.module_name),
-              description: asString(raw.description, base.description),
-              default_priority: asNumber(raw.default_priority, base.default_priority),
-              default_budget_ratio: asNumber(raw.default_budget_ratio, base.default_budget_ratio),
-              typical_item_types: asStringArray(raw.typical_item_types).length
-                ? asStringArray(raw.typical_item_types)
-                : base.typical_item_types,
-              optional: typeof raw.optional === "boolean" ? raw.optional : base.optional,
-              priority: asNumber(raw.priority, base.priority),
-              budget_allocation: asNumber(raw.budget_allocation, base.budget_allocation),
-              rationale: asString(raw.rationale, base.rationale),
-              recommendation_strategy: asString(raw.recommendation_strategy, base.recommendation_strategy),
-              search_keyword: asString(raw.search_keyword, base.search_keyword ?? ""),
-              search_strategy: normalizeSearchStrategy(raw.search_strategy, base.search_strategy),
-              status:
-                raw.status === "pending" || raw.status === "ready" || raw.status === "refined"
-                  ? raw.status
-                  : base.status
-            };
-          })
-        : fallback.modules
+    modules
   };
 }
 
@@ -451,16 +553,23 @@ export async function personalizeTemplate(
   const safeScene = sanitizeScene(scene);
   const safeTemplate = sanitizeTemplate(template);
   const fallback = mockPersonalizeTemplate(safeScene, template);
+  const adaptivePolicy = getScenarioConfig(scene.scenario_id).adaptive_module_policy;
   const result = await deepseekJson<ShoppingPlan>(
     "personalize_template",
     personalizeTemplatePrompt(safeScene, safeTemplate),
     fallback
   );
-  const validation = result.mode === "connected" ? validateShoppingPlanOutput(result.data, template) : { valid: true };
+  const validation = result.mode === "connected"
+    ? validateShoppingPlanOutput(result.data, template, {
+        maxAdaptiveModules: adaptivePolicy?.max_modules ?? 0,
+        adaptiveIdPrefix: adaptivePolicy?.id_prefix,
+        prohibitedTerms: adaptivePolicy?.prohibited_terms
+      })
+    : { valid: true };
   if (result.mode === "connected" && !validation.valid) {
     downgradeLastLlmCall("personalize_template", `schema_validation_failed:${validation.reason ?? "unknown"}`);
   }
-  const data = validation.valid ? normalizeShoppingPlan(result.data, fallback) : fallback;
+  const data = validation.valid ? normalizeShoppingPlan(result.data, fallback, template) : fallback;
   return {
     data,
     mode: validation.valid ? result.mode : "mock"

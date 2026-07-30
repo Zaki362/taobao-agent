@@ -107,5 +107,16 @@ export const newCarScenario: ScenarioConfig = {
   module_display_labels: {},
   module_help_text: {},
   planning_summary_template: "基于提车初期的使用频率和预算，优先保障安全、整洁和车内便利性。",
-  result_tab_labels: {}
+  result_tab_labels: {},
+  adaptive_module_policy: {
+    max_modules: 2,
+    id_prefix: "adaptive-",
+    activation_hints: [
+      "儿童或婴幼儿同行：可补充儿童安全出行模块",
+      "经常携带宠物：可补充宠物安全与清洁模块",
+      "高频长途、自驾或夜间通勤：可补充针对性的出行保障模块",
+      "有露营、骑行、滑雪等固定装载需求：可补充专属装载保护模块"
+    ],
+    prohibited_terms: ["保险", "金融", "贷款", "维修", "改装", "代办", "充值", "会员", "药品", "医疗"]
+  }
 };

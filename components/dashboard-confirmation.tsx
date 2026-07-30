@@ -228,6 +228,9 @@ export function ConfirmPlanPage({
   const selectedAgentProfile = profileFromDirectives(agentDirectives);
   const planReview = session.plan_review;
   const refinementImpact = session.last_refinement;
+  const adaptiveModules = session.shopping_plan.modules.filter(
+    (module) => module.origin === "ai_adaptive" || !session.base_template.some((item) => item.module_id === module.module_id)
+  );
 
   useEffect(() => {
     setDraftStrategies(
@@ -283,7 +286,7 @@ export function ConfirmPlanPage({
         <CardTitle>确认购物规划</CardTitle>
       </CardHeader>
       <CardContent className="space-y-5">
-        <div className="grid gap-3 rounded-[26px] border border-primary/10 bg-[#fff8f3] p-4 md:grid-cols-4">
+        <div className="grid gap-3 rounded-[26px] border border-primary/10 bg-[#fff8f3] p-4 md:grid-cols-2 xl:grid-cols-5">
           <div>
             <p className="label-text">AI 规划模式</p>
             <p className="mt-2 text-sm font-semibold">
@@ -302,7 +305,24 @@ export function ConfirmPlanPage({
             <p className="label-text">优先模块</p>
             <p className="mt-2 text-sm font-semibold">{topModules.join("、") || "已按预算排序"}</p>
           </div>
+          <div>
+            <p className="label-text">AI 自适应</p>
+            <p className="mt-2 text-sm font-semibold">{adaptiveModules.length ? `${adaptiveModules.length} 个专项模块` : "沿用标准骨架"}</p>
+          </div>
         </div>
+        {adaptiveModules.length ? (
+          <div className="rounded-[22px] border border-teal-200 bg-teal-50/60 p-4">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <p className="text-sm font-semibold text-teal-900">AI 识别到模板外的明确使用需求</p>
+                <p className="mt-1 text-xs leading-6 text-teal-800/80">
+                  已新增 {adaptiveModules.map((module) => module.module_name).join("、")}。这些模块受数量、品类和预算约束，并且只有你确认规划后才会进入搜索。
+                </p>
+              </div>
+              <Badge variant="secondary">需用户确认</Badge>
+            </div>
+          </div>
+        ) : null}
         <div className="subtle-card p-5">
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div>
@@ -430,6 +450,9 @@ export function ConfirmPlanPage({
               alternateKeywords: module.search_strategy?.alternate_keywords?.join("、") || ""
             };
             const isSavingStrategy = savingStrategyModuleId === module.module_id;
+            const isAdaptiveModule =
+              module.origin === "ai_adaptive" ||
+              !session.base_template.some((item) => item.module_id === module.module_id);
 
             return (
               <div key={module.module_id} className="subtle-card p-5">
@@ -437,6 +460,9 @@ export function ConfirmPlanPage({
                   <div>
                     <div className="flex items-center gap-2">
                       <p className="font-semibold">{module.module_name}</p>
+                      <Badge variant={isAdaptiveModule ? "success" : "secondary"}>
+                        {isAdaptiveModule ? "AI 新增" : "基础模板"}
+                      </Badge>
                       <Badge variant="secondary">{getPriorityTone(module.priority)}</Badge>
                     </div>
                     <p className="mt-2 max-w-2xl text-sm leading-7 text-muted-foreground">{module.description}</p>

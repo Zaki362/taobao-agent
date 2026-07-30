@@ -90,4 +90,24 @@ describe(`new-car Agent quality gate (${liveEvaluation ? "live DeepSeek" : "dete
     expect(state.agent_runtime.model_decisions).toBe(1);
     expect(state.agent_runtime.model_rejections).toBe(0);
   });
+
+  it.runIf(liveEvaluation)("adds a bounded adaptive module for an explicit child travel need", async () => {
+    const parsed = await runSceneParser(
+      "刚提新能源 SUV，预算 3000，经常带 3 岁孩子长途出行，已有行车记录仪，希望优先准备儿童乘车安全用品。",
+      "new-car"
+    );
+    const planned = await runDeepSeekPlanner(parsed.data);
+    const adaptiveModules = planned.data.modules.filter((module) => module.origin === "ai_adaptive");
+    const allocatedBudget = planned.data.modules.reduce((sum, module) => sum + module.budget_allocation, 0);
+    const telemetry = getLlmTelemetrySnapshot();
+    const diagnostics = `DeepSeek 自适应模块降级详情：${JSON.stringify(telemetry.tasks)}`;
+
+    expect(parsed.mode, diagnostics).toBe("connected");
+    expect(planned.mode, diagnostics).toBe("connected");
+    expect(adaptiveModules.length).toBeGreaterThanOrEqual(1);
+    expect(adaptiveModules.length).toBeLessThanOrEqual(2);
+    expect(adaptiveModules.every((module) => module.module_id.startsWith("adaptive-") && module.optional === true)).toBe(true);
+    expect(adaptiveModules.some((module) => /儿童|安全座椅|增高垫/.test(`${module.module_name}${module.typical_item_types.join(" ")}`))).toBe(true);
+    expect(allocatedBudget).toBe(parsed.data.budget);
+  });
 });

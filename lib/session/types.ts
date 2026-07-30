@@ -78,6 +78,7 @@ export interface AgentDirectives {
 }
 
 export interface ShoppingPlanModule extends PlanningModule {
+  origin?: "base_template" | "ai_adaptive";
   priority: number;
   budget_allocation: number;
   rationale: string;

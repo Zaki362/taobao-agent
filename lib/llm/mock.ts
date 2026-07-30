@@ -9,6 +9,61 @@ import {
 import { getScenarioConfig } from "@/lib/scenarios";
 import { searchIntentForModule } from "@/lib/agent/search-intents";
 
+function fallbackAdaptiveModules(scene: SceneBrief): ShoppingPlan["modules"] {
+  if (scene.scenario_id !== "new-car") return [];
+  const notes = scene.optional_notes;
+  const definitions = [
+    {
+      matched: /儿童|孩子|宝宝|婴儿|幼儿/.test(notes),
+      module_id: "adaptive-child-safety",
+      module_name: "儿童安全出行",
+      description: "针对儿童同行补充乘车约束、后排防护与舒适用品。",
+      typical_item_types: ["儿童安全座椅", "儿童增高垫", "后排遮阳帘"],
+      keyword: `${scene.vehicle_type} 儿童安全座椅 ISOFIX 适龄`,
+      rationale: "用户明确提到儿童同行，标准新车模板没有单独覆盖适龄与接口适配。"
+    },
+    {
+      matched: /宠物|猫咪|狗狗|猫|狗/.test(notes),
+      module_id: "adaptive-pet-travel",
+      module_name: "宠物安全出行",
+      description: "针对宠物同行补充固定、防污和车内清洁用品。",
+      typical_item_types: ["宠物车载安全带", "后排宠物垫", "宠物防污垫"],
+      keyword: `${scene.vehicle_type} 宠物车载安全带 后排防污垫`,
+      rationale: "用户明确提到宠物同行，标准模板没有覆盖宠物固定和防污需求。"
+    }
+  ].filter((definition) => definition.matched).slice(0, 2);
+
+  return definitions.map((definition, index) => ({
+    module_id: definition.module_id,
+    module_name: definition.module_name,
+    description: definition.description,
+    default_priority: 86 - index * 4,
+    default_budget_ratio: 0.14,
+    typical_item_types: definition.typical_item_types,
+    optional: true,
+    origin: "ai_adaptive",
+    priority: 86 - index * 4,
+    budget_allocation: Math.max(120, Math.round(scene.budget * 0.14)),
+    rationale: definition.rationale,
+    recommendation_strategy: "优先核对适用对象、车辆适配、安装或固定方式，再比较价格和店铺可信度。",
+    search_keyword: definition.keyword,
+    search_strategy: {
+      primary_keyword: definition.keyword,
+      alternate_keywords: definition.typical_item_types.slice(0, 3).map((item) => `${scene.vehicle_type} ${item}`),
+      include_terms: definition.typical_item_types,
+      exclude_terms: [...scene.avoid_items, ...scene.already_have].slice(0, 5),
+      ranking_focus: ["专项需求匹配", "适配信息明确", "店铺可信度"],
+      must_have_signals: definition.typical_item_types.slice(0, 3),
+      reject_signals: ["适用范围不明", "安装方式不明"],
+      quality_checks: ["商品图片完整", "详情链接可打开", "规格描述清楚", "店铺信息明确"],
+      price_band: `建议控制在 ${Math.max(80, Math.round(scene.budget * 0.06))}-${Math.max(180, Math.round(scene.budget * 0.2))} 元区间`,
+      reasoning: "使用专项品类和适配词搜索，避免混入普通车内用品。",
+      failure_recovery: "首轮候选不足时，改用具体用品名称和适用对象补搜一次。"
+    },
+    status: "ready"
+  }));
+}
+
 export function mockParseScene(input: string, scenarioId: SceneBrief["scenario_id"] = "new-car"): SceneBrief {
   const scenario = getScenarioConfig(scenarioId);
   const budgetMatch = input.match(/(\d{3,5})/);
@@ -51,7 +106,7 @@ export function mockPersonalizeTemplate(
   template: PlanningModule[]
 ): ShoppingPlan {
   const scenario = getScenarioConfig(scene.scenario_id);
-  let modules = template
+  let modules: ShoppingPlan["modules"] = template
     .filter((module) => !(scene.avoid_items.some((item) => /装饰|氛围|软装/.test(item)) && /decor|ambience|atmosphere|accent/.test(module.module_id)))
     .filter((module) => !(scene.avoid_items.some((item) => /舒适|过夜|大件/.test(item)) && /comfort|sleep/.test(module.module_id)))
     .map((module) => {
@@ -98,6 +153,7 @@ export function mockPersonalizeTemplate(
 
       return {
         ...module,
+        origin: "base_template" as const,
         priority,
         budget_allocation: Math.max(60, Math.round(scene.budget * ratio)),
         rationale: `结合“${scene.user_stage}”“${scene.priority_style}”和预算 ${scene.budget}，${module.module_name}被放在当前优先级，用来覆盖最容易马上产生价值的购买点。`,
@@ -127,10 +183,20 @@ export function mockPersonalizeTemplate(
     })
     .sort((a, b) => b.priority - a.priority);
 
+  modules = [...modules, ...fallbackAdaptiveModules(scene)].sort((a, b) => b.priority - a.priority);
+
   const total = modules.reduce((sum, item) => sum + item.budget_allocation, 0);
-  const delta = scene.budget - total;
-  if (modules[0]) {
-    modules[0].budget_allocation += delta;
+  if (total > 0) {
+    const targetBudget = Math.round(scene.budget);
+    let allocated = 0;
+    modules = modules.map((module) => {
+      const budgetAllocation = Math.floor((module.budget_allocation / total) * targetBudget);
+      allocated += budgetAllocation;
+      return { ...module, budget_allocation: budgetAllocation };
+    });
+    if (modules[0]) {
+      modules[0].budget_allocation += targetBudget - allocated;
+    }
   }
 
   return {

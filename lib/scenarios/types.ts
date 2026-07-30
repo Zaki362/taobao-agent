@@ -8,6 +8,13 @@ export type ScenarioFieldKey =
   | "avoid_items"
   | "already_have";
 
+export interface AdaptiveModulePolicy {
+  max_modules: number;
+  id_prefix: string;
+  activation_hints: string[];
+  prohibited_terms: string[];
+}
+
 export interface ScenarioConfig {
   id: ScenarioId;
   name: string;
@@ -46,4 +53,5 @@ export interface ScenarioConfig {
   module_help_text: Record<string, string>;
   planning_summary_template: string;
   result_tab_labels: Record<string, string>;
+  adaptive_module_policy?: AdaptiveModulePolicy;
 }

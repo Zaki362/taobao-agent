@@ -101,10 +101,15 @@ test("authenticated new-car workflow reaches recommendations through the durable
 
   try {
     await page.getByRole("button", { name: /新车选购/ }).click();
+    await page.locator("textarea").fill(
+      "刚提新能源 SUV，预算 3000，经常带 3 岁孩子长途出行，已有行车记录仪，希望优先准备儿童乘车安全用品。"
+    );
     await page.getByRole("button", { name: "开始理解需求" }).click();
     await expect(page.getByText("确认场景理解结果")).toBeVisible();
     await page.getByRole("button", { name: "确认需求，开始生成购物规划" }).click();
     await expect(page.getByText("确认购物规划")).toBeVisible();
+    await expect(page.getByText("儿童安全出行", { exact: true })).toBeVisible();
+    await expect(page.getByText("AI 新增", { exact: true }).first()).toBeVisible();
     await page.getByRole("button", { name: "确认规划，开始搜索推荐商品" }).click();
 
     await expect(page.getByRole("button", { name: "查看推荐结果" })).toBeEnabled({ timeout: 120_000 });

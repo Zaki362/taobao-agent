@@ -5,6 +5,12 @@ export interface ValidationResult {
   reason?: string;
 }
 
+export interface ShoppingPlanValidationOptions {
+  maxAdaptiveModules?: number;
+  adaptiveIdPrefix?: string;
+  prohibitedTerms?: string[];
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
@@ -32,6 +38,20 @@ function hasStringListLike(value: unknown) {
 
 function isOptionalStringListLike(value: unknown) {
   return value === undefined || hasStringListLike(value);
+}
+
+function numberLike(value: unknown) {
+  if (!hasNumberLike(value)) return Number.NaN;
+  return typeof value === "number" ? value : Number(String(value).replace(/[^\d.]/g, ""));
+}
+
+function budgetRatioLike(value: unknown) {
+  const ratio = numberLike(value);
+  return ratio > 1 && ratio <= 100 ? ratio / 100 : ratio;
+}
+
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 export function validateSceneBriefOutput(value: unknown): ValidationResult {
@@ -72,7 +92,11 @@ export function validateAgentDecisionOutput(value: unknown): value is AgentDecis
   return true;
 }
 
-export function validateShoppingPlanOutput(value: unknown, template: PlanningModule[]): ValidationResult {
+export function validateShoppingPlanOutput(
+  value: unknown,
+  template: PlanningModule[],
+  options: ShoppingPlanValidationOptions = {}
+): ValidationResult {
   if (!isRecord(value)) {
     return { valid: false, reason: "Shopping Plan 不是对象" };
   }
@@ -103,26 +127,14 @@ export function validateShoppingPlanOutput(value: unknown, template: PlanningMod
     return { valid: false, reason: "agent_directives 结构不完整" };
   }
 
-  const allowedModuleIds = new Set(template.map((module) => module.module_id));
+  const maxAdaptiveModules = Math.max(0, Math.min(options.maxAdaptiveModules ?? 0, 2));
+  const adaptiveIdPrefix = options.adaptiveIdPrefix ?? "adaptive-";
+  const adaptiveIdPattern = new RegExp(`^${escapeRegExp(adaptiveIdPrefix)}[a-z0-9]+(?:-[a-z0-9]+)*$`);
+  const prohibitedTerms = options.prohibitedTerms ?? [];
+  const templateModuleIds = new Set(template.map((module) => module.module_id));
+  const allowedModuleIds = new Set(templateModuleIds);
   const seenModuleIds = new Set<string>();
-
-  if (value.execution_strategy !== undefined) {
-    if (!isRecord(value.execution_strategy)) {
-      return { valid: false, reason: "Shopping Plan 的 execution_strategy 不是对象" };
-    }
-
-    const strategy = value.execution_strategy;
-    if (strategy.module_sequence !== undefined && !Array.isArray(strategy.module_sequence)) {
-      return { valid: false, reason: "execution_strategy.module_sequence 必须是数组" };
-    }
-    if (strategy.module_sequence !== undefined) {
-      for (const moduleId of strategy.module_sequence) {
-        if (typeof moduleId !== "string" || !allowedModuleIds.has(moduleId)) {
-          return { valid: false, reason: `execution_strategy 包含模板外模块：${String(moduleId)}` };
-        }
-      }
-    }
-  }
+  let adaptiveModuleCount = 0;
 
   for (const item of value.modules) {
     if (!isRecord(item)) {
@@ -134,8 +146,34 @@ export function validateShoppingPlanOutput(value: unknown, template: PlanningMod
     }
 
     const moduleId = String(item.module_id);
-    if (!allowedModuleIds.has(moduleId)) {
-      return { valid: false, reason: `Shopping Plan 包含模板外模块：${moduleId}` };
+    const adaptiveModule = !templateModuleIds.has(moduleId);
+    if (adaptiveModule) {
+      adaptiveModuleCount += 1;
+      if (adaptiveModuleCount > maxAdaptiveModules) {
+        return { valid: false, reason: `自适应模块数量超过上限 ${maxAdaptiveModules}` };
+      }
+      if (!adaptiveIdPattern.test(moduleId) || moduleId.length > 56) {
+        return { valid: false, reason: `自适应模块 ID 不合法：${moduleId}` };
+      }
+      if (!hasText(item.module_name) || !hasText(item.description)) {
+        return { valid: false, reason: `自适应模块 ${moduleId} 缺少名称或描述` };
+      }
+      if (!hasNumberLike(item.default_priority) || !hasNumberLike(item.default_budget_ratio)) {
+        return { valid: false, reason: `自适应模块 ${moduleId} 缺少模板优先级或预算比例` };
+      }
+      const budgetRatio = budgetRatioLike(item.default_budget_ratio);
+      if (budgetRatio <= 0 || budgetRatio > 1) {
+        return { valid: false, reason: `自适应模块 ${moduleId} 的预算比例超出安全范围` };
+      }
+      if (!Array.isArray(item.typical_item_types) || item.typical_item_types.length === 0 || item.typical_item_types.length > 6 || !item.typical_item_types.every(hasText)) {
+        return { valid: false, reason: `自适应模块 ${moduleId} 的商品类型无效` };
+      }
+      const proposalText = JSON.stringify(item);
+      const prohibitedTerm = prohibitedTerms.find((term) => term && proposalText.includes(term));
+      if (prohibitedTerm) {
+        return { valid: false, reason: `自适应模块 ${moduleId} 涉及禁止领域：${prohibitedTerm}` };
+      }
+      allowedModuleIds.add(moduleId);
     }
 
     if (seenModuleIds.has(moduleId)) {
@@ -153,6 +191,10 @@ export function validateShoppingPlanOutput(value: unknown, template: PlanningMod
 
     if (!hasText(item.rationale) || !hasText(item.recommendation_strategy)) {
       return { valid: false, reason: `模块 ${moduleId} 缺少规划解释` };
+    }
+
+    if (adaptiveModule && !isRecord(item.search_strategy)) {
+      return { valid: false, reason: `自适应模块 ${moduleId} 必须提供完整搜索策略` };
     }
 
     if (item.search_strategy !== undefined) {
@@ -173,6 +215,24 @@ export function validateShoppingPlanOutput(value: unknown, template: PlanningMod
         !isOptionalStringListLike(strategy.quality_checks)
       ) {
         return { valid: false, reason: `模块 ${moduleId} 的 search_strategy 列表字段无效` };
+      }
+    }
+  }
+
+  if (value.execution_strategy !== undefined) {
+    if (!isRecord(value.execution_strategy)) {
+      return { valid: false, reason: "Shopping Plan 的 execution_strategy 不是对象" };
+    }
+
+    const strategy = value.execution_strategy;
+    if (strategy.module_sequence !== undefined && !Array.isArray(strategy.module_sequence)) {
+      return { valid: false, reason: "execution_strategy.module_sequence 必须是数组" };
+    }
+    if (strategy.module_sequence !== undefined) {
+      for (const moduleId of strategy.module_sequence) {
+        if (typeof moduleId !== "string" || !allowedModuleIds.has(moduleId)) {
+          return { valid: false, reason: `execution_strategy 包含未批准模块：${String(moduleId)}` };
+        }
       }
     }
   }

@@ -25,10 +25,23 @@ export function parseScenePrompt(input: string, scenarioId: SceneBrief["scenario
 
 export function personalizeTemplatePrompt(scene: SceneBrief, template: PlanningModule[]) {
   const scenario = getScenarioConfig(scene.scenario_id);
+  const adaptivePolicy = scenario.adaptive_module_policy;
+  const adaptiveInstructions = adaptivePolicy
+    ? [
+        `如果用户描述中存在基础模板无法明确覆盖的特殊需求，可以新增最多 ${adaptivePolicy.max_modules} 个自适应模块。没有清晰特殊需求时不要新增。`,
+        `自适应 module_id 必须以 ${adaptivePolicy.id_prefix} 开头，只能使用小写字母、数字和连字符；optional 必须为 true。`,
+        "自适应模块必须完整返回 module_name、description、default_priority、default_budget_ratio、typical_item_types，以及普通规划模块要求的全部字段。",
+        `可考虑的触发方向：${adaptivePolicy.activation_hints.join("；")}`,
+        "当用户需求明确命中上述方向，且基础模板的 typical_item_types 没有覆盖对应品类时，应新增自适应模块，不要把独立专项需求硬塞进宽泛模块。",
+        `禁止新增涉及以下服务或高风险领域的模块：${adaptivePolicy.prohibited_terms.join("、")}`,
+        "自适应模块仍只是购物规划提案，必须进入用户确认页，不能直接调用工具。"
+      ]
+    : ["当前场景不允许新增基础模板之外的模块。"];
   return [
     `你是“${scenario.name}”场景化购物 Agent 的规划大脑。`,
     "你必须以基础模板为骨架，但可以在模板范围内做更主动的策略判断：裁剪可选模块、重排模块、调整预算、生成更贴合用户语境的搜索关键词。",
-    "重要边界：不要新增 template 中不存在的 module_id，不要决定工具调用顺序，不要编造真实商品。",
+    "重要边界：除下述受限自适应模块外，不要新增 template 中不存在的 module_id；不要直接调用工具，不要编造真实商品。",
+    ...adaptiveInstructions,
     "每个保留模块都必须给出：priority、budget_allocation、rationale、recommendation_strategy、search_keyword、search_strategy、status。",
     "还必须给出计划级 execution_strategy，用来指导后端 Agent 如何执行这个规划，但它不能直接调用工具。",
     "execution_strategy 结构必须包含 module_sequence、budget_guardrails、tradeoffs、search_notes、stop_rules。",
@@ -43,7 +56,7 @@ export function personalizeTemplatePrompt(scene: SceneBrief, template: PlanningM
     "must_have_signals 给 2-4 个“好候选必须尽量满足”的可观察信号，例如适配性、规格、安装方式、预算段或核心功能；reject_signals 给 2-4 个应明显降权的信号；quality_checks 给 2-4 个进入推荐前要核查的信息完整性或可信度指标，例如图片、详情链接、店铺类型、规格明确度。",
     "failure_recovery 用一句话说明搜索失败、候选质量薄或验收信号不足时如何收缩/改写搜索。",
     "输出必须是严格 JSON，不要附加解释性文本。JSON 结构必须包含 overall_rationale、personalization_summary、execution_strategy、agent_directives、modules。",
-    `允许保留的 module_id 仅限：${template.map((module) => module.module_id).join("、")}`,
+    `基础模板 module_id：${template.map((module) => module.module_id).join("、")}`,
     dataBoundaryNotice(),
     `Scene Brief: ${JSON.stringify(scene, null, 2)}`,
     `Template: ${JSON.stringify(template, null, 2)}`
@@ -59,6 +72,7 @@ export function reviewShoppingPlanPrompt(scene: SceneBrief, plan: ShoppingPlan) 
     modules: plan.modules.map((module) => ({
       module_id: module.module_id,
       module_name: module.module_name,
+      origin: module.origin ?? "base_template",
       priority: module.priority,
       budget_allocation: module.budget_allocation,
       search_keyword: module.search_keyword,
