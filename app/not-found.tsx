@@ -11,7 +11,7 @@ export default function NotFoundPage() {
           </CardHeader>
           <CardContent className="space-y-4">
             <p className="text-sm leading-7 text-muted-foreground">
-              这个地址可能已经失效，或者当前 Demo 暂未开放该入口。
+              这个地址可能已经失效，或者当前版本暂未开放该入口。
             </p>
             <Link
               href="/"
@@ -25,4 +25,3 @@ export default function NotFoundPage() {
     </main>
   );
 }
-

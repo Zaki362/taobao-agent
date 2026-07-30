@@ -12,11 +12,15 @@
 
 Qoder/Taobao 凭证和淘宝登录态始终保留在用户本机，服务端不读取订单、地址、手机号、聊天记录或账号身份资料。
 
+正式产品模式只接受真实淘宝加购结果。开发预览可以显式保留产品内演示购物车，正式模式会在真实动作失败时返回失败并保留可重试状态，不会产生伪成功清单。
+
 ## 2. 服务端配置
 
 正式环境至少配置：
 
 ```bash
+SCENECART_PRODUCT_MODE=production
+ALLOW_DEMO_CART_FALLBACK=false
 RUNTIME_STORE=postgres
 DATABASE_URL=postgresql://USER:PASSWORD@HOST:5432/scenecart
 DATABASE_SSL=true

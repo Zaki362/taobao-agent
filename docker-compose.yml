@@ -23,6 +23,8 @@ services:
     ports:
       - "${PORT:-3000}:3000"
     environment:
+      SCENECART_PRODUCT_MODE: production
+      ALLOW_DEMO_CART_FALLBACK: "false"
       RUNTIME_STORE: postgres
       DATABASE_URL: postgresql://scenecart:${POSTGRES_PASSWORD:-scenecart-local-only}@postgres:5432/scenecart
       DATABASE_SSL: "false"

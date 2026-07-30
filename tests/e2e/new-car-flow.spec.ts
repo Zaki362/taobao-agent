@@ -132,6 +132,8 @@ test("authenticated new-car workflow reaches recommendations through the durable
     await expect(page.getByText("四步完成连接")).toBeVisible();
     await expect(page.getByText("1 台设备在线")).toBeVisible();
     await expect(page.getByText("仍有正式配置未完成")).toBeVisible();
+    await expect(page.getByText("开发预览模式").first()).toBeVisible();
+    await expect(page.getByText("允许演示加购回退")).toBeVisible();
 
     await page.goto("/hosted");
     await expect(page.getByText("Agent Runtime 2.0")).toBeVisible();

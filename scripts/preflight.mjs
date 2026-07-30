@@ -120,6 +120,8 @@ function assertEnvExample() {
     "DEEPSEEK_CHAT_MODEL",
     "DEEPSEEK_REASONER_MODEL",
     "DEEPSEEK_DISABLED",
+    "SCENECART_PRODUCT_MODE",
+    "ALLOW_DEMO_CART_FALLBACK",
     "TAOBAO_EXECUTION_BACKEND",
     "QODERCLI_PATH",
     "TAOBAO_NATIVE_BIN",
@@ -217,6 +219,7 @@ function assertRequiredFiles() {
     "lib/mcp/local-executor.ts",
     "lib/runtime/postgres-repository.ts",
     "lib/runtime/readiness.ts",
+    "lib/runtime/product-mode.ts",
     "lib/runtime/monitoring.ts",
     "lib/security/rate-limit.ts",
     "scripts/local-executor.mjs",
@@ -603,8 +606,12 @@ function assertArchitectureContracts() {
       message: "Qoder provider 不应重新引入直接 taobao-native 实验路径，避免商品页跳转导致登录态问题"
     },
     {
-      ok: cart.includes("demo_cart_fallback") && cart.includes("真实加购失败，已加入产品内演示购物车"),
-      message: "加购链路必须保留真实失败后的演示购物车 fallback，避免淘宝登录/权限问题阻断 Demo"
+      ok:
+        cart.includes("allowDemoCartFallback") &&
+        cart.includes("if (!allowDemoCartFallback())") &&
+        cart.includes("demo_cart_fallback") &&
+        cart.includes("真实加购失败，已加入产品内演示购物车"),
+      message: "加购链路必须由产品模式控制演示回退，正式模式不得把真实失败伪装成成功"
     },
     {
       ok:

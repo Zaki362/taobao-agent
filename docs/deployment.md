@@ -21,6 +21,8 @@ docker compose up --build
 正式域名必须通过反向代理或云平台提供 HTTPS，并配置：
 
 ```bash
+SCENECART_PRODUCT_MODE=production
+ALLOW_DEMO_CART_FALLBACK=false
 APP_ORIGIN=https://scenecart.example.com
 AUTH_COOKIE_SECURE=true
 AUTH_REQUIRED=true
@@ -40,7 +42,9 @@ TAOBAO_EXECUTION_BACKEND=local_executor
 6. 使用隔离淘宝测试账号完成一次搜索；真实加购仅在明确授权且账号能力稳定时验收。
 7. 检查执行台中的任务积压、在线设备、模型 fallback、失败任务和“运行健康诊断”，不得带着严重告警发布。
 
-`health` 只回答进程和数据库是否存活；`readiness` 才会检查数据库持久化、认证、安全 Cookie、正式 HTTPS Origin、DeepSeek、`local_executor`、旧 Mock 标志和当前账号执行器状态，不能用前者代替发布验收。
+`health` 只回答进程和数据库是否存活；`readiness` 才会检查正式产品模式、演示加购回退、数据库持久化、认证、安全 Cookie、正式 HTTPS Origin、DeepSeek、`local_executor`、旧 Mock 标志和当前账号执行器状态，不能用前者代替发布验收。
+
+`SCENECART_PRODUCT_MODE=production` 会强制关闭演示购物车回退，即使误设 `ALLOW_DEMO_CART_FALLBACK=true` 也不会把真实加购失败伪装成成功。开发预览仍可保留该回退，但 UI 与购物清单必须明确标记“演示购物车”。
 
 ## 回滚原则
 

@@ -1,5 +1,7 @@
 export type MpcStatus = {
   mode: "codex_hosted" | "experimental_local" | "qoder_cli" | "local_executor";
+  product_mode?: "development" | "production";
+  demo_cart_fallback?: boolean;
   available: boolean;
   message: string;
   permissions_scope: string[];

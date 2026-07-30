@@ -2,6 +2,7 @@ import { getExecutionBackend } from "@/lib/mcp/client";
 import { isAuthenticationRequired, useSecureAuthCookie } from "@/lib/auth/request";
 import { query } from "@/lib/runtime/database";
 import { getRuntimeRepository, runtimeStoreMode } from "@/lib/runtime";
+import { allowDemoCartFallback, getProductMode } from "@/lib/runtime/product-mode";
 
 export type ReadinessStatus = "pass" | "fail" | "warn";
 
@@ -51,6 +52,28 @@ export async function inspectRuntimeReadiness(userId?: string) {
   const authRequired = isAuthenticationRequired();
   const secureCookie = useSecureAuthCookie();
   const deepSeekConfigured = configured(process.env.DEEPSEEK_API_KEY) && process.env.DEEPSEEK_DISABLED !== "true";
+  const productMode = getProductMode();
+  const demoCartFallback = allowDemoCartFallback();
+
+  checks.push(check(
+    "product_mode",
+    "产品运行模式",
+    productMode === "production" ? "pass" : "fail",
+    true,
+    productMode === "production" ? "正在使用正式产品模式" : "当前仍是开发预览模式",
+    "正式环境设置 SCENECART_PRODUCT_MODE=production"
+  ));
+
+  checks.push(check(
+    "demo_cart_fallback",
+    "演示加购回退",
+    demoCartFallback ? "fail" : "pass",
+    true,
+    demoCartFallback
+      ? "真实加购失败后仍允许写入产品内演示购物车"
+      : "真实加购失败会明确返回失败，不会伪装成淘宝加购成功",
+    "正式环境会强制关闭；开发环境可设置 ALLOW_DEMO_CART_FALLBACK=false"
+  ));
 
   checks.push(check(
     "runtime_store",
@@ -166,6 +189,8 @@ export async function inspectRuntimeReadiness(userId?: string) {
   const readyForProduction = checks.every((item) => !item.required || item.status === "pass");
   const executorReady = checks.find((item) => item.id === "executor_online")?.status === "pass";
   return {
+    product_mode: productMode,
+    demo_cart_fallback: demoCartFallback,
     ready_for_production: readyForProduction,
     operational_for_shopping: readyForProduction && executorReady,
     checked_at: new Date().toISOString(),

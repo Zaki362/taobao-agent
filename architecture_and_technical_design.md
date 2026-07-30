@@ -511,40 +511,42 @@ DeepSeek 在系统中不做“自由 Agent”，而做“受约束的结构化�
 
 ---
 
-## 2.8 Mock / Live 执行模式层
+## 2.8 产品模式与真实执行边界
 
 ### 主要职责
 
-- 让系统在真实外部能力不稳定时仍然完整可演示
-- 在真实链路失败时维持前端体验不崩溃
+- 明确区分开发预览与正式产品
+- 防止真实工具失败在正式环境中被伪装成成功
 
 ### 输入输出
 
 #### 输入
 
-- 当前执行模式
+- 当前产品模式
+- 当前工具执行 backend
 - 工具调用请求
 
 #### 输出
 
-- live 真实结果
-- mock 商品结果
-- demo cart fallback
+- 本地执行器真实结果
+- 明确的外部工具失败
+- 仅限开发预览的 demo cart fallback
 
 ### 和其他层如何协作
 
-- client 层负责决策
-- mock adapter 与 qoder adapter 提供统一接口
+- `product-mode` 负责产品运行边界
+- MCP client 负责选择工具 backend
+- readiness 统一检查产品模式、执行器和演示回退状态
 
 ### 当前实现状态
 
-**已实现，但真实模式不稳定**
+**已实现，真实淘宝能力仍受外部账号与客户端状态影响**
 
 产品当前核心策略是：
 
-- 搜索尽可能走真实能力
-- 加购先尝试真实执行
-- 失败则回退到产品内 demo 购物车
+- 正式路径通过 `local_executor` 持久任务执行搜索与加购
+- `SCENECART_PRODUCT_MODE=production` 时强制关闭演示加购回退
+- 开发预览可显式保留 demo cart，但 UI 必须标注来源
 
 ---
 
@@ -977,7 +979,8 @@ executor 不只负责转发工具调用，也负责把 adapter 输出归一化�
 - `/api/cart/add` 服务端要求 `confirmed: true`
 - MCP executor 根据 `schema.requires_confirmation` 再次校验高风险工具参数
 - 先尝试真实加购
-- 若失败，则回退到 demo cart
+- 正式产品模式失败时明确返回错误并保留重试能力
+- 只有开发预览模式可选择写入明确标记的 demo cart
 
 调试接口 `/api/mcp/run` 也不能绕过这套机制。高风险工具必须同时满足：
 
@@ -986,18 +989,14 @@ executor 不只负责转发工具调用，也负责把 adapter 输出归一化�
 
 这样即使前端被绕过，高风险购物动作仍需要服务端显式确认。
 
-### 5.3 live-first / mock fallback 如何设计
+### 5.3 正式执行与开发回退如何设计
 
-设计上曾尝试：
+当前将两种产品目标显式拆开：
 
-- live-first
-- 失败 fallback mock
-
-但由于淘宝真实能力存在会话问题，目前更实际的策略是：
-
-- 搜索尽量真实
-- 加购失败 fallback demo
-- 整个系统始终保持完整演示闭环
+- 正式产品使用 `local_executor`，只接受真实工具结果
+- 正式加购失败不会修改 `selected_items`，由用户修复登录/权限后重试
+- 开发预览可以启用 demo cart fallback，用于展示完整界面，但结果必须标注为“演示购物车”
+- `/api/runtime/readiness` 会把开发模式或开启演示回退视为不满足发布条件
 
 ### 5.4 为什么不能假设宿主一定开放能力
 
@@ -1430,7 +1429,8 @@ executor 不只负责转发工具调用，也负责把 adapter 输出归一化�
 #### 产出数据
 
 - 真实加购成功：写入 `selected_items`
-- 真实加购失败：写入 demo cart item
+- 正式模式真实加购失败：不写入商品，返回可识别错误
+- 开发预览且允许回退：写入明确标记的 demo cart item
 
 #### 数据流向
 
@@ -1439,7 +1439,7 @@ executor 不只负责转发工具调用，也负责把 adapter 输出归一化�
 -> `runCartExecutor`
 -> 尝试 `executeMcpTool("add_to_cart")`
 -> 若成功：写入真实加购结果
--> 若失败：回退到 demo cart
+-> 若失败：正式模式返回失败；开发预览可按配置回退到 demo cart
 -> 前端进入购物确认页
 
 ---
@@ -1619,5 +1619,6 @@ executor 不只负责转发工具调用，也负责把 adapter 输出归一化�
 - “工具调用由后端规则编排”
 - “高风险工具动作服务端确认”
 - “搜索尽量真实执行”
-- “加购失败回退 demo cart”
+- “正式模式禁止演示加购伪成功”
+- “开发预览可配置且必须标注 demo cart”
 - “统一 workflow，场景配置驱动”

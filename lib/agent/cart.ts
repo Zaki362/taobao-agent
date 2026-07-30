@@ -4,6 +4,7 @@ import { queueAddToCartTask } from "@/lib/mcp/hosted";
 import { summarizeLogText, summarizeLogValue } from "@/lib/mcp/logging";
 import { ProductCandidate, SelectedItem, SessionState } from "@/lib/session/types";
 import { enqueueAddToCartJob } from "@/lib/runtime/jobs";
+import { allowDemoCartFallback } from "@/lib/runtime/product-mode";
 
 function normalizeProductDetailUrl(productId: string, rawUrl?: string) {
   const sourceUrl = rawUrl ?? "";
@@ -86,6 +87,9 @@ export async function runCartExecutor(state: SessionState, productId: string) {
     module_id: product.module_id,
     module_name: state.shopping_plan.modules.find((module) => module.module_id === product.module_id)?.module_name
   }).catch((error) => {
+    if (!allowDemoCartFallback()) {
+      throw error;
+    }
     const fallbackItem = buildSelectedItem(state, product, {
       selectedSpec: "演示购物车默认规格",
       cartSource: "demo",

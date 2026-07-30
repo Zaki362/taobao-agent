@@ -23,6 +23,8 @@ type ReadinessCheck = {
 };
 
 type Readiness = {
+  product_mode: "development" | "production";
+  demo_cart_fallback: boolean;
   ready_for_production: boolean;
   operational_for_shopping: boolean;
   checks: ReadinessCheck[];
@@ -162,9 +164,13 @@ export function ExecutorSettings() {
             网页只负责任务规划和状态展示；真实淘宝操作由本地执行器领取持久化任务后完成。设备令牌只在注册时展示一次。
           </p>
           <div className="mt-5 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+            <span className={`rounded-full px-3 py-1.5 font-semibold ${readiness?.product_mode === "production" ? "bg-emerald-50 text-emerald-700" : "bg-slate-100 text-slate-700"}`}>
+              {!readiness ? "正在读取产品模式" : readiness.product_mode === "production" ? "正式产品模式" : "开发预览模式"}
+            </span>
             <span className={`rounded-full px-3 py-1.5 font-semibold ${onlineDevices.length ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-700"}`}>
               {onlineDevices.length ? `${onlineDevices.length} 台设备在线` : "等待本地执行器"}
             </span>
+            <span>{!readiness ? "正在读取加购策略" : readiness.demo_cart_fallback ? "允许演示加购回退" : "仅接受真实加购结果"}</span>
             <span>{activeDevices.length} 台有效设备</span>
             {lastCheckedAt ? <span>最近检测 {lastCheckedAt}</span> : null}
           </div>

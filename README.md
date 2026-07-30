@@ -32,7 +32,7 @@ SceneCart AI 是一个正在按正式产品架构推进的“场景化购物 Age
 - 生产安全基线：异步 scrypt 密码哈希、认证限流、同源写请求校验、HttpOnly Cookie 和安全响应头
 - 淘宝 skill / MCP 工具层：正式路径为 `local_executor`；原有 Qoder 直连、Codex hosted 和 experimental bridge 仅保留为开发兼容路径
 - 商品搜索链路：当前主流程可串行搜索规划中的各个模块，并生成推荐商品卡片
-- 加购保守策略：高风险动作必须显式确认，服务端和 MCP executor 会双重校验；真实加购失败后回退到产品内演示购物车，保证 Demo 流程完整
+- 加购结果分级：高风险动作必须显式确认，服务端和 MCP executor 会双重校验；开发预览模式可选择回退到产品内演示购物车，正式产品模式强制关闭回退并明确返回真实失败
 - 后端执行台：可查看当前 session、执行进度、工具日志、规划和购物清单
 - 文档材料：包含产品复盘与技术架构文档，适合面试汇报和架构图整理
 
@@ -88,6 +88,8 @@ npm run build
 DEEPSEEK_API_KEY=
 DEEPSEEK_CHAT_MODEL=deepseek-chat
 DEEPSEEK_REASONER_MODEL=deepseek-reasoner
+SCENECART_PRODUCT_MODE=production
+ALLOW_DEMO_CART_FALLBACK=false
 TAOBAO_EXECUTION_BACKEND=local_executor
 QODERCLI_PATH=
 RUNTIME_STORE=postgres
@@ -102,6 +104,8 @@ SCENECART_DEVICE_TOKEN=
 说明：
 
 - `DEEPSEEK_API_KEY`：填写后会尝试启用真实 DeepSeek 能力；只有实际调用成功才标记为 connected。无 key、超时、非 JSON 或接口失败都会走 mock fallback。
+- `SCENECART_PRODUCT_MODE`：本地开发使用 `development`；正式部署必须设为 `production`，此时系统强制禁止演示加购伪成功。
+- `ALLOW_DEMO_CART_FALLBACK`：只对开发预览模式生效。设为 `false` 可在本地提前验证正式加购失败行为。
 - `DEEPSEEK_DISABLED=true`：仅用于自动化测试或离线诊断，显式禁止读取 `.env.local` 中的真实 Key，保证测试不会产生模型调用和费用。
 - `TAOBAO_EXECUTION_BACKEND`：正式路径使用 `local_executor`。`qoder_cli`、`codex_hosted`、`experimental_local` 只用于迁移和本地调试。
 - `RUNTIME_STORE=postgres`：启用 PostgreSQL 用户、Session、任务与事件持久化；`local` 只适合开发和自动化测试。
@@ -183,7 +187,7 @@ lib/scenarios/
 - `POST /api/scene/refine`：根据快捷操作重算方案
 - `POST /api/modules/search`：为指定模块搜索候选商品；可选 `keyword_override` 用于按 Agent 建议补搜
 - `POST /api/agent/next-action`：根据当前 session 决定搜索、补搜、跳过、等待或结束
-- `POST /api/cart/add`：尝试加购，要求 `confirmed: true`；失败后进入 demo cart fallback
+- `POST /api/cart/add`：尝试加购，要求 `confirmed: true`；开发预览可配置演示回退，正式产品模式只接受真实淘宝执行结果
 - `POST /api/session/agent-directives`：用户确认规划前切换 AI 执行档位，写回当前 session 的 `agent_directives`
 - `POST /api/session/search-strategy`：用户确认规划前微调模块搜索任务包，写回当前 session 的主搜索词和备用词
 - `GET /api/session/state`：读取当前 session 完整状态
@@ -240,6 +244,7 @@ npm run worker:local
 - 淘宝搜索能力相对稳定；商品详情页和真实加购受淘宝客户端、授权和登录态影响较大。
 - 淘宝搜索依赖用户本机 Qoder/Taobao skill 和淘宝桌面版登录态；服务端已生产化，但第三方桌面执行能力仍是外部依赖。
 - 加购具备显式确认、后台执行、重试与结果账本，但淘宝客户端权限或账号策略仍可能拒绝动作；系统不会自动下单或支付。
+- 正式产品模式不会把真实加购失败写成成功；产品内演示购物车仅用于明确标注的开发预览。
 - `RUNTIME_STORE=local` 的用户与队列只存于开发进程内，不能替代 PostgreSQL 正式运行时。
 
 ## 项目文档

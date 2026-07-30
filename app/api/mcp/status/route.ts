@@ -2,6 +2,7 @@ import { apiOk, apiRouteError } from "@/lib/api/responses";
 import { getExecutionBackend, getMcpClient } from "@/lib/mcp/client";
 import { getRequestIdentity } from "@/lib/auth/request";
 import { getRuntimeRepository } from "@/lib/runtime";
+import { allowDemoCartFallback, getProductMode } from "@/lib/runtime/product-mode";
 
 export async function GET() {
   try {
@@ -18,6 +19,8 @@ export async function GET() {
       );
       return apiOk({
         mode: "local_executor",
+        product_mode: getProductMode(),
+        demo_cart_fallback: allowDemoCartFallback(),
         available: onlineDevices.length > 0,
         message: onlineDevices.length > 0
           ? `已连接 ${onlineDevices.length} 台本地淘宝执行器，任务将在后台持久执行。`
@@ -32,6 +35,8 @@ export async function GET() {
     const { client, status } = await getMcpClient();
     return apiOk({
       mode: client.mode,
+      product_mode: getProductMode(),
+      demo_cart_fallback: allowDemoCartFallback(),
       available: status.available,
       message: status.message,
       permissions_scope: status.permissions_scope
