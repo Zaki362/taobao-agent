@@ -21,7 +21,12 @@ function isStringArray(value: unknown) {
 }
 
 function isExecutionMode(value: unknown): value is ExecutionMode {
-  return value === "codex_hosted" || value === "experimental_local" || value === "qoder_cli";
+  return (
+    value === "codex_hosted" ||
+    value === "experimental_local" ||
+    value === "qoder_cli" ||
+    value === "local_executor"
+  );
 }
 
 function isMcpStatus(value: unknown): value is MCPStatus {
@@ -42,7 +47,8 @@ export function isAgentDecision(value: unknown): value is AgentDecision {
   const validSource =
     value.source === "plan_strategy" ||
     value.source === "candidate_review" ||
-    value.source === "policy_fallback";
+    value.source === "policy_fallback" ||
+    value.source === "deepseek_runtime";
   const validConfidence =
     value.confidence === "high" ||
     value.confidence === "medium" ||
@@ -58,7 +64,33 @@ export function isAgentDecision(value: unknown): value is AgentDecision {
     (value.keyword_override === undefined || typeof value.keyword_override === "string") &&
     typeof value.reason === "string" &&
     isStringArray(value.evidence) &&
+    (value.expected_gain === undefined || typeof value.expected_gain === "string") &&
+    (value.tool_cost === undefined ||
+      (typeof value.tool_cost === "number" && Number.isFinite(value.tool_cost))) &&
+    (value.guardrail_notes === undefined || isStringArray(value.guardrail_notes)) &&
+    (value.consumed_at === undefined || typeof value.consumed_at === "string") &&
     typeof value.created_at === "string"
+  );
+}
+
+function isAgentRuntimeState(value: unknown) {
+  if (!isRecord(value)) {
+    return false;
+  }
+
+  return (
+    typeof value.max_tool_calls === "number" &&
+    Number.isFinite(value.max_tool_calls) &&
+    typeof value.used_tool_calls === "number" &&
+    Number.isFinite(value.used_tool_calls) &&
+    typeof value.model_decisions === "number" &&
+    Number.isFinite(value.model_decisions) &&
+    typeof value.policy_decisions === "number" &&
+    Number.isFinite(value.policy_decisions) &&
+    (value.last_decision_mode === "none" ||
+      value.last_decision_mode === "deepseek" ||
+      value.last_decision_mode === "policy") &&
+    typeof value.initialized_at === "string"
   );
 }
 
@@ -236,6 +268,7 @@ export function isRenderableSessionState(value: unknown): value is SessionState 
     isRecord(value.module_reviews) &&
     (value.module_search_traces === undefined || isRecord(value.module_search_traces)) &&
     Array.isArray(value.agent_decisions) &&
+    isAgentRuntimeState(value.agent_runtime) &&
     Array.isArray(value.hosted_tasks) &&
     isExecutionMode(value.execution_mode) &&
     isStringArray(value.permissions_scope) &&

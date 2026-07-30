@@ -7,6 +7,7 @@ import { searchIntentForModule } from "@/lib/agent/search-intents";
 import { SearchResultItem } from "@/lib/mcp/types";
 import { ModuleCandidateReview, ModuleSearchAttempt, ModuleSearchTrace, ProductCandidate, SessionState, ShoppingPlanModule } from "@/lib/session/types";
 import { getScenarioConfig } from "@/lib/scenarios";
+import { enqueueModuleSearchJob } from "@/lib/runtime/jobs";
 
 function truncateSentence(text: string, maxLength = 58) {
   const compact = text.replace(/\s+/g, " ").trim();
@@ -324,12 +325,21 @@ export async function runModuleSearch(
 
   const searchKeywordQueue = buildSearchKeywordQueue(state, module, options?.keywordOverride);
   const searchIntent = searchKeywordQueue[0] || searchIntentForModule(state.scene_brief, module);
-  if (getExecutionBackend() === "codex_hosted") {
-    queueModuleSearchTask(state, {
-      module_id: module.module_id,
-      module_name: module.module_name,
-      search_intent: searchIntent
-    });
+  const backend = getExecutionBackend();
+  if (backend === "codex_hosted" || backend === "local_executor") {
+    if (backend === "local_executor") {
+      await enqueueModuleSearchJob(state, {
+        moduleId: module.module_id,
+        moduleName: module.module_name,
+        keyword: searchIntent
+      });
+    } else {
+      queueModuleSearchTask(state, {
+        module_id: module.module_id,
+        module_name: module.module_name,
+        search_intent: searchIntent
+      });
+    }
     const now = new Date().toISOString();
     state.module_search_traces[moduleId] = {
       module_id: module.module_id,
@@ -340,7 +350,9 @@ export async function runModuleSearch(
       attempts: [
         {
           keyword: searchIntent,
-          reason: "当前处于 Codex 宿主代理模式，搜索任务已排队等待宿主执行。",
+          reason: backend === "local_executor"
+            ? "搜索任务已进入持久化队列，等待本地 Qoder/Taobao 执行器领取。"
+            : "当前处于 Codex 宿主代理模式，搜索任务已排队等待宿主执行。",
           result_count: 0,
           status: "skipped",
           created_at: now
@@ -348,8 +360,10 @@ export async function runModuleSearch(
       ],
       result_count: 0,
       candidate_count: state.module_candidates[moduleId]?.length ?? 0,
-      ai_decision_summary: `「${module.module_name}」搜索任务已交给宿主代理，等待回填候选池。`,
-      next_action: "等待宿主代理完成任务并刷新结果。",
+      ai_decision_summary: backend === "local_executor"
+        ? `「${module.module_name}」搜索任务已持久化，执行器完成后会自动回填候选池。`
+        : `「${module.module_name}」搜索任务已交给宿主代理，等待回填候选池。`,
+      next_action: backend === "local_executor" ? "等待本地执行器回填事件。" : "等待宿主代理完成任务并刷新结果。",
       generated_at: state.module_search_traces[moduleId]?.generated_at ?? now,
       updated_at: now
     };

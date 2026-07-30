@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 
 const HOSTED_API_BASE_URL = process.env.HOSTED_API_BASE_URL || "http://127.0.0.1:3000";
+const HOSTED_WORKER_TOKEN = process.env.HOSTED_WORKER_TOKEN || "";
 const OUTPUT_DIR = path.join(process.cwd(), ".data", "hosted-worker");
 const STATUS_FILE = path.join(OUTPUT_DIR, "worker-status.json");
 const MAX_WORKER_STATUS_TEXT = 220;
@@ -59,7 +60,13 @@ async function writeWorkerStatus(patch) {
 }
 
 async function fetchJson(url, init) {
-  const response = await fetch(url, init);
+  const response = await fetch(url, {
+    ...init,
+    headers: {
+      ...(HOSTED_WORKER_TOKEN ? { Authorization: `Bearer ${HOSTED_WORKER_TOKEN}` } : {}),
+      ...(init?.headers || {})
+    }
+  });
   const text = await response.text();
   const payload = text ? JSON.parse(text) : {};
 

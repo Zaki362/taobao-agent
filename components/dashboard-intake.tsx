@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import { ChevronRight, Loader2, Sparkles } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -15,6 +16,20 @@ import {
 import { WorkflowStage } from "@/lib/session/types";
 
 export function TopHeader({ currentStage }: { currentStage: string }) {
+  const [authenticated, setAuthenticated] = useState(false);
+
+  useEffect(() => {
+    fetch("/api/auth/me")
+      .then((response) => response.json())
+      .then((payload) => setAuthenticated(payload.authenticated === true))
+      .catch(() => undefined);
+  }, []);
+
+  async function logout() {
+    await fetch("/api/auth/logout", { method: "POST" }).catch(() => undefined);
+    window.location.assign("/login");
+  }
+
   return (
     <Card className="hero-card">
       <CardContent className="flex flex-col gap-5 px-6 py-6 md:flex-row md:items-end md:justify-between md:px-8 md:py-7">
@@ -35,12 +50,36 @@ export function TopHeader({ currentStage }: { currentStage: string }) {
             <p className="label-text">当前步骤</p>
             <p className="mt-2 text-base font-semibold">{currentStage}</p>
           </div>
-          <a
-            href="/hosted"
-            className="inline-flex h-11 items-center justify-center rounded-full border border-border/80 bg-white px-5 text-sm font-medium text-foreground shadow-sm transition hover:border-primary/30 hover:bg-white"
-          >
-            打开后端执行台
-          </a>
+          <div className="flex flex-wrap justify-end gap-2">
+            <a
+              href="/hosted"
+              className="inline-flex h-11 items-center justify-center rounded-full border border-border/80 bg-white px-4 text-sm font-medium text-foreground shadow-sm transition hover:border-primary/30 hover:bg-white"
+            >
+              后端执行台
+            </a>
+            <a
+              href="/settings/executor"
+              className="inline-flex h-11 items-center justify-center rounded-full border border-border/80 bg-white px-4 text-sm font-medium text-foreground shadow-sm transition hover:border-primary/30 hover:bg-white"
+            >
+              本地执行器
+            </a>
+            {authenticated ? (
+              <button
+                type="button"
+                onClick={logout}
+                className="inline-flex h-11 items-center justify-center rounded-full border border-border/80 bg-white px-4 text-sm font-medium text-muted-foreground shadow-sm transition hover:border-primary/30 hover:text-foreground"
+              >
+                退出登录
+              </button>
+            ) : (
+              <a
+                href="/login"
+                className="inline-flex h-11 items-center justify-center rounded-full border border-border/80 bg-white px-4 text-sm font-medium text-muted-foreground shadow-sm transition hover:border-primary/30 hover:text-foreground"
+              >
+                登录
+              </a>
+            )}
+          </div>
         </div>
       </CardContent>
     </Card>

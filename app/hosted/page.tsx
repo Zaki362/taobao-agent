@@ -1,7 +1,9 @@
 import { ErrorBoundary } from "@/components/error-boundary";
 import { HostedConsole } from "@/components/hosted-console";
+import { requirePageIdentity } from "@/lib/auth/page";
 
-export default function HostedConsolePage() {
+export default async function HostedConsolePage() {
+  await requirePageIdentity();
   return (
     <ErrorBoundary>
       <HostedConsole />

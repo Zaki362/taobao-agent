@@ -1,5 +1,6 @@
 import { apiOk, apiRouteError } from "@/lib/api/responses";
-import { listSessions } from "@/lib/session/store";
+import { loadSessions } from "@/lib/session/repository";
+import { getRequestIdentity } from "@/lib/auth/request";
 
 const MAX_SESSION_LIST_TOOL_LOGS = 16;
 const MAX_SESSION_LIST_HOSTED_TASKS = 16;
@@ -28,7 +29,8 @@ function summarizeModuleSearchTraces<T>(moduleSearchTraces: Record<string, T>) {
 
 export async function GET() {
   try {
-    const sessions = listSessions()
+    const identity = await getRequestIdentity();
+    const sessions = (await loadSessions(identity.userId))
       .sort((a, b) => sessionTimestamp(b.session_id) - sessionTimestamp(a.session_id))
       .map((session) => ({
         session_id: session.session_id,
@@ -48,6 +50,7 @@ export async function GET() {
         module_reviews: session.module_reviews,
         module_search_traces: summarizeModuleSearchTraces(session.module_search_traces),
         agent_decisions: session.agent_decisions.slice(-MAX_SESSION_LIST_AGENT_DECISIONS),
+        agent_runtime: session.agent_runtime,
         tool_logs: session.tool_logs.slice(0, MAX_SESSION_LIST_TOOL_LOGS),
         hosted_tasks: session.hosted_tasks.slice(0, MAX_SESSION_LIST_HOSTED_TASKS)
       }));

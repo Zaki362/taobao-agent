@@ -70,7 +70,7 @@ function failedWithoutCandidates(trace: ModuleSearchTrace | undefined, candidate
   return candidateCount === 0 && trace?.status === "failed";
 }
 
-function makeDecision(
+export function createAgentDecision(
   decision: Omit<AgentDecision, "decision_id" | "created_at">
 ): AgentDecision {
   const now = Date.now();
@@ -93,7 +93,7 @@ export function decideNextAgentAction(state: SessionState): AgentDecision {
     const suggestedKeyword = canRetryFromReview(state, module);
     if (suggestedKeyword) {
       const review = state.module_reviews[module.module_id];
-      return makeDecision({
+      return createAgentDecision({
         action: "retry_module",
         source: "candidate_review",
         confidence: review.source === "deepseek" ? "high" : "medium",
@@ -119,7 +119,7 @@ export function decideNextAgentAction(state: SessionState): AgentDecision {
     }
 
     if (failedWithoutCandidates(trace, candidateCount)) {
-      return makeDecision({
+      return createAgentDecision({
         action: "skip_module",
         source: "policy_fallback",
         confidence: "high",
@@ -130,7 +130,7 @@ export function decideNextAgentAction(state: SessionState): AgentDecision {
       });
     }
 
-    return makeDecision({
+    return createAgentDecision({
       action: "search_module",
       source: "plan_strategy",
       confidence: "high",
@@ -151,7 +151,7 @@ export function decideNextAgentAction(state: SessionState): AgentDecision {
     (task) => task.task_type === "module_search" && (task.status === "pending" || task.status === "running")
   );
   if (activeTasks.length > 0) {
-    return makeDecision({
+    return createAgentDecision({
       action: "wait_for_tools",
       source: "policy_fallback",
       confidence: "high",
@@ -160,7 +160,7 @@ export function decideNextAgentAction(state: SessionState): AgentDecision {
     });
   }
 
-  return makeDecision({
+  return createAgentDecision({
     action: "complete_workflow",
     source: "plan_strategy",
     confidence: "high",
@@ -173,8 +173,43 @@ export function decideNextAgentAction(state: SessionState): AgentDecision {
 }
 
 export function recordAgentDecision(state: SessionState, decision: AgentDecision) {
+  const previous = state.agent_decisions.at(-1);
+  if (
+    previous &&
+    !previous.consumed_at &&
+    previous.action === decision.action &&
+    previous.module_id === decision.module_id &&
+    previous.keyword_override === decision.keyword_override &&
+    Date.now() - new Date(previous.created_at).getTime() < 5_000
+  ) {
+    return previous;
+  }
   state.agent_decisions = [...state.agent_decisions, decision].slice(-MAX_AGENT_DECISIONS);
   return decision;
+}
+
+export function pendingAgentDecision(state: SessionState) {
+  const decision = state.agent_decisions.at(-1);
+  if (!decision || decision.consumed_at) return null;
+  return decision.action === "search_module" || decision.action === "retry_module" ? decision : null;
+}
+
+export function consumeAgentDecision(state: SessionState, moduleId: string) {
+  const decision = [...state.agent_decisions]
+    .reverse()
+    .find(
+      (item) =>
+        !item.consumed_at &&
+        item.module_id === moduleId &&
+        (item.action === "search_module" || item.action === "retry_module")
+    );
+  if (!decision) return false;
+  decision.consumed_at = new Date().toISOString();
+  state.agent_runtime.used_tool_calls = Math.min(
+    state.agent_runtime.max_tool_calls,
+    state.agent_runtime.used_tool_calls + Math.max(1, decision.tool_cost ?? 1)
+  );
+  return true;
 }
 
 export function removeModuleAgentDecisions(state: SessionState, moduleId: string) {

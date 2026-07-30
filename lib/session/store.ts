@@ -351,7 +351,7 @@ function normalizeModuleSearchTraces(
   return normalized;
 }
 
-function normalizeSessionState(state: SessionState): SessionState {
+export function normalizeSessionState(state: SessionState): SessionState {
   const shoppingPlan = {
     ...state.shopping_plan,
     modules: normalizeSearchKeywords(
@@ -396,6 +396,27 @@ function normalizeSessionState(state: SessionState): SessionState {
     agent_decisions: Array.isArray((state as Partial<SessionState>).agent_decisions)
       ? ((state as Partial<SessionState>).agent_decisions ?? []).filter(isAgentDecision).slice(-MAX_AGENT_DECISIONS)
       : [],
+    agent_runtime: {
+      max_tool_calls: Number.isFinite((state as Partial<SessionState>).agent_runtime?.max_tool_calls)
+        ? Math.max(1, Math.round((state as Partial<SessionState>).agent_runtime?.max_tool_calls ?? 12))
+        : 12,
+      used_tool_calls: Number.isFinite((state as Partial<SessionState>).agent_runtime?.used_tool_calls)
+        ? Math.max(0, Math.round((state as Partial<SessionState>).agent_runtime?.used_tool_calls ?? 0))
+        : 0,
+      model_decisions: Number.isFinite((state as Partial<SessionState>).agent_runtime?.model_decisions)
+        ? Math.max(0, Math.round((state as Partial<SessionState>).agent_runtime?.model_decisions ?? 0))
+        : 0,
+      policy_decisions: Number.isFinite((state as Partial<SessionState>).agent_runtime?.policy_decisions)
+        ? Math.max(0, Math.round((state as Partial<SessionState>).agent_runtime?.policy_decisions ?? 0))
+        : 0,
+      last_decision_mode:
+        (state as Partial<SessionState>).agent_runtime?.last_decision_mode === "deepseek" ||
+        (state as Partial<SessionState>).agent_runtime?.last_decision_mode === "policy"
+          ? (state as Partial<SessionState>).agent_runtime!.last_decision_mode
+          : "none",
+      initialized_at:
+        (state as Partial<SessionState>).agent_runtime?.initialized_at ?? new Date().toISOString()
+    },
     selected_items: normalizeSelectedItems(state),
     tool_logs: Array.isArray(state.tool_logs) ? state.tool_logs.slice(0, MAX_TOOL_LOGS) : [],
     hosted_tasks: Array.isArray((state as Partial<SessionState>).hosted_tasks)

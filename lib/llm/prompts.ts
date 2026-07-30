@@ -1,4 +1,4 @@
-import { ModuleCandidateReview, PlanningModule, ProductCandidate, QuickAction, SceneBrief, ShoppingPlan, ShoppingPlanModule } from "@/lib/session/types";
+import { AgentDecisionProposal, ModuleCandidateReview, PlanningModule, ProductCandidate, QuickAction, SceneBrief, SessionState, ShoppingPlan, ShoppingPlanModule } from "@/lib/session/types";
 import { getScenarioConfig } from "@/lib/scenarios";
 
 function dataBoundaryNotice() {
@@ -145,5 +145,60 @@ export function reviewCandidatePoolPrompt({
     }, null, 2)}`,
     `候选商品摘要: ${JSON.stringify(candidateSummaries, null, 2)}`,
     `规则评估参考: ${JSON.stringify(fallbackReview, null, 2)}`
+  ].join("\n");
+}
+
+export function decideNextActionPrompt(
+  state: SessionState,
+  policyFallback: AgentDecisionProposal
+) {
+  const modules = state.shopping_plan.modules.map((module) => ({
+    module_id: module.module_id,
+    module_name: module.module_name,
+    optional: module.optional ?? false,
+    priority: module.priority,
+    budget_allocation: module.budget_allocation,
+    primary_keyword: module.search_strategy?.primary_keyword ?? module.search_keyword,
+    alternate_keywords: module.search_strategy?.alternate_keywords ?? [],
+    candidate_count: state.module_candidates[module.module_id]?.length ?? 0,
+    review: state.module_reviews[module.module_id]
+      ? {
+          status: state.module_reviews[module.module_id].status,
+          summary: state.module_reviews[module.module_id].summary,
+          next_action: state.module_reviews[module.module_id].next_action,
+          suggested_keyword: state.module_reviews[module.module_id].suggested_keyword
+        }
+      : null,
+    trace: state.module_search_traces[module.module_id]
+      ? {
+          status: state.module_search_traces[module.module_id].status,
+          searched_keywords: state.module_search_traces[module.module_id].searched_keywords,
+          result_count: state.module_search_traces[module.module_id].result_count,
+          next_action: state.module_search_traces[module.module_id].next_action
+        }
+      : null
+  }));
+  const activeTasks = state.hosted_tasks
+    .filter((task) => task.status === "pending" || task.status === "running")
+    .map((task) => ({ task_id: task.task_id, task_type: task.task_type, module_id: task.module_id, status: task.status }));
+
+  return [
+    "你是 SceneCart AI Agent Runtime 2.0 的下一步决策器。",
+    "你只负责从动作白名单中选择下一步，不直接执行工具，也不能执行下单、付款、读取订单、地址或聊天记录。",
+    "动作白名单：search_module、retry_module、skip_module、wait_for_tools、complete_workflow。",
+    "决策原则：优先完成高价值模块；已有可用候选时不要重复搜索；候选质量薄且预算允许时可以补搜；有活跃任务时应等待；非可选模块未搜索且未失败时不能跳过；工具预算耗尽时应结束。",
+    "search_module/retry_module 必须填写合法 module_id；retry_module 应提供与已搜索词不同的 keyword_override。",
+    "输出必须是严格 JSON，字段完整，不要输出解释文本。",
+    "JSON 字段：action、confidence、module_id、keyword_override、reason、evidence、expected_gain、tool_cost。",
+    "confidence 只能是 high、medium、low；evidence 为 1-4 条短句；tool_cost 对搜索/补搜填 1，其他动作填 0。",
+    dataBoundaryNotice(),
+    `Scene Brief: ${JSON.stringify(state.scene_brief, null, 2)}`,
+    `Agent Directives: ${JSON.stringify(state.shopping_plan.agent_directives, null, 2)}`,
+    `Execution Strategy: ${JSON.stringify(state.shopping_plan.execution_strategy, null, 2)}`,
+    `Runtime Budget: ${JSON.stringify(state.agent_runtime, null, 2)}`,
+    `Modules: ${JSON.stringify(modules, null, 2)}`,
+    `Active Tasks: ${JSON.stringify(activeTasks, null, 2)}`,
+    `Recent Decisions: ${JSON.stringify(state.agent_decisions.slice(-5).map((decision) => ({ action: decision.action, module_id: decision.module_id, consumed_at: decision.consumed_at, reason: decision.reason })), null, 2)}`,
+    `Policy Fallback Reference: ${JSON.stringify(policyFallback, null, 2)}`
   ].join("\n");
 }

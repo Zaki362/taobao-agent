@@ -2,16 +2,18 @@ import { NextRequest } from "next/server";
 import { ensureSession } from "@/lib/agent/orchestrator";
 import { apiOk, apiRouteError, notFound, requireString } from "@/lib/api/responses";
 import { buildHostedTaskInstruction } from "@/lib/mcp/hosted-protocol";
-import { listSessions, saveSession } from "@/lib/session/store";
+import { loadSessions, persistSession } from "@/lib/session/repository";
 import { isHostedExecutionTask } from "@/lib/session/guards";
+import { getLegacyHostedAccess } from "@/lib/auth/hosted-worker";
 
 export async function GET(request: NextRequest) {
   try {
+    const access = await getLegacyHostedAccess(request);
     const sessionId = request.nextUrl.searchParams.get("session_id");
     const taskId = request.nextUrl.searchParams.get("task_id");
 
     if (sessionId) {
-      const session = await ensureSession(sessionId);
+      const session = await ensureSession(sessionId, access.userId);
       if (!session) {
         return notFound("session not found");
       }
@@ -33,7 +35,7 @@ export async function GET(request: NextRequest) {
       });
     }
 
-    const tasks = listSessions()
+    const tasks = (await loadSessions(access.userId))
       .flatMap((session) => (Array.isArray(session.hosted_tasks) ? session.hosted_tasks : []).filter(isHostedExecutionTask))
       .sort((a, b) => (a.updated_at < b.updated_at ? 1 : -1));
 
@@ -45,10 +47,11 @@ export async function GET(request: NextRequest) {
 
 export async function POST(request: NextRequest) {
   try {
+    const access = await getLegacyHostedAccess(request);
     const body = await request.json().catch(() => ({}));
     const sessionId = requireString(body.session_id, "session_id");
     const taskId = requireString(body.task_id, "task_id");
-    const session = await ensureSession(sessionId);
+    const session = await ensureSession(sessionId, access.userId);
     if (!session) {
       return notFound("session not found");
     }
@@ -62,7 +65,7 @@ export async function POST(request: NextRequest) {
 
     task.status = body.status === "running" ? "running" : task.status;
     task.updated_at = new Date().toISOString();
-    saveSession(session);
+    await persistSession(session);
 
     return apiOk({ task });
   } catch (error) {

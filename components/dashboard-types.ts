@@ -1,5 +1,5 @@
 export type MpcStatus = {
-  mode: "codex_hosted" | "experimental_local" | "qoder_cli";
+  mode: "codex_hosted" | "experimental_local" | "qoder_cli" | "local_executor";
   available: boolean;
   message: string;
   permissions_scope: string[];

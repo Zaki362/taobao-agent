@@ -18,6 +18,7 @@ type SessionListResponse = {
 
 function executionModeLabel(mode: SessionState["execution_mode"]) {
   if (mode === "qoder_cli") return "Qoder CLI 直连";
+  if (mode === "local_executor") return "本地执行器队列";
   if (mode === "codex_hosted") return "Codex 宿主代理";
   return "实验性本地桥接";
 }
@@ -56,6 +57,9 @@ export function HostedConsole() {
       selectedCount: latest?.selected_items.length ?? 0
     };
   }, [sessions, selectedSession]);
+  const activeTaskCount = selectedSession?.hosted_tasks.filter(
+    (task) => task.status === "pending" || task.status === "running"
+  ).length ?? 0;
 
   async function loadData() {
     setBusy(true);
@@ -132,11 +136,15 @@ export function HostedConsole() {
         </div>
 
         <div className={`rounded-[24px] px-4 py-3 text-sm ${
-          workerStatus?.online ? "border border-sky-200 bg-sky-50 text-sky-700" : "border border-emerald-200 bg-emerald-50 text-emerald-700"
+          activeTaskCount > 0 ? "border border-sky-200 bg-sky-50 text-sky-700" : "border border-emerald-200 bg-emerald-50 text-emerald-700"
         }`}>
-          {workerStatus?.online
-            ? `后台执行器在线，状态：${workerStatus.state}，最近动作：${workerStatus.last_result ?? "暂无"}`
-            : "当前主要通过产品后端直连执行。若后续切换到宿主模式，这里会显示宿主执行器状态。"}
+          {selectedSession?.execution_mode === "local_executor"
+            ? activeTaskCount > 0
+              ? `持久任务队列中有 ${activeTaskCount} 个任务等待或正在由本地执行器处理，完成后会通过 SSE 自动回填。`
+              : "本地执行器队列当前没有待处理任务；已完成结果均保存在当前会话。"
+            : workerStatus?.online
+              ? `兼容宿主 Worker 在线，状态：${workerStatus.state}，最近动作：${workerStatus.last_result ?? "暂无"}`
+              : "当前会话没有运行中的后台任务。"}
         </div>
 
         {errorMessage ? (
@@ -198,6 +206,25 @@ export function HostedConsole() {
                       <p className="font-medium text-foreground">原始需求</p>
                       <p className="mt-2 leading-6">{selectedSession.raw_input}</p>
                     </div>
+                  </CardContent>
+                </Card>
+
+                <Card className="section-card">
+                  <CardHeader>
+                    <CardTitle>Agent Runtime 2.0</CardTitle>
+                  </CardHeader>
+                  <CardContent className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+                    <InfoBlock
+                      label="工具预算"
+                      value={`${selectedSession.agent_runtime.used_tool_calls} / ${selectedSession.agent_runtime.max_tool_calls}`}
+                    />
+                    <InfoBlock label="模型决策" value={`${selectedSession.agent_runtime.model_decisions} 次`} />
+                    <InfoBlock label="规则决策" value={`${selectedSession.agent_runtime.policy_decisions} 次`} />
+                    <InfoBlock
+                      label="最近决策源"
+                      value={selectedSession.agent_runtime.last_decision_mode === "deepseek" ? "DeepSeek" : selectedSession.agent_runtime.last_decision_mode === "policy" ? "规则兜底" : "尚未执行"}
+                    />
+                    <InfoBlock label="活跃任务" value={`${activeTaskCount} 个`} />
                   </CardContent>
                 </Card>
 
@@ -275,7 +302,7 @@ export function HostedConsole() {
                             </div>
                             <p className="mt-2 text-xs leading-5 text-muted-foreground">{decision.reason}</p>
                             <p className="mt-2 text-[11px] text-muted-foreground">
-                              来源：{decision.source} · 置信度：{decision.confidence} · {formatTime(decision.created_at)}
+                              来源：{decision.source === "deepseek_runtime" ? "DeepSeek Runtime" : decision.source === "policy_fallback" ? "规则兜底" : decision.source} · 置信度：{decision.confidence} · {decision.consumed_at ? "已执行" : "待执行"} · {formatTime(decision.created_at)}
                             </p>
                           </div>
                         ))
@@ -337,7 +364,7 @@ export function HostedConsole() {
                         </div>
                       )) : (
                         <div className="panel-muted p-4 text-sm text-muted-foreground">
-                          当前会话没有宿主任务，主要依靠后端直连执行。
+                          当前会话没有后台执行任务。
                         </div>
                       )}
                     </CardContent>

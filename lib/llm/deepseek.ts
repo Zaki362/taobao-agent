@@ -1,4 +1,5 @@
 import {
+  AgentDecisionProposal,
   PlanningModule,
   ModuleCandidateReview,
   PlanQualityReview,
@@ -7,6 +8,7 @@ import {
   RecommendationType,
   ScenarioId,
   SceneBrief,
+  SessionState,
   ShoppingPlan
 } from "@/lib/session/types";
 import {
@@ -15,7 +17,8 @@ import {
   personalizeTemplatePrompt,
   reviewCandidatePoolPrompt,
   reviewShoppingPlanPrompt,
-  refinePlanPrompt
+  refinePlanPrompt,
+  decideNextActionPrompt
 } from "@/lib/llm/prompts";
 import {
   mockExplainProductFit,
@@ -31,18 +34,23 @@ import {
   validateCandidateReviewOutput,
   validatePlanQualityReviewOutput,
   validateSceneBriefOutput,
-  validateShoppingPlanOutput
+  validateShoppingPlanOutput,
+  validateAgentDecisionOutput
 } from "@/lib/llm/validation";
 
 const DEEPSEEK_BASE_URL = "https://api.deepseek.com/chat/completions";
 const REQUEST_TIMEOUT_MS = 20_000;
 const REVIEW_TIMEOUT_MS = 8_000;
 const PLAN_REVIEW_TIMEOUT_MS = 6_000;
+const AGENT_DECISION_TIMEOUT_MS = 8_000;
 
-type StructuredTask = "parse_scene" | "personalize_template" | "refine_plan" | "review_candidates" | "review_plan";
+type StructuredTask = "parse_scene" | "personalize_template" | "refine_plan" | "review_candidates" | "review_plan" | "decide_next_action";
 type LlmMode = "connected" | "mock";
 
 function getStructuredModel(task: StructuredTask) {
+  if (task === "decide_next_action") {
+    return process.env.DEEPSEEK_REASONER_MODEL ?? "deepseek-reasoner";
+  }
   if (task === "parse_scene" || task === "personalize_template" || task === "review_candidates" || task === "review_plan") {
     return process.env.DEEPSEEK_CHAT_MODEL ?? "deepseek-chat";
   }
@@ -546,5 +554,35 @@ export async function reviewCandidatePool({
   return {
     data: validation ? normalizeCandidateReview(result.data, fallbackReview) : fallbackReview,
     mode: validation ? result.mode : "mock"
+  };
+}
+
+export async function decideAgentNextAction(
+  state: SessionState,
+  fallback: AgentDecisionProposal
+): Promise<{ data: AgentDecisionProposal; mode: LlmMode }> {
+  const result = await deepseekJson<AgentDecisionProposal>(
+    "decide_next_action",
+    decideNextActionPrompt(state, fallback),
+    fallback,
+    AGENT_DECISION_TIMEOUT_MS
+  );
+  if (result.mode !== "connected" || !validateAgentDecisionOutput(result.data)) {
+    return { data: fallback, mode: "mock" };
+  }
+  return {
+    data: {
+      action: result.data.action,
+      confidence: result.data.confidence,
+      module_id: typeof result.data.module_id === "string" ? result.data.module_id.trim() : undefined,
+      keyword_override: typeof result.data.keyword_override === "string"
+        ? result.data.keyword_override.replace(/\s+/g, " ").trim().slice(0, 80)
+        : undefined,
+      reason: result.data.reason.trim().slice(0, 300),
+      evidence: result.data.evidence.map((item) => item.trim()).filter(Boolean).slice(0, 4),
+      expected_gain: result.data.expected_gain.trim().slice(0, 220),
+      tool_cost: Math.max(0, Math.min(Math.round(result.data.tool_cost), 1))
+    },
+    mode: "connected"
   };
 }

@@ -6,7 +6,7 @@ import { jsonFetch } from "@/components/dashboard-api";
 import { StatusPage } from "@/components/dashboard-common";
 import { ConfirmPlanPage, ConfirmScenePage } from "@/components/dashboard-confirmation";
 import { CartReviewPage, SearchSummaryPage } from "@/components/dashboard-execution";
-import { buildSceneInputFromBrief, getExecutionModeLabel, isHostedMode } from "@/components/dashboard-helpers";
+import { buildSceneInputFromBrief, getExecutionModeLabel, isHostedMode, isQueuedExecutionMode } from "@/components/dashboard-helpers";
 import { LandingPage, RequirementPage, ResumeBanner, TopHeader } from "@/components/dashboard-intake";
 import { ResultsPage } from "@/components/dashboard-results";
 import { HostedWorkerStatus, MpcStatus } from "@/components/dashboard-types";
@@ -330,6 +330,65 @@ export function Dashboard() {
     return () => window.clearInterval(timer);
   }, [session, pendingHostedTasks.length]);
 
+  useEffect(() => {
+    if (!session || mcpStatus?.mode !== "local_executor") {
+      return;
+    }
+
+    const sessionId = session.session_id;
+    const stream = new EventSource(
+      `/api/runtime/events/stream?session_id=${encodeURIComponent(sessionId)}`
+    );
+    let refreshTimer: number | undefined;
+
+    const refreshFromEvent = (event: Event) => {
+      let eventType = "执行任务已更新";
+      try {
+        const payload = JSON.parse((event as MessageEvent).data) as {
+          event_type?: string;
+          payload?: { job_type?: string };
+        };
+        if (payload.event_type === "job.completed") {
+          eventType = payload.payload?.job_type === "add_to_cart"
+            ? "后台加购已完成"
+            : "后台搜索已完成";
+        } else if (payload.event_type === "job.failed") {
+          eventType = "后台任务执行失败，可在执行台查看原因";
+        } else if (payload.event_type === "job.retry_scheduled") {
+          eventType = "后台任务正在自动重试";
+        }
+      } catch {
+        // The persisted session remains the source of truth when event metadata is unavailable.
+      }
+
+      if (refreshTimer) {
+        window.clearTimeout(refreshTimer);
+      }
+      refreshTimer = window.setTimeout(() => {
+        hydrateSession(sessionId)
+          .then(() => setStatusMessage(eventType))
+          .catch(() => undefined);
+      }, 120);
+    };
+
+    for (const eventName of [
+      "job.created",
+      "job.claimed",
+      "job.completed",
+      "job.failed",
+      "job.retry_scheduled"
+    ]) {
+      stream.addEventListener(eventName, refreshFromEvent);
+    }
+
+    return () => {
+      if (refreshTimer) {
+        window.clearTimeout(refreshTimer);
+      }
+      stream.close();
+    };
+  }, [mcpStatus?.mode, session?.session_id]);
+
   async function startParsing() {
     setResumeSnapshot(null);
     setBusy(true);
@@ -418,6 +477,18 @@ export function Dashboard() {
 
         if (decision.action === "wait_for_tools") {
           summary.push(`Agent 正在等待工具回填：${decision.reason}`);
+          setSearchSummary([...summary]);
+          if (mcpStatus?.mode === "local_executor") {
+            const activeTask = latestSession.hosted_tasks.find(
+              (task) => task.task_type === "module_search" && (task.status === "pending" || task.status === "running")
+            );
+            if (activeTask) {
+              setStatusMessage(`本地执行器正在处理「${activeTask.module_name ?? "当前模块"}」，完成后 Agent 会自动继续`);
+              await waitForRuntimeJob(latestSession.session_id, activeTask.task_id);
+              latestSession = await hydrateSession(latestSession.session_id);
+              continue;
+            }
+          }
           break;
         }
 
@@ -464,11 +535,13 @@ export function Dashboard() {
           );
           const count = latestSession.module_candidates[module.module_id]?.length ?? 0;
 
-          if (isHostedMode(mcpStatus)) {
+          if (isQueuedExecutionMode(mcpStatus)) {
             summary.push(
               task?.status === "completed"
                 ? `Agent 已完成「${module.module_name}」并返回 ${count} 个候选商品`
-                : `Agent 已提交「${module.module_name}」任务，等待宿主工具回填`
+                : mcpStatus?.mode === "local_executor"
+                  ? `Agent 已提交「${module.module_name}」任务，等待本地执行器回填`
+                  : `Agent 已提交「${module.module_name}」任务，等待宿主工具回填`
             );
           } else {
             summary.push(
@@ -496,8 +569,10 @@ export function Dashboard() {
       );
       setSearchSummary(summary);
       setStatusMessage(
-        isHostedMode(mcpStatus)
-          ? "执行任务已提交。你可以先查看任务摘要，等 Codex 宿主回填结果后再查看推荐。"
+        isQueuedExecutionMode(mcpStatus)
+          ? mcpStatus?.mode === "local_executor"
+            ? "后台搜索流程已结束或暂停。已完成结果会自动保存在当前会话。"
+            : "执行任务已提交。你可以先查看任务摘要，等 Codex 宿主回填结果后再查看推荐。"
           : "优先模块搜索已完成。你可以直接查看推荐结果。"
       );
     } catch (error) {
@@ -505,6 +580,34 @@ export function Dashboard() {
     } finally {
       setBusy(false);
     }
+  }
+
+  function waitForRuntimeJob(sessionId: string, jobId: string) {
+    return new Promise<void>((resolve, reject) => {
+      const stream = new EventSource(`/api/runtime/events/stream?session_id=${encodeURIComponent(sessionId)}`);
+      const timeout = window.setTimeout(() => {
+        stream.close();
+        reject(new Error("本地执行任务仍在后台运行，你可以稍后返回当前进度继续查看。"));
+      }, 6 * 60 * 1000);
+      const finish = () => {
+        window.clearTimeout(timeout);
+        stream.close();
+        resolve();
+      };
+      for (const eventName of ["job.completed", "job.failed"] as const) {
+        stream.addEventListener(eventName, (event) => {
+          try {
+            const payload = JSON.parse((event as MessageEvent).data) as { job_id?: string };
+            if (payload.job_id === jobId) finish();
+          } catch {
+            // Auxiliary events can be ignored; the persisted session is authoritative.
+          }
+        });
+      }
+      stream.onerror = () => {
+        // EventSource reconnects automatically; the timeout handles a genuinely unavailable stream.
+      };
+    });
   }
 
   async function applyQuickAction(action: QuickAction) {

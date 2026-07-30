@@ -4,17 +4,19 @@ import { apiOk, apiRouteError, badRequest, conflict, notFound, requireString } f
 import { getExecutionBackend } from "@/lib/mcp/client";
 import { executeMcpTool } from "@/lib/mcp/executor";
 import { getMcpToolDefinition, isMcpToolName, validateMcpToolInput } from "@/lib/mcp/schema";
-import { saveSession } from "@/lib/session/store";
+import { persistSession } from "@/lib/session/repository";
+import { getRequestIdentity } from "@/lib/auth/request";
 
 export async function POST(request: NextRequest) {
   try {
+    const identity = await getRequestIdentity();
     if (getExecutionBackend() === "codex_hosted") {
       return conflict("当前为 Codex 宿主执行模式。请通过 hosted task queue 提交与回填执行结果，而不是直接从 Next.js 进程调用 MCP。");
     }
 
     const body = await request.json().catch(() => ({}));
     const sessionId = requireString(body.session_id, "session_id");
-    const state = await ensureSession(sessionId);
+    const state = await ensureSession(sessionId, identity.userId);
     if (!state) {
       return notFound("session not found");
     }
@@ -38,7 +40,7 @@ export async function POST(request: NextRequest) {
     }
 
     const output = await executeMcpTool(state, toolName, input);
-    saveSession(state);
+    await persistSession(state);
     return apiOk({
       output,
       tool_logs: state.tool_logs

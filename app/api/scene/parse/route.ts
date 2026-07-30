@@ -2,9 +2,11 @@ import { NextRequest } from "next/server";
 import { parseOnly } from "@/lib/agent/orchestrator";
 import { apiOk, apiRouteError, requireString } from "@/lib/api/responses";
 import { isScenarioId } from "@/lib/scenarios";
+import { getRequestIdentity } from "@/lib/auth/request";
 
 export async function POST(request: NextRequest) {
   try {
+    await getRequestIdentity();
     const body = await request.json().catch(() => ({}));
     const rawInput = requireString(body.raw_input, "raw_input");
     const scenarioId = isScenarioId(body.scenario_id) ? body.scenario_id : "new-car";

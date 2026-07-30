@@ -2,7 +2,7 @@
 
 import { ShoppingCart, Store } from "lucide-react";
 import { HostedInstructionCard, InfoBlock } from "@/components/dashboard-common";
-import { hasRealDetailUrl, isHostedMode } from "@/components/dashboard-helpers";
+import { hasRealDetailUrl, isHostedMode, isQueuedExecutionMode } from "@/components/dashboard-helpers";
 import { CartReviewItem, HostedWorkerStatus, MpcStatus } from "@/components/dashboard-types";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -38,6 +38,7 @@ export function SearchSummaryPage({
   busy: boolean;
 }) {
   const hostedMode = isHostedMode(mcpStatus);
+  const queuedMode = isQueuedExecutionMode(mcpStatus);
   const traceCount = Object.keys(session.module_search_traces ?? {}).length;
   const recentDecisions = [...session.agent_decisions].reverse().slice(0, 8);
 
@@ -48,7 +49,7 @@ export function SearchSummaryPage({
       </CardHeader>
       <CardContent className="space-y-4">
         <div className="grid gap-3 md:grid-cols-3">
-          {hostedMode ? (
+          {queuedMode ? (
             <>
               <InfoBlock label="已提交任务" value={`${session.hosted_tasks.length} 个`} />
               <InfoBlock label="待执行 / 运行中" value={`${pendingCount} 个`} />
@@ -157,6 +158,10 @@ export function SearchSummaryPage({
               ? `宿主代理队列已在线，当前状态：${workerStatus.state}${workerStatus.last_task_id ? `，最近任务 ${workerStatus.last_task_id}` : ""}`
               : "宿主代理队列离线。待执行任务不会被打包到宿主工作区，请先运行 npm run worker:codex -- watch"}
           </div>
+        ) : mcpStatus?.mode === "local_executor" ? (
+          <div className="rounded-[22px] bg-emerald-50 p-4 text-sm text-emerald-700">
+            当前为本地执行器队列模式。网页请求结束后 Qoder/Taobao 任务仍会在后台运行，完成结果通过执行事件自动回填。
+          </div>
         ) : (
           <div className="rounded-[22px] bg-sky-50 p-4 text-sm text-sky-700">
             当前为 Qoder 直连执行模式。搜索、详情提取与加购动作会直接由 Qoder 调起已安装的淘宝 skill 执行，不经过宿主任务队列。
@@ -165,7 +170,7 @@ export function SearchSummaryPage({
         <details open={expandedLogs} onToggle={(event) => setExpandedLogs((event.target as HTMLDetailsElement).open)} className="subtle-card p-4">
           <summary className="cursor-pointer text-sm font-medium">查看执行轨迹</summary>
           <div className="mt-3 space-y-3">
-            {hostedMode
+            {queuedMode
               ? session.hosted_tasks.slice(0, 8).map((task) => (
                   <div key={task.task_id} className="rounded-[18px] border border-border/80 bg-white p-3 text-sm shadow-sm">
                     <p className="font-medium">{task.module_name ? `[${task.module_name}] ` : ""}{task.title}</p>

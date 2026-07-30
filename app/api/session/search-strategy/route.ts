@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server";
 import { updateModuleSearchStrategy } from "@/lib/agent/orchestrator";
 import { apiOk, apiRouteError, requireString } from "@/lib/api/responses";
+import { getRequestIdentity } from "@/lib/auth/request";
 
 function field(source: unknown, key: string) {
   if (!source || typeof source !== "object") {
@@ -22,6 +23,7 @@ function stringList(value: unknown) {
 
 export async function POST(request: NextRequest) {
   try {
+    const identity = await getRequestIdentity();
     const body = await request.json().catch(() => ({}));
     const sessionId = requireString(field(body, "session_id"), "session_id");
     const moduleId = requireString(field(body, "module_id"), "module_id");
@@ -31,7 +33,7 @@ export async function POST(request: NextRequest) {
     const result = await updateModuleSearchStrategy(sessionId, moduleId, {
       primaryKeyword,
       alternateKeywords
-    });
+    }, identity.userId);
 
     return apiOk({
       state: result.state,

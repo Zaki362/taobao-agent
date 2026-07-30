@@ -1,4 +1,4 @@
-export type ExecutionMode = "codex_hosted" | "experimental_local" | "qoder_cli";
+export type ExecutionMode = "codex_hosted" | "experimental_local" | "qoder_cli" | "local_executor";
 export type PriorityStyle = "实用优先" | "舒适优先" | "安全优先" | "性价比优先";
 export type RecommendationType = "稳妥推荐" | "性价比推荐" | "升级推荐";
 export type MCPStatus = "hosted" | "connected" | "unavailable";
@@ -177,7 +177,7 @@ export type AgentDecisionAction =
   | "wait_for_tools"
   | "complete_workflow";
 
-export type AgentDecisionSource = "plan_strategy" | "candidate_review" | "policy_fallback";
+export type AgentDecisionSource = "deepseek_runtime" | "plan_strategy" | "candidate_review" | "policy_fallback";
 export type AgentDecisionConfidence = "high" | "medium" | "low";
 
 export interface AgentDecision {
@@ -190,7 +190,31 @@ export interface AgentDecision {
   keyword_override?: string;
   reason: string;
   evidence: string[];
+  expected_gain?: string;
+  tool_cost?: number;
+  guardrail_notes?: string[];
   created_at: string;
+  consumed_at?: string;
+}
+
+export interface AgentDecisionProposal {
+  action: AgentDecisionAction;
+  confidence: AgentDecisionConfidence;
+  module_id?: string;
+  keyword_override?: string;
+  reason: string;
+  evidence: string[];
+  expected_gain: string;
+  tool_cost: number;
+}
+
+export interface AgentRuntimeState {
+  max_tool_calls: number;
+  used_tool_calls: number;
+  model_decisions: number;
+  policy_decisions: number;
+  last_decision_mode: "deepseek" | "policy" | "none";
+  initialized_at: string;
 }
 
 export type RefinementModuleDecisionType = "needs_search" | "reused" | "removed";
@@ -240,6 +264,8 @@ export interface HostedExecutionTask {
   payload: Record<string, unknown>;
   result_summary?: string;
   error_message?: string;
+  executor?: "codex" | "qoder" | "local_executor";
+  runtime_job_id?: string;
 }
 
 export interface SelectedItem {
@@ -259,6 +285,7 @@ export interface SelectedItem {
 
 export interface SessionState {
   session_id: string;
+  owner_id?: string;
   raw_input: string;
   scene_brief: SceneBrief;
   base_template: PlanningModule[];
@@ -268,6 +295,7 @@ export interface SessionState {
   module_reviews: Record<string, ModuleCandidateReview>;
   module_search_traces: Record<string, ModuleSearchTrace>;
   agent_decisions: AgentDecision[];
+  agent_runtime: AgentRuntimeState;
   selected_items: SelectedItem[];
   tool_logs: MCPToolLog[];
   hosted_tasks: HostedExecutionTask[];

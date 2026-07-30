@@ -1,0 +1,164 @@
+import {
+  createAgentDecision,
+  decideNextAgentAction
+} from "@/lib/agent/decision-engine";
+import { decideAgentNextAction } from "@/lib/llm/deepseek";
+import type {
+  AgentDecision,
+  AgentDecisionProposal,
+  SessionState,
+  ShoppingPlanModule
+} from "@/lib/session/types";
+
+function proposalFromPolicy(decision: AgentDecision): AgentDecisionProposal {
+  return {
+    action: decision.action,
+    confidence: decision.confidence,
+    module_id: decision.module_id,
+    keyword_override: decision.keyword_override,
+    reason: decision.reason,
+    evidence: decision.evidence,
+    expected_gain:
+      decision.action === "search_module" || decision.action === "retry_module"
+        ? "形成更贴合当前模块和预算的候选商品池"
+        : decision.action === "wait_for_tools"
+          ? "避免重复提交工具任务"
+          : "保持工作流可恢复并控制无效工具消耗",
+    tool_cost: decision.action === "search_module" || decision.action === "retry_module" ? 1 : 0
+  };
+}
+
+function activeModuleTask(state: SessionState, moduleId?: string) {
+  return state.hosted_tasks.some(
+    (task) =>
+      (!moduleId || task.module_id === moduleId) &&
+      (task.status === "pending" || task.status === "running")
+  );
+}
+
+function moduleById(state: SessionState, moduleId?: string) {
+  return state.shopping_plan.modules.find((module) => module.module_id === moduleId);
+}
+
+function isSettled(state: SessionState, module: ShoppingPlanModule) {
+  const hasCandidates = (state.module_candidates[module.module_id]?.length ?? 0) > 0;
+  const skipped = state.agent_decisions.some(
+    (decision) => decision.action === "skip_module" && decision.module_id === module.module_id
+  );
+  return hasCandidates || skipped;
+}
+
+export function validateModelProposal(
+  state: SessionState,
+  proposal: AgentDecisionProposal
+): { valid: boolean; notes: string[] } {
+  const notes: string[] = [];
+  const module = moduleById(state, proposal.module_id);
+  const budgetRemaining = state.agent_runtime.max_tool_calls - state.agent_runtime.used_tool_calls;
+
+  if (proposal.confidence === "low") notes.push("模型置信度过低，使用规则兜底");
+  if (proposal.tool_cost > budgetRemaining) notes.push("模型动作超过本轮工具预算");
+
+  if (proposal.action === "search_module" || proposal.action === "retry_module") {
+    if (!module) notes.push("模型选择了规划外模块");
+    if (activeModuleTask(state, proposal.module_id)) notes.push("该模块已有执行中任务");
+    if (module && proposal.action === "search_module" && (state.module_candidates[module.module_id]?.length ?? 0) > 0) {
+      notes.push("已有候选池时不能重复执行首轮搜索");
+    }
+    if (module && proposal.action === "retry_module") {
+      const searched = state.module_search_traces[module.module_id]?.searched_keywords ?? [];
+      if (!proposal.keyword_override || searched.includes(proposal.keyword_override)) {
+        notes.push("补搜必须提供未尝试过的新关键词");
+      }
+    }
+  }
+
+  if (proposal.action === "skip_module") {
+    if (!module) {
+      notes.push("跳过动作缺少合法模块");
+    } else {
+      const failed = state.module_search_traces[module.module_id]?.status === "failed";
+      if (!module.optional && !failed) notes.push("非可选模块只有执行失败后才能跳过");
+    }
+  }
+
+  if (proposal.action === "wait_for_tools" && !activeModuleTask(state)) {
+    notes.push("当前没有活跃任务，不应等待工具");
+  }
+
+  if (proposal.action === "complete_workflow") {
+    const allSettled = state.shopping_plan.modules.every((item) => isSettled(state, item));
+    if (!allSettled && budgetRemaining > 0) notes.push("仍有未处理模块且工具预算未耗尽");
+  }
+
+  return { valid: notes.length === 0, notes };
+}
+
+function materializeModelDecision(
+  state: SessionState,
+  proposal: AgentDecisionProposal,
+  guardrailNotes: string[]
+) {
+  const module = moduleById(state, proposal.module_id);
+  return createAgentDecision({
+    action: proposal.action,
+    source: "deepseek_runtime",
+    confidence: proposal.confidence,
+    module_id: module?.module_id,
+    module_name: module?.module_name,
+    keyword_override: proposal.keyword_override,
+    reason: proposal.reason,
+    evidence: proposal.evidence,
+    expected_gain: proposal.expected_gain,
+    tool_cost: proposal.tool_cost,
+    guardrail_notes: guardrailNotes
+  });
+}
+
+export async function decideNextAgentActionV2(state: SessionState) {
+  const policyDecision = decideNextAgentAction(state);
+  const policyProposal = proposalFromPolicy(policyDecision);
+  const budgetRemaining = state.agent_runtime.max_tool_calls - state.agent_runtime.used_tool_calls;
+  const hardPolicyAction =
+    policyDecision.action === "wait_for_tools" ||
+    (budgetRemaining <= 0 && policyDecision.action !== "complete_workflow") ||
+    state.shopping_plan.agent_directives.autonomy_level === "保守执行";
+
+  if (budgetRemaining <= 0 && policyDecision.action !== "complete_workflow") {
+    state.agent_runtime.policy_decisions += 1;
+    state.agent_runtime.last_decision_mode = "policy";
+    return createAgentDecision({
+      action: "complete_workflow",
+      source: "policy_fallback",
+      confidence: "high",
+      reason: "本轮 Agent 工具预算已经耗尽，停止继续搜索并保留当前结果。",
+      evidence: [`工具预算：${state.agent_runtime.used_tool_calls}/${state.agent_runtime.max_tool_calls}`],
+      expected_gain: "避免无上限工具调用",
+      tool_cost: 0,
+      guardrail_notes: ["tool_budget_exhausted"]
+    });
+  }
+
+  if (hardPolicyAction) {
+    state.agent_runtime.policy_decisions += 1;
+    state.agent_runtime.last_decision_mode = "policy";
+    return policyDecision;
+  }
+
+  const modeled = await decideAgentNextAction(state, policyProposal);
+  if (modeled.mode === "connected") {
+    const validation = validateModelProposal(state, modeled.data);
+    if (validation.valid) {
+      state.agent_runtime.model_decisions += 1;
+      state.agent_runtime.last_decision_mode = "deepseek";
+      return materializeModelDecision(state, modeled.data, ["动作白名单校验通过", "工具预算校验通过"]);
+    }
+    policyDecision.guardrail_notes = validation.notes;
+  } else {
+    policyDecision.guardrail_notes = ["模型未返回有效结构化决策，已使用规则策略"];
+  }
+
+  state.agent_runtime.policy_decisions += 1;
+  state.agent_runtime.last_decision_mode = "policy";
+  return policyDecision;
+}

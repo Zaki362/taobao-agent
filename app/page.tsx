@@ -1,8 +1,10 @@
 import { Suspense } from "react";
 import { ErrorBoundary } from "@/components/error-boundary";
 import { Dashboard } from "@/components/dashboard";
+import { requirePageIdentity } from "@/lib/auth/page";
 
-export default function HomePage() {
+export default async function HomePage() {
+  await requirePageIdentity();
   return (
     <ErrorBoundary>
       <Suspense

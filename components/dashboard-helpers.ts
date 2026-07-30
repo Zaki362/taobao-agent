@@ -24,12 +24,19 @@ export function isHostedMode(status: MpcStatus | null) {
   return status?.mode === "codex_hosted";
 }
 
+export function isQueuedExecutionMode(status: MpcStatus | null) {
+  return status?.mode === "codex_hosted" || status?.mode === "local_executor";
+}
+
 export function getExecutionModeLabel(status: MpcStatus | null) {
   if (status?.mode === "qoder_cli") {
     return "Qoder CLI 直连执行";
   }
   if (status?.mode === "codex_hosted") {
     return "Codex 宿主代理执行";
+  }
+  if (status?.mode === "local_executor") {
+    return "本地执行器后台执行";
   }
   return "实验性本地桥接";
 }

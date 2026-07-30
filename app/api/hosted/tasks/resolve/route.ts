@@ -2,8 +2,9 @@ import { NextRequest } from "next/server";
 import { ensureSession } from "@/lib/agent/orchestrator";
 import { apiOk, apiRouteError, notFound, requireString } from "@/lib/api/responses";
 import { resolveHostedAddToCartTask, resolveHostedModuleSearchTask } from "@/lib/mcp/hosted";
-import { saveSession } from "@/lib/session/store";
+import { persistSession } from "@/lib/session/repository";
 import { isHostedExecutionTask, isProductCandidate } from "@/lib/session/guards";
+import { getLegacyHostedAccess } from "@/lib/auth/hosted-worker";
 
 function optionalString(value: unknown) {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
@@ -11,10 +12,11 @@ function optionalString(value: unknown) {
 
 export async function POST(request: NextRequest) {
   try {
+    const access = await getLegacyHostedAccess(request);
     const body = await request.json().catch(() => ({}));
     const sessionId = requireString(body.session_id, "session_id");
     const taskId = requireString(body.task_id, "task_id");
-    const session = await ensureSession(sessionId);
+    const session = await ensureSession(sessionId, access.userId);
     if (!session) {
       return notFound("session not found");
     }
@@ -44,7 +46,7 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    saveSession(session);
+    await persistSession(session);
     return apiOk({
       session_id: session.session_id,
       task,

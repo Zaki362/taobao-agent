@@ -49,8 +49,8 @@ export async function executeMcpTool<T extends MCPToolName>(
   state.mcp_status = client.mode === "codex_hosted" ? "hosted" : status.available ? "connected" : "unavailable";
   state.permissions_scope = status.permissions_scope;
 
-  if (client.mode === "codex_hosted") {
-    throw new Error("Codex 宿主模式下不应直接由 Next.js 进程执行 MCP 工具。请改用 hosted task queue。");
+  if (client.mode === "codex_hosted" || client.mode === "local_executor") {
+    throw new Error("队列执行模式下不应直接由 Next.js 请求进程执行 MCP 工具。请提交持久化执行任务。");
   }
 
   try {

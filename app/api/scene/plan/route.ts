@@ -5,6 +5,7 @@ import { SceneBrief } from "@/lib/session/types";
 import { mockParseScene } from "@/lib/llm/mock";
 import { normalizeSceneBriefOptions } from "@/lib/scenarios/normalize";
 import { isScenarioId } from "@/lib/scenarios";
+import { getRequestIdentity } from "@/lib/auth/request";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -64,6 +65,7 @@ function normalizeSceneBriefInput(value: unknown, fallback: SceneBrief): SceneBr
 
 export async function POST(request: NextRequest) {
   try {
+    const identity = await getRequestIdentity();
     const body = await request.json().catch(() => ({}));
     const sceneBriefInput = isRecord(body.scene_brief) ? body.scene_brief : undefined;
     const scenarioId = isScenarioId(body.scenario_id)
@@ -84,8 +86,8 @@ export async function POST(request: NextRequest) {
     const parseDeepSeekMode = asDeepSeekMode(body.parse_deepseek_mode);
 
     const state = sceneBriefInput
-      ? await createSessionFromScene(rawInput ?? "", normalizedSceneBrief, parseDeepSeekMode)
-      : await initializeSession(rawInput, scenarioId);
+      ? await createSessionFromScene(rawInput ?? "", normalizedSceneBrief, parseDeepSeekMode, identity.userId)
+      : await initializeSession(rawInput, scenarioId, identity.userId);
 
     return apiOk({
       session_id: state.session_id,

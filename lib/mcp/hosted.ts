@@ -1,4 +1,4 @@
-import { ProductCandidate, SelectedItem, SessionState } from "@/lib/session/types";
+import { HostedExecutionTask, ProductCandidate, SelectedItem, SessionState } from "@/lib/session/types";
 import { reviewModuleCandidates } from "@/lib/agent/candidate-reviewer";
 import { summarizeLogText } from "@/lib/mcp/logging";
 
@@ -29,6 +29,12 @@ function createTaskLog(
     duration_ms: 0,
     mode
   });
+}
+
+function executionModeForTask(task: { executor?: HostedExecutionTask["executor"] }): SessionState["execution_mode"] {
+  if (task.executor === "local_executor") return "local_executor";
+  if (task.executor === "qoder") return "qoder_cli";
+  return "codex_hosted";
 }
 
 export function queueModuleSearchTask(
@@ -193,7 +199,8 @@ export function resolveHostedModuleSearchTask(
       task.title,
       resultSummary ?? `Codex 宿主已完成搜索，返回 ${candidates.length} 个候选商品。`,
       task.module_id,
-      task.module_name
+      task.module_name,
+      executionModeForTask(task)
     );
     return task;
   }
@@ -203,7 +210,8 @@ export function resolveHostedModuleSearchTask(
     task.title,
     errorMessage ?? "Codex 宿主执行失败。",
     task.module_id,
-    task.module_name
+    task.module_name,
+    executionModeForTask(task)
   );
   return task;
 }
@@ -253,7 +261,8 @@ export function resolveHostedAddToCartTask(
       task.title,
       resultSummary ?? "Codex 宿主已完成加购。",
       task.module_id,
-      task.module_name
+      task.module_name,
+      executionModeForTask(task)
     );
     return task;
   }
@@ -263,7 +272,8 @@ export function resolveHostedAddToCartTask(
     task.title,
     errorMessage ?? "Codex 宿主加购失败。",
     task.module_id,
-    task.module_name
+    task.module_name,
+    executionModeForTask(task)
   );
   return task;
 }

@@ -1,4 +1,4 @@
-import { ModuleCandidateReview, PlanningModule, SceneBrief, ShoppingPlan } from "@/lib/session/types";
+import { AgentDecisionProposal, ModuleCandidateReview, PlanningModule, SceneBrief, ShoppingPlan } from "@/lib/session/types";
 
 export interface ValidationResult {
   valid: boolean;
@@ -45,6 +45,20 @@ export function validateSceneBriefOutput(value: unknown): ValidationResult {
   }
 
   return { valid: true };
+}
+
+export function validateAgentDecisionOutput(value: unknown): value is AgentDecisionProposal {
+  if (!isRecord(value)) return false;
+  const actions = ["search_module", "retry_module", "skip_module", "wait_for_tools", "complete_workflow"];
+  const confidences = ["high", "medium", "low"];
+  if (!actions.includes(String(value.action)) || !confidences.includes(String(value.confidence))) return false;
+  if (!hasText(value.reason) || !hasText(value.expected_gain)) return false;
+  if (!Array.isArray(value.evidence) || !value.evidence.every(hasText)) return false;
+  if (typeof value.tool_cost !== "number" || !Number.isFinite(value.tool_cost) || value.tool_cost < 0) return false;
+  if ((value.action === "search_module" || value.action === "retry_module" || value.action === "skip_module") && !hasText(value.module_id)) {
+    return false;
+  }
+  return true;
 }
 
 export function validateShoppingPlanOutput(value: unknown, template: PlanningModule[]): ValidationResult {

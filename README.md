@@ -1,6 +1,6 @@
 # SceneCart AI
 
-SceneCart AI 是一个“场景化购物 Agent”全栈 Demo。当前稳定场景聚焦 **新车选购 / 新车用品首购**：用户先输入真实场景目标，系统再逐步完成需求理解、购物规划、模块化搜索、推荐展示和下单前清单确认。
+SceneCart AI 是一个正在按正式产品架构推进的“场景化购物 Agent”。当前稳定场景聚焦 **新车选购 / 新车用品首购**：用户先输入真实场景目标，系统再逐步完成需求理解、购物规划、模块化搜索、推荐展示和下单前清单确认。
 
 这个项目不是普通商品搜索页，也不是纯聊天机器人。它的重点是把用户原本需要自己完成的“买什么、先买什么、预算怎么分、每类商品怎么选”这套决策过程产品化。
 
@@ -16,9 +16,13 @@ SceneCart AI 是一个“场景化购物 Agent”全栈 Demo。当前稳定场�
 - 搜索后 Agent 复盘：每个模块搜索后会生成 `module_reviews`，评估候选池是否足够、风险点是什么、下一步建议是什么；有 DeepSeek 时会尝试短超时复盘，无 key 或失败时使用启发式规则评估
 - Agent 搜索决策轨迹：每个模块搜索会写入 `module_search_traces`，记录首轮词、备用词、补搜原因、每次返回数、候选池复盘和下一步建议，让 AI 的执行判断可解释、可恢复
 - 服务端 Agent 决策循环：搜索阶段不再由前端硬编码遍历模块，后端会消费 AI 规划顺序、执行档位、候选池复盘和工具状态，逐轮决定搜索、补搜、容错跳过、等待工具或结束，并把动作写入 `agent_decisions`
+- Agent Runtime 2.0：平衡/探索档位可由 DeepSeek `decide_next_action` 提议下一步动作，后端使用动作白名单、模块合法性、置信度、工具预算和重复调用检查做 guardrail，不合格时回退确定性策略
 - Agent 建议补搜：当候选偏少或质量不足时，推荐页会展示建议搜索词，用户可以一键按 Agent 建议补搜当前模块
 - 快捷调整影响说明：用户点击快捷调整后，系统会生成 `last_refinement`，说明哪些模块需要重搜、哪些候选可复用、哪些模块被移除以及原因
-- 淘宝 skill / MCP 工具层：支持通过 Qoder CLI、Codex hosted worker、experimental local bridge、mock adapter 等方式接入；adapter 输出会统一清洗、去重和类型归一后再进入推荐链路
+- 生产运行时：支持 PostgreSQL 持久化、邮箱登录、HttpOnly 会话、按用户隔离的购物 Session、持久 Job Queue 和执行事件
+- 本地执行器：Qoder/Taobao skill 不再占用 Next.js 请求；设备通过一次性令牌注册，使用心跳、任务租约、自动恢复、结果账本和幂等回填完成本机真实执行
+- 实时回填：搜索、重试和加购事件通过 SSE 推送到当前会话，页面无需轮询等待长请求
+- 淘宝 skill / MCP 工具层：正式路径为 `local_executor`；原有 Qoder 直连、Codex hosted 和 experimental bridge 仅保留为开发兼容路径
 - 商品搜索链路：当前主流程可串行搜索规划中的各个模块，并生成推荐商品卡片
 - 加购保守策略：高风险动作必须显式确认，服务端和 MCP executor 会双重校验；真实加购失败后回退到产品内演示购物车，保证 Demo 流程完整
 - 后端执行台：可查看当前 session、执行进度、工具日志、规划和购物清单
@@ -48,7 +52,7 @@ npm run dev
 http://localhost:3000
 ```
 
-生产构建检查：
+开发模式默认可使用本地文件会话；正式运行请先完成下文的 PostgreSQL 和本地执行器配置。生产构建检查：
 
 ```bash
 npm run check
@@ -72,16 +76,24 @@ npm run build
 DEEPSEEK_API_KEY=
 DEEPSEEK_CHAT_MODEL=deepseek-chat
 DEEPSEEK_REASONER_MODEL=deepseek-reasoner
-TAOBAO_EXECUTION_BACKEND=qoder_cli
+TAOBAO_EXECUTION_BACKEND=local_executor
 QODERCLI_PATH=
-TAOBAO_NATIVE_BIN=
-TAOBAO_MCP_BASE_URL=
+RUNTIME_STORE=postgres
+DATABASE_URL=postgresql://...
+DATABASE_SSL=false
+AUTH_REQUIRED=true
+SCENECART_API_URL=http://127.0.0.1:3000
+SCENECART_DEVICE_TOKEN=
 ```
 
 说明：
 
 - `DEEPSEEK_API_KEY`：填写后会尝试启用真实 DeepSeek 能力；只有实际调用成功才标记为 connected。无 key、超时、非 JSON 或接口失败都会走 mock fallback。
-- `TAOBAO_EXECUTION_BACKEND`：可选 `qoder_cli`、`codex_hosted`、`experimental_local`。当前推荐演示路径是 `qoder_cli` 搜索 + 加购失败 demo fallback。
+- `TAOBAO_EXECUTION_BACKEND`：正式路径使用 `local_executor`。`qoder_cli`、`codex_hosted`、`experimental_local` 只用于迁移和本地调试。
+- `RUNTIME_STORE=postgres`：启用 PostgreSQL 用户、Session、任务与事件持久化；`local` 只适合开发和自动化测试。
+- `DATABASE_URL`：PostgreSQL 连接串。配置后先运行 `npm run db:migrate`。
+- `AUTH_REQUIRED=true`：正式部署必须开启，确保 Session、设备与任务按用户隔离。
+- `SCENECART_DEVICE_TOKEN`：在 `/settings/executor` 注册设备后一次性获得，配置在运行 Qoder/Taobao 的本机，不应写入仓库。
 - `QODERCLI_PATH`：可选，指定本机 qodercli 路径；默认会尝试读取当前用户目录下的 `~/.local/bin/qodercli`。
 - `TAOBAO_NATIVE_BIN`：仅 experimental local bridge 使用，可选，指定 `taobao-native` 命令名或可执行文件路径。
 - `TAOBAO_MCP_BASE_URL`：experimental local bridge 使用的淘宝 MCP bridge 地址。
@@ -104,6 +116,7 @@ components/
 lib/agent/
   orchestrator.ts                  Agent 主编排
   decision-engine.ts               Agent 下一步动作决策与审计记录
+  runtime-v2.ts                    模型提议 + guardrail + 规则兜底
   scene.ts                         场景解析入口
   planner.ts                       模板规划 + DeepSeek 规划接入
   search-strategy.ts               纯搜索关键词与搜索策略归一化，供规划和旧会话恢复复用
@@ -123,6 +136,7 @@ lib/mcp/
   client.ts                        执行 backend 选择
   executor.ts                      工具调用与日志记录
   qoder.ts                         Qoder CLI / 淘宝 skill provider
+  local-executor.ts                持久任务模式 adapter
   hosted.ts                        Codex hosted worker 任务模式
   live.ts                          experimental local bridge adapter
   mock.ts                          演示商品池
@@ -130,6 +144,16 @@ lib/mcp/
 lib/session/
   types.ts                         核心状态类型
   store.ts                         服务端 session store
+  repository.ts                    local / PostgreSQL 统一 Session 接口
+
+lib/runtime/
+  local-repository.ts              开发与测试运行时
+  postgres-repository.ts           PostgreSQL 正式运行时
+  jobs.ts                          设备、队列、回填与执行事件
+
+scripts/
+  local-executor.mjs               独立 Qoder/Taobao 执行进程
+  db-migrate.mjs                   PostgreSQL migration runner
 
 lib/scenarios/
   当前保留多场景配置雏形，稳定产品入口暂以新车选购为主
@@ -149,6 +173,12 @@ lib/scenarios/
 - `GET /api/mcp/status`：读取当前工具执行模式状态
 - `POST /api/mcp/run`：调试 MCP 工具；高风险工具必须同时传 `confirm_high_risk=true` 与 `input.confirmed=true`
 - `GET /api/sessions`：执行台读取会话列表
+- `POST /api/auth/register|login|logout`：用户认证与 HttpOnly 会话
+- `POST /api/executor/devices`：注册本地执行设备并签发一次性令牌
+- `POST /api/executor/jobs/claim`：本地执行器领取带租约的任务
+- `POST /api/executor/jobs/:jobId/resolve`：幂等回填完成/失败结果
+- `GET /api/runtime/events/stream`：按 Session 推送执行事件的 SSE
+- `GET /api/runtime/health`：运行时、数据库和执行 backend 健康检查
 
 错误响应统一为 JSON：
 
@@ -159,12 +189,31 @@ lib/scenarios/
 }
 ```
 
+## 正式运行
+
+完整部署和本地设备接入步骤见 [生产运行时与本地执行器](./docs/production-runtime.md)。最短路径：
+
+```bash
+npm run db:migrate
+npm run build
+npm run start
+```
+
+用户登录后打开 `/settings/executor` 注册本机设备，再在运行淘宝桌面版与 Qoder 的机器启动：
+
+```bash
+SCENECART_API_URL=http://127.0.0.1:3000 \
+SCENECART_DEVICE_TOKEN=一次性设备令牌 \
+npm run worker:local
+```
+
 ## 当前实现边界
 
 - 当前稳定主场景是“新车选购”。`lib/scenarios` 中已有多场景配置雏形，但前端入口暂未完全开放。
 - 淘宝搜索能力相对稳定；商品详情页和真实加购受淘宝客户端、授权和登录态影响较大。
-- 加购失败时会自动进入产品内演示购物车，这是为了保证 Demo 可完整演示，不代表真实淘宝购物车一定成功。
-- Qoder CLI / 淘宝 skill 是实验性执行路径，不应当视为生产级电商执行 API。
+- 淘宝搜索依赖用户本机 Qoder/Taobao skill 和淘宝桌面版登录态；服务端已生产化，但第三方桌面执行能力仍是外部依赖。
+- 加购具备显式确认、后台执行、重试与结果账本，但淘宝客户端权限或账号策略仍可能拒绝动作；系统不会自动下单或支付。
+- `RUNTIME_STORE=local` 的用户与队列只存于开发进程内，不能替代 PostgreSQL 正式运行时。
 
 ## 项目文档
 
@@ -173,6 +222,7 @@ lib/scenarios/
 - [Qoder CLI Provider 说明](./docs/qoder-cli-provider.md)
 - [淘宝 MCP Bridge 说明](./docs/taobao-mcp-bridge.md)
 - [Codex Hosted Worker 说明](./docs/codex-hosted-worker.md)
+- [生产运行时与本地执行器](./docs/production-runtime.md)
 
 ## 推荐演示路径
 

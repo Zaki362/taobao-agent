@@ -1,0 +1,98 @@
+import { beforeEach, describe, expect, it } from "vitest";
+import fs from "node:fs/promises";
+import path from "node:path";
+import { localRuntimeRepository, resetLocalRuntimeForTests } from "@/lib/runtime/local-repository";
+import { applyCompletedRuntimeJob, enqueueModuleSearchJob } from "@/lib/runtime/jobs";
+import { decideNextAgentAction } from "@/lib/agent/decision-engine";
+import { createSessionFixture } from "@/tests/fixtures/session";
+import type { ExecutorDevice } from "@/lib/runtime/types";
+
+const device: ExecutorDevice = {
+  id: "device-test",
+  user_id: "user-test",
+  name: "test executor",
+  token_hash: "digest",
+  capabilities: ["module_search", "add_to_cart"],
+  status: "online",
+  created_at: new Date().toISOString(),
+  updated_at: new Date().toISOString()
+};
+
+describe("durable job queue contract", () => {
+  beforeEach(() => {
+    resetLocalRuntimeForTests();
+  });
+
+  it("deduplicates jobs and completes a claimed job idempotently", async () => {
+    await localRuntimeRepository.createDevice(device);
+    const input = {
+      id: "job-first",
+      user_id: device.user_id,
+      session_id: "session-test",
+      job_type: "module_search" as const,
+      idempotency_key: "search:session:module:keyword",
+      payload: { keyword: "新能源车 行车记录仪" }
+    };
+    const first = await localRuntimeRepository.createJob(input);
+    const duplicate = await localRuntimeRepository.createJob({ ...input, id: "job-duplicate" });
+    expect(duplicate.id).toBe(first.id);
+
+    const claimed = await localRuntimeRepository.claimJob(device, 30_000);
+    expect(claimed?.status).toBe("leased");
+    const running = await localRuntimeRepository.renewJobLease(first.id, device.id, 30_000);
+    expect(running?.status).toBe("running");
+
+    const completed = await localRuntimeRepository.completeJob(first.id, device.id, { results: [] });
+    const replay = await localRuntimeRepository.completeJob(first.id, device.id, { results: [] });
+    expect(completed.alreadyCompleted).toBe(false);
+    expect(replay.alreadyCompleted).toBe(true);
+  });
+
+  it("returns an expired lease to the pending queue", async () => {
+    await localRuntimeRepository.createDevice(device);
+    await localRuntimeRepository.createJob({
+      id: "job-expiring",
+      user_id: device.user_id,
+      session_id: "session-test",
+      job_type: "module_search",
+      idempotency_key: "expiring-job",
+      payload: {},
+      max_attempts: 3
+    });
+    await localRuntimeRepository.claimJob(device, 1);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    expect(await localRuntimeRepository.recoverExpiredJobs()).toBe(1);
+    expect((await localRuntimeRepository.getJob("job-expiring"))?.status).toBe("pending");
+  });
+
+  it("writes an empty executor result to a terminal search trace so the Agent can continue", async () => {
+    await localRuntimeRepository.createDevice(device);
+    const sessionId = `session-runtime-${Date.now()}`;
+    const state = createSessionFixture({ session_id: sessionId });
+    const module = state.shopping_plan.modules[0];
+    const job = await enqueueModuleSearchJob(state, {
+      moduleId: module.module_id,
+      moduleName: module.module_name,
+      keyword: module.search_strategy!.primary_keyword
+    });
+    await localRuntimeRepository.saveSession(state);
+    await localRuntimeRepository.claimJob(device, 30_000);
+
+    const completion = await applyCompletedRuntimeJob(job.id, device, {
+      summary: "搜索完成但没有合格候选",
+      candidates: []
+    });
+    const replay = await applyCompletedRuntimeJob(job.id, device, {
+      summary: "重复回执",
+      candidates: []
+    });
+    const restored = await localRuntimeRepository.getSession(sessionId, device.user_id);
+
+    expect(completion.alreadyCompleted).toBe(false);
+    expect(replay.alreadyCompleted).toBe(true);
+    expect(restored?.module_search_traces[module.module_id].status).toBe("failed");
+    expect(decideNextAgentAction(restored!).action).toBe("skip_module");
+
+    await fs.unlink(path.join(process.cwd(), ".data", "sessions", `${sessionId}.json`)).catch(() => undefined);
+  });
+});

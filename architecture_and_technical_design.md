@@ -1,5 +1,41 @@
 # SceneCart AI 产品架构与技术方案
 
+> 2026-07 Runtime 2.0 更新：当前正式架构已增加 PostgreSQL、用户认证、持久 Job Queue、执行事件/SSE、本地 Qoder/Taobao 执行器，以及模型驱动 `decide_next_action`。文档中关于内存 Session、同步 Qoder 请求或 Codex hosted 主路径的描述仅代表历史演进；正式推荐路径以本节和 `docs/production-runtime.md` 为准。
+
+## 0. 当前正式运行架构
+
+```text
+Browser / React workflow
+  -> Authenticated Next.js API
+  -> Agent Orchestrator
+     -> Scene template + DeepSeek structured tasks
+     -> Agent Runtime 2.0 (model proposal + guardrail + policy fallback)
+  -> PostgreSQL
+     -> shopping_sessions
+     -> agent_jobs
+     -> execution_events
+  -> SSE -> Browser
+
+Local Executor on user's device
+  -> device token + heartbeat
+  -> claim leased job
+  -> Qoder CLI -> Taobao skill
+  -> local result ledger
+  -> idempotent resolve API
+```
+
+正式实现的关键变化：
+
+- Session 不再只依赖 Next.js 进程内 Map 或本地 JSON；`RUNTIME_STORE=postgres` 时按用户持久化到 PostgreSQL。
+- Qoder/Taobao 不再运行在 `/api/modules/search` 或 `/api/cart/add` 的长请求内；API 只创建任务并立即返回。
+- 本地执行器使用一次性设备令牌、15 秒心跳、任务租约、最大重试次数和结果账本。
+- 搜索、失败重试和加购结果以执行事件写入，并通过 SSE 自动刷新当前浏览器会话。
+- DeepSeek 可以在平衡/探索档位提议下一动作，但只能在动作白名单中选择；后端验证模块、重复任务、置信度和工具预算后才执行。
+- 保守档位、模型失败、低置信度、越界动作或预算耗尽时，确定性策略始终可接管。
+- 旧 Qoder 直连、Codex hosted 与 experimental bridge 仍保留为兼容路径，不再作为正式部署首选。
+
+当前生产边界：服务端运行时已具备正式架构，但真实淘宝能力仍依赖用户本机淘宝桌面版、Qoder CLI、淘宝 skill、登录态与淘宝侧开放权限；系统不承诺绕过这些外部限制，也不会自动下单或支付。
+
 ## 1. 产品架构总览
 
 ### 1.1 产品整体由哪些层组成

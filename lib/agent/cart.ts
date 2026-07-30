@@ -3,6 +3,7 @@ import { executeMcpTool } from "@/lib/mcp/executor";
 import { queueAddToCartTask } from "@/lib/mcp/hosted";
 import { summarizeLogText, summarizeLogValue } from "@/lib/mcp/logging";
 import { ProductCandidate, SelectedItem, SessionState } from "@/lib/session/types";
+import { enqueueAddToCartJob } from "@/lib/runtime/jobs";
 
 function normalizeProductDetailUrl(productId: string, rawUrl?: string) {
   const sourceUrl = rawUrl ?? "";
@@ -48,7 +49,24 @@ export async function runCartExecutor(state: SessionState, productId: string) {
     throw new Error("product not found");
   }
 
-  if (getExecutionBackend() === "codex_hosted") {
+  const backend = getExecutionBackend();
+  if (backend === "local_executor") {
+    const moduleName = state.shopping_plan.modules.find((module) => module.module_id === product.module_id)?.module_name;
+    const job = await enqueueAddToCartJob(state, {
+      productId: product.product_id,
+      moduleId: product.module_id,
+      moduleName,
+      title: product.title
+    });
+    return {
+      success: true,
+      message: "已提交本地执行器后台加购",
+      product_id: product.product_id,
+      task_id: job.id
+    };
+  }
+
+  if (backend === "codex_hosted") {
     return queueAddToCartTask(state, {
       product_id: product.product_id,
       module_id: product.module_id,

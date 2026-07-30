@@ -1,5 +1,6 @@
 import { runCartExecutor } from "@/lib/agent/cart";
-import { decideNextAgentAction, recordAgentDecision, removeModuleAgentDecisions } from "@/lib/agent/decision-engine";
+import { consumeAgentDecision, pendingAgentDecision, recordAgentDecision, removeModuleAgentDecisions } from "@/lib/agent/decision-engine";
+import { decideNextAgentActionV2 } from "@/lib/agent/runtime-v2";
 import { AgentDirectiveProfile, applyAgentDirectiveProfile } from "@/lib/agent/directives";
 import { runDeepSeekPlanner, runTemplatePlannerForScenario } from "@/lib/agent/planner";
 import { reviewPlanWithAgent } from "@/lib/agent/plan-reviewer";
@@ -7,7 +8,7 @@ import { runModuleSearch } from "@/lib/agent/product-matcher";
 import { getDefaultSceneInput, runSceneParser, sceneSummary } from "@/lib/agent/scene";
 import { runRefiner } from "@/lib/agent/refiner";
 import { getExecutionBackend } from "@/lib/mcp/client";
-import { getSession, saveSession } from "@/lib/session/store";
+import { loadSession, persistSession } from "@/lib/session/repository";
 import { ModuleSearchStrategy, PlanQualityReview, QuickAction, ScenarioId, SceneBrief, SessionState } from "@/lib/session/types";
 import { getScenarioConfig } from "@/lib/scenarios";
 
@@ -21,12 +22,14 @@ function createBaseState(
   deepseekMode: "connected" | "mock",
   baseTemplate: Awaited<ReturnType<typeof runTemplatePlannerForScenario>>,
   shoppingPlan: Awaited<ReturnType<typeof runDeepSeekPlanner>>["data"],
-  planReview: PlanQualityReview
+  planReview: PlanQualityReview,
+  ownerId?: string
 ): SessionState {
   const backend = getExecutionBackend();
   const scenario = getScenarioConfig(sceneBrief.scenario_id);
   return {
     session_id: generateSessionId(),
+    owner_id: ownerId,
     raw_input: rawInput,
     scene_brief: sceneBrief,
     base_template: baseTemplate,
@@ -36,6 +39,14 @@ function createBaseState(
     module_reviews: {},
     module_search_traces: {},
     agent_decisions: [],
+    agent_runtime: {
+      max_tool_calls: 12,
+      used_tool_calls: 0,
+      model_decisions: 0,
+      policy_decisions: 0,
+      last_decision_mode: "none",
+      initialized_at: new Date().toISOString()
+    },
     selected_items: [],
     tool_logs: [],
     hosted_tasks: [],
@@ -50,35 +61,40 @@ function createBaseState(
   };
 }
 
-export async function initializeSession(rawInput = getDefaultSceneInput(), scenarioId: ScenarioId = "new-car") {
+export async function initializeSession(
+  rawInput = getDefaultSceneInput(),
+  scenarioId: ScenarioId = "new-car",
+  ownerId?: string
+) {
   const parsed = await runSceneParser(rawInput, scenarioId);
   const baseTemplate = await runTemplatePlannerForScenario(parsed.data);
   const planned = await runDeepSeekPlanner(parsed.data);
   const reviewed = await reviewPlanWithAgent(parsed.data, planned.data);
-  const state = createBaseState(rawInput, parsed.data, parsed.mode === "connected" || planned.mode === "connected" || reviewed.mode === "connected" ? "connected" : "mock", baseTemplate, planned.data, reviewed.data);
+  const state = createBaseState(rawInput, parsed.data, parsed.mode === "connected" || planned.mode === "connected" || reviewed.mode === "connected" ? "connected" : "mock", baseTemplate, planned.data, reviewed.data, ownerId);
 
-  saveSession(state);
+  await persistSession(state);
   return state;
 }
 
 export async function createSessionFromScene(
   rawInput: string,
   sceneBrief: SceneBrief,
-  parseMode: "connected" | "mock" = "mock"
+  parseMode: "connected" | "mock" = "mock",
+  ownerId?: string
 ) {
   const baseTemplate = await runTemplatePlannerForScenario(sceneBrief);
   const planned = await runDeepSeekPlanner(sceneBrief);
   const reviewed = await reviewPlanWithAgent(sceneBrief, planned.data);
-  const state = createBaseState(rawInput, sceneBrief, parseMode === "connected" || planned.mode === "connected" || reviewed.mode === "connected" ? "connected" : "mock", baseTemplate, planned.data, reviewed.data);
-  saveSession(state);
+  const state = createBaseState(rawInput, sceneBrief, parseMode === "connected" || planned.mode === "connected" || reviewed.mode === "connected" ? "connected" : "mock", baseTemplate, planned.data, reviewed.data, ownerId);
+  await persistSession(state);
   return state;
 }
 
-export async function ensureSession(sessionId?: string) {
+export async function ensureSession(sessionId?: string, userId?: string) {
   if (!sessionId) {
     return null;
   }
-  const existing = getSession(sessionId);
+  const existing = await loadSession(sessionId, userId);
   if (existing) {
     return existing;
   }
@@ -90,24 +106,24 @@ export async function parseOnly(rawInput: unknown, scenarioId: ScenarioId = "new
   return parsed;
 }
 
-export async function planOnly(rawInput: string, sessionId?: string) {
-  const state = sessionId ? await ensureSession(sessionId) : await initializeSession(rawInput);
+export async function planOnly(rawInput: string, sessionId?: string, userId?: string) {
+  const state = sessionId ? await ensureSession(sessionId, userId) : await initializeSession(rawInput, "new-car", userId);
   if (!state) {
     throw new Error("session not found");
   }
-  saveSession(state);
+  await persistSession(state);
   return state;
 }
 
-export async function refineSession(sessionId: string, action: QuickAction) {
-  const state = await ensureSession(sessionId);
+export async function refineSession(sessionId: string, action: QuickAction, userId?: string) {
+  const state = await ensureSession(sessionId, userId);
   if (!state) {
     throw new Error("session not found");
   }
   const refined = await runRefiner(state, action);
 
   state.current_scene_label = `${getScenarioConfig(state.scene_brief.scenario_id).name} · ${sceneSummary(state.scene_brief)}`;
-  saveSession(state);
+  await persistSession(state);
   return {
     state,
     impactedModules: refined.impactedModules,
@@ -120,54 +136,57 @@ export async function searchModule(
   moduleId: string,
   options?: {
     keywordOverride?: string;
-  }
+  },
+  userId?: string
 ) {
-  const state = await ensureSession(sessionId);
+  const state = await ensureSession(sessionId, userId);
   if (!state) {
     throw new Error("session not found");
   }
   const candidates = await runModuleSearch(state, moduleId, options);
-  saveSession(state);
+  consumeAgentDecision(state, moduleId);
+  await persistSession(state);
   return {
     state,
     candidates
   };
 }
 
-export async function getNextAgentAction(sessionId: string) {
-  const state = await ensureSession(sessionId);
+export async function getNextAgentAction(sessionId: string, userId?: string) {
+  const state = await ensureSession(sessionId, userId);
   if (!state) {
     throw new Error("session not found");
   }
 
-  const decision = recordAgentDecision(state, decideNextAgentAction(state));
-  saveSession(state);
+  const pending = pendingAgentDecision(state);
+  const decision = pending ?? recordAgentDecision(state, await decideNextAgentActionV2(state));
+  await persistSession(state);
   return {
     state,
     decision
   };
 }
 
-export async function addToCart(sessionId: string, productId: string) {
-  const state = await ensureSession(sessionId);
+export async function addToCart(sessionId: string, productId: string, userId?: string) {
+  const state = await ensureSession(sessionId, userId);
   if (!state) {
     throw new Error("session not found");
   }
   const result = await runCartExecutor(state, productId);
-  saveSession(state);
+  await persistSession(state);
   return {
     state,
     result
   };
 }
 
-export async function updateAgentDirectiveProfile(sessionId: string, profile: AgentDirectiveProfile) {
-  const state = await ensureSession(sessionId);
+export async function updateAgentDirectiveProfile(sessionId: string, profile: AgentDirectiveProfile, userId?: string) {
+  const state = await ensureSession(sessionId, userId);
   if (!state) {
     throw new Error("session not found");
   }
   const directives = applyAgentDirectiveProfile(state, profile);
-  saveSession(state);
+  await persistSession(state);
   return {
     state,
     directives
@@ -180,9 +199,10 @@ export async function updateModuleSearchStrategy(
   payload: {
     primaryKeyword: string;
     alternateKeywords?: string[];
-  }
+  },
+  userId?: string
 ) {
-  const state = await ensureSession(sessionId);
+  const state = await ensureSession(sessionId, userId);
   if (!state) {
     throw new Error("session not found");
   }
@@ -262,7 +282,7 @@ export async function updateModuleSearchStrategy(
     mode: state.execution_mode
   });
 
-  saveSession(state);
+  await persistSession(state);
   return {
     state,
     module
