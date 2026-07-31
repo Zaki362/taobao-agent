@@ -1,4 +1,5 @@
 import { refinePlan } from "@/lib/llm/deepseek";
+import { refreshMarketFeedback } from "@/lib/agent/market-feedback";
 import { runDeepSeekPlanner } from "@/lib/agent/planner";
 import { reviewPlanWithAgent } from "@/lib/agent/plan-reviewer";
 import { removeModuleAgentDecisions } from "@/lib/agent/decision-engine";
@@ -152,6 +153,7 @@ export async function runRefiner(state: SessionState, action: QuickAction) {
     delete state.module_search_traces[moduleId];
     removeModuleAgentDecisions(state, moduleId);
   }
+  refreshMarketFeedback(state);
 
   return {
     state,

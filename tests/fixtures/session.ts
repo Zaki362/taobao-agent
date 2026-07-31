@@ -1,5 +1,6 @@
 import { mockParseScene, mockPersonalizeTemplate, mockReviewShoppingPlan } from "@/lib/llm/mock";
 import { NEW_CAR_SETUP_TEMPLATE } from "@/lib/templates/new-car-template";
+import { buildMarketFeedback } from "@/lib/agent/market-feedback";
 import type { SessionState } from "@/lib/session/types";
 
 export function createSessionFixture(overrides: Partial<SessionState> = {}): SessionState {
@@ -19,6 +20,11 @@ export function createSessionFixture(overrides: Partial<SessionState> = {}): Ses
     module_candidates: {},
     module_reviews: {},
     module_search_traces: {},
+    market_feedback: buildMarketFeedback({
+      scene_brief: scene,
+      shopping_plan: plan,
+      module_candidates: {}
+    }),
     agent_decisions: [],
     agent_runtime: {
       max_tool_calls: 12,

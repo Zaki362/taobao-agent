@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { reviewModuleCandidates } from "@/lib/agent/candidate-reviewer";
+import { buildMarketFeedback } from "@/lib/agent/market-feedback";
 import { normalizeSearchKeywords } from "@/lib/agent/search-strategy";
 import { mockReviewShoppingPlan } from "@/lib/llm/mock";
 import { isAgentDecision, isHostedExecutionTask, isModuleCandidateReview, isModuleSearchTrace, isProductCandidate, isRefinementImpactSummary, isSelectedItem, isSessionState } from "@/lib/session/guards";
@@ -393,6 +394,7 @@ export function normalizeSessionState(state: SessionState): SessionState {
     module_candidates: normalizedModuleCandidates,
     module_reviews: moduleReviews,
     module_search_traces: moduleSearchTraces,
+    market_feedback: buildMarketFeedback(stateWithNormalizedCandidates),
     agent_decisions: Array.isArray((state as Partial<SessionState>).agent_decisions)
       ? ((state as Partial<SessionState>).agent_decisions ?? []).filter(isAgentDecision).slice(-MAX_AGENT_DECISIONS)
       : [],

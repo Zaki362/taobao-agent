@@ -4,6 +4,7 @@ import {
   HostedExecutionTask,
   MCPStatus,
   ModuleCandidateReview,
+  MarketFeedback,
   ModuleSearchTrace,
   PlanQualityReview,
   ProductCandidate,
@@ -47,6 +48,7 @@ export function isAgentDecision(value: unknown): value is AgentDecision {
   const validSource =
     value.source === "plan_strategy" ||
     value.source === "candidate_review" ||
+    value.source === "market_feedback" ||
     value.source === "policy_fallback" ||
     value.source === "deepseek_runtime";
   const validConfidence =
@@ -103,6 +105,64 @@ function isAgentRuntimeState(value: unknown) {
       value.last_decision_mode === "deepseek" ||
       value.last_decision_mode === "policy") &&
     typeof value.initialized_at === "string"
+  );
+}
+
+export function isMarketFeedback(value: unknown): value is MarketFeedback {
+  if (!isRecord(value) || !isRecord(value.module_signals)) return false;
+  const validStatus =
+    value.status === "insufficient_data" ||
+    value.status === "balanced" ||
+    value.status === "opportunity" ||
+    value.status === "under_pressure";
+  const validSignals = Object.values(value.module_signals).every((signal) => {
+    if (!isRecord(signal)) return false;
+    const validPressure =
+      signal.pressure === "unobserved" ||
+      signal.pressure === "opportunity" ||
+      signal.pressure === "healthy" ||
+      signal.pressure === "tight" ||
+      signal.pressure === "over_budget";
+    const validConfidence = signal.confidence === "low" || signal.confidence === "medium" || signal.confidence === "high";
+    return (
+      typeof signal.module_id === "string" &&
+      typeof signal.module_name === "string" &&
+      typeof signal.budget_allocation === "number" &&
+      Number.isFinite(signal.budget_allocation) &&
+      typeof signal.candidate_count === "number" &&
+      Number.isFinite(signal.candidate_count) &&
+      typeof signal.priced_candidate_count === "number" &&
+      Number.isFinite(signal.priced_candidate_count) &&
+      typeof signal.within_budget_count === "number" &&
+      Number.isFinite(signal.within_budget_count) &&
+      validPressure &&
+      validConfidence &&
+      typeof signal.summary === "string"
+    );
+  });
+  const validSuggestions = Array.isArray(value.reallocation_suggestions) && value.reallocation_suggestions.every((suggestion) =>
+    isRecord(suggestion) &&
+    typeof suggestion.from_module_id === "string" &&
+    typeof suggestion.to_module_id === "string" &&
+    typeof suggestion.amount === "number" &&
+    Number.isFinite(suggestion.amount) &&
+    typeof suggestion.reason === "string"
+  );
+
+  return (
+    validStatus &&
+    typeof value.observed_modules === "number" &&
+    typeof value.total_modules === "number" &&
+    typeof value.observed_planned_budget === "number" &&
+    typeof value.observed_reference_total === "number" &&
+    typeof value.observed_budget_gap === "number" &&
+    validSignals &&
+    isStringArray(value.pressure_modules) &&
+    isStringArray(value.opportunity_modules) &&
+    validSuggestions &&
+    typeof value.summary === "string" &&
+    value.user_confirmation_required === true &&
+    typeof value.generated_at === "string"
   );
 }
 
@@ -279,6 +339,7 @@ export function isRenderableSessionState(value: unknown): value is SessionState 
     isPlanQualityReview(value.plan_review) &&
     isRecord(value.module_reviews) &&
     (value.module_search_traces === undefined || isRecord(value.module_search_traces)) &&
+    isMarketFeedback(value.market_feedback) &&
     Array.isArray(value.agent_decisions) &&
     isAgentRuntimeState(value.agent_runtime) &&
     Array.isArray(value.hosted_tasks) &&

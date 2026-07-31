@@ -1,5 +1,6 @@
 import { runCartExecutor } from "@/lib/agent/cart";
 import { consumeAgentDecision, pendingAgentDecision, recordAgentDecision, removeModuleAgentDecisions } from "@/lib/agent/decision-engine";
+import { buildMarketFeedback, refreshMarketFeedback } from "@/lib/agent/market-feedback";
 import { decideNextAgentActionV2 } from "@/lib/agent/runtime-v2";
 import { AgentDirectiveProfile, applyAgentDirectiveProfile } from "@/lib/agent/directives";
 import { runDeepSeekPlanner, runTemplatePlannerForScenario } from "@/lib/agent/planner";
@@ -38,6 +39,11 @@ function createBaseState(
     module_candidates: {},
     module_reviews: {},
     module_search_traces: {},
+    market_feedback: buildMarketFeedback({
+      scene_brief: sceneBrief,
+      shopping_plan: shoppingPlan,
+      module_candidates: {}
+    }),
     agent_decisions: [],
     agent_runtime: {
       max_tool_calls: 12,
@@ -273,6 +279,7 @@ export async function updateModuleSearchStrategy(
   delete state.module_reviews[moduleId];
   delete state.module_search_traces[moduleId];
   removeModuleAgentDecisions(state, moduleId);
+  refreshMarketFeedback(state);
   state.tool_logs.push({
     id: `strategy_update-${Date.now()}`,
     timestamp: new Date().toISOString(),

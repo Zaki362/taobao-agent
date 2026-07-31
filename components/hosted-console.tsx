@@ -89,6 +89,21 @@ function formatDuration(value: number) {
   return `${Math.round(value / 60_000)} 分钟`;
 }
 
+function marketStatusLabel(status: SessionState["market_feedback"]["status"]) {
+  if (status === "under_pressure") return "预算承压";
+  if (status === "opportunity") return "存在余量";
+  if (status === "balanced") return "预算匹配";
+  return "样本积累中";
+}
+
+function marketPressureLabel(pressure: SessionState["market_feedback"]["module_signals"][string]["pressure"]) {
+  if (pressure === "over_budget") return "超出预算";
+  if (pressure === "tight") return "空间偏紧";
+  if (pressure === "opportunity") return "存在余量";
+  if (pressure === "healthy") return "价格匹配";
+  return "未观察";
+}
+
 function InfoBlock({ label, value }: { label: string; value: string }) {
   return (
     <div className="info-grid-card">
@@ -488,6 +503,63 @@ export function HostedConsole() {
                 <div className="grid gap-6 xl:grid-cols-2">
                   <Card className="section-card xl:col-span-2">
                     <CardHeader>
+                      <div className="flex flex-wrap items-start justify-between gap-3">
+                        <div>
+                          <CardTitle>真实市场反馈</CardTitle>
+                          <p className="mt-2 text-sm text-muted-foreground">
+                            Agent 根据已返回候选的实际价格校准后续搜索；预算变更只形成建议，不会静默生效。
+                          </p>
+                        </div>
+                        <Badge variant={selectedSession.market_feedback.status === "under_pressure" ? "danger" : selectedSession.market_feedback.status === "balanced" ? "success" : "secondary"}>
+                          {marketStatusLabel(selectedSession.market_feedback.status)}
+                        </Badge>
+                      </div>
+                    </CardHeader>
+                    <CardContent className="space-y-4">
+                      <div className="subtle-card p-4">
+                        <p className="text-sm font-medium leading-6">{selectedSession.market_feedback.summary}</p>
+                        <div className="mt-3 grid gap-2 text-xs leading-5 text-muted-foreground md:grid-cols-3">
+                          <p>已观察：{selectedSession.market_feedback.observed_modules}/{selectedSession.market_feedback.total_modules} 个模块</p>
+                          <p>观察范围预算：{formatCurrency(selectedSession.market_feedback.observed_planned_budget)}</p>
+                          <p>每模块单件参考价合计：{formatCurrency(selectedSession.market_feedback.observed_reference_total)}</p>
+                        </div>
+                      </div>
+                      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                        {Object.values(selectedSession.market_feedback.module_signals)
+                          .filter((signal) => signal.pressure !== "unobserved")
+                          .map((signal) => (
+                            <div key={signal.module_id} className="rounded-[20px] border border-border/80 bg-white p-4 text-sm shadow-sm">
+                              <div className="flex flex-wrap items-center justify-between gap-2">
+                                <p className="font-medium">{signal.module_name}</p>
+                                <Badge variant={signal.pressure === "over_budget" || signal.pressure === "tight" ? "danger" : signal.pressure === "healthy" ? "success" : "secondary"}>
+                                  {marketPressureLabel(signal.pressure)}
+                                </Badge>
+                              </div>
+                              <p className="mt-2 text-xs leading-5 text-muted-foreground">{signal.summary}</p>
+                              <p className="mt-2 text-xs text-muted-foreground">
+                                预算 {formatCurrency(signal.budget_allocation)} · 中位价 {signal.median_price === undefined ? "暂无" : formatCurrency(signal.median_price)} · 样本 {signal.priced_candidate_count} 件
+                              </p>
+                            </div>
+                          ))}
+                      </div>
+                      {selectedSession.market_feedback.reallocation_suggestions.length > 0 ? (
+                        <div className="rounded-[20px] border border-amber-200/70 bg-amber-50/70 p-4 text-sm">
+                          <p className="font-medium">待确认的预算建议</p>
+                          <div className="mt-2 space-y-1 text-xs leading-5 text-muted-foreground">
+                            {selectedSession.market_feedback.reallocation_suggestions.map((suggestion) => (
+                              <p key={`${suggestion.from_module_id}-${suggestion.to_module_id}`}>
+                                可考虑从「{suggestion.from_module_name}」向「{suggestion.to_module_name}」调配 {formatCurrency(suggestion.amount)}。{suggestion.reason}
+                              </p>
+                            ))}
+                          </div>
+                          <p className="mt-2 text-xs font-medium text-amber-800">当前未修改任何已确认预算。</p>
+                        </div>
+                      ) : null}
+                    </CardContent>
+                  </Card>
+
+                  <Card className="section-card xl:col-span-2">
+                    <CardHeader>
                       <CardTitle>Agent 自主决策历史</CardTitle>
                     </CardHeader>
                     <CardContent className="grid gap-3 md:grid-cols-2">
@@ -500,7 +572,7 @@ export function HostedConsole() {
                             </div>
                             <p className="mt-2 text-xs leading-5 text-muted-foreground">{decision.reason}</p>
                             <p className="mt-2 text-[11px] text-muted-foreground">
-                              来源：{decision.source === "deepseek_runtime" ? "DeepSeek Runtime" : decision.source === "policy_fallback" ? "规则兜底" : decision.source} · 置信度：{decision.confidence} · {decision.consumed_at ? "已执行" : "待执行"} · {formatTime(decision.created_at)}
+                              来源：{decision.source === "deepseek_runtime" ? "DeepSeek Runtime" : decision.source === "market_feedback" ? "市场反馈" : decision.source === "policy_fallback" ? "规则兜底" : decision.source} · 置信度：{decision.confidence} · {decision.consumed_at ? "已执行" : "待执行"} · {formatTime(decision.created_at)}
                             </p>
                           </div>
                         ))

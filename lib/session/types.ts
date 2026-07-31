@@ -171,6 +171,53 @@ export interface ModuleSearchTrace {
   updated_at: string;
 }
 
+export type ModuleMarketPressure = "unobserved" | "opportunity" | "healthy" | "tight" | "over_budget";
+export type MarketFeedbackStatus = "insufficient_data" | "balanced" | "opportunity" | "under_pressure";
+export type MarketSignalConfidence = "low" | "medium" | "high";
+
+export interface ModuleMarketSignal {
+  module_id: string;
+  module_name: string;
+  budget_allocation: number;
+  candidate_count: number;
+  priced_candidate_count: number;
+  within_budget_count: number;
+  minimum_price?: number;
+  median_price?: number;
+  reference_price?: number;
+  budget_gap?: number;
+  pressure: ModuleMarketPressure;
+  confidence: MarketSignalConfidence;
+  summary: string;
+  suggested_keyword?: string;
+}
+
+export interface BudgetReallocationSuggestion {
+  from_module_id: string;
+  from_module_name: string;
+  to_module_id: string;
+  to_module_name: string;
+  amount: number;
+  reason: string;
+  confidence: MarketSignalConfidence;
+}
+
+export interface MarketFeedback {
+  status: MarketFeedbackStatus;
+  observed_modules: number;
+  total_modules: number;
+  observed_planned_budget: number;
+  observed_reference_total: number;
+  observed_budget_gap: number;
+  module_signals: Record<string, ModuleMarketSignal>;
+  pressure_modules: string[];
+  opportunity_modules: string[];
+  reallocation_suggestions: BudgetReallocationSuggestion[];
+  summary: string;
+  user_confirmation_required: true;
+  generated_at: string;
+}
+
 export type AgentDecisionAction =
   | "search_module"
   | "retry_module"
@@ -178,7 +225,12 @@ export type AgentDecisionAction =
   | "wait_for_tools"
   | "complete_workflow";
 
-export type AgentDecisionSource = "deepseek_runtime" | "plan_strategy" | "candidate_review" | "policy_fallback";
+export type AgentDecisionSource =
+  | "deepseek_runtime"
+  | "plan_strategy"
+  | "candidate_review"
+  | "market_feedback"
+  | "policy_fallback";
 export type AgentDecisionConfidence = "high" | "medium" | "low";
 
 export interface AgentDecision {
@@ -302,6 +354,7 @@ export interface SessionState {
   module_candidates: Record<string, ProductCandidate[]>;
   module_reviews: Record<string, ModuleCandidateReview>;
   module_search_traces: Record<string, ModuleSearchTrace>;
+  market_feedback: MarketFeedback;
   agent_decisions: AgentDecision[];
   agent_runtime: AgentRuntimeState;
   selected_items: SelectedItem[];

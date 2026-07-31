@@ -40,30 +40,46 @@ function hasSkippedModule(state: SessionState, moduleId: string) {
 function canRetryFromReview(state: SessionState, module: ShoppingPlanModule) {
   const review = state.module_reviews[module.module_id];
   const trace = state.module_search_traces[module.module_id];
-  const suggestedKeyword = review?.suggested_keyword?.replace(/\s+/g, " ").trim();
-
+  const reviewKeyword = review?.suggested_keyword?.replace(/\s+/g, " ").trim();
+  const marketSignal = state.market_feedback.module_signals[module.module_id];
+  const marketKeyword = marketSignal?.pressure === "over_budget"
+    ? marketSignal.suggested_keyword?.replace(/\s+/g, " ").trim()
+    : undefined;
   if (
     !review ||
-    !suggestedKeyword ||
-    (review.status !== "thin" && review.status !== "needs_refine") ||
     state.shopping_plan.agent_directives.autonomy_level === "保守执行" ||
     state.shopping_plan.agent_directives.search_depth === "轻量搜索"
   ) {
     return null;
   }
 
-  if (trace?.searched_keywords.includes(suggestedKeyword)) {
-    return null;
+  const suggestions = [];
+  if (reviewKeyword && (review.status === "thin" || review.status === "needs_refine")) {
+    suggestions.push({
+      keyword: reviewKeyword,
+      source: "candidate_review" as const,
+      reason: review.next_action,
+      evidence: [review.summary, ...review.caveats.slice(0, 2)]
+    });
+  }
+  if (marketKeyword && marketSignal?.pressure === "over_budget") {
+    suggestions.push({
+      keyword: marketKeyword,
+      source: "market_feedback" as const,
+      reason: `${marketSignal.summary} Agent 先用更聚焦的性价比关键词补搜，不自动改动用户已确认预算。`,
+      evidence: [marketSignal.summary, state.market_feedback.summary]
+    });
   }
 
-  const retried = state.agent_decisions.some(
-    (decision) =>
-      decision.module_id === module.module_id &&
-      decision.action === "retry_module" &&
-      decision.keyword_override === suggestedKeyword
-  );
-
-  return retried ? null : suggestedKeyword;
+  return suggestions.find((suggestion) => {
+    if (trace?.searched_keywords.includes(suggestion.keyword)) return false;
+    return !state.agent_decisions.some(
+      (decision) =>
+        decision.module_id === module.module_id &&
+        decision.action === "retry_module" &&
+        decision.keyword_override === suggestion.keyword
+    );
+  }) ?? null;
 }
 
 function failedWithoutCandidates(trace: ModuleSearchTrace | undefined, candidateCount: number) {
@@ -90,18 +106,25 @@ export function decideNextAgentAction(state: SessionState): AgentDecision {
       continue;
     }
 
-    const suggestedKeyword = canRetryFromReview(state, module);
-    if (suggestedKeyword) {
+    const retrySuggestion = canRetryFromReview(state, module);
+    if (retrySuggestion) {
       const review = state.module_reviews[module.module_id];
       return createAgentDecision({
         action: "retry_module",
-        source: "candidate_review",
+        source: retrySuggestion.source,
         confidence: review.source === "deepseek" ? "high" : "medium",
         module_id: module.module_id,
         module_name: module.module_name,
-        keyword_override: suggestedKeyword,
-        reason: review.next_action,
-        evidence: [review.summary, ...review.caveats.slice(0, 2)]
+        keyword_override: retrySuggestion.keyword,
+        reason: retrySuggestion.reason,
+        evidence: retrySuggestion.evidence,
+        expected_gain: retrySuggestion.source === "market_feedback"
+          ? "在不改动已确认预算的前提下提高预算内候选覆盖率"
+          : "补齐候选档位或改善候选质量",
+        tool_cost: 1,
+        guardrail_notes: retrySuggestion.source === "market_feedback"
+          ? ["预算只用于搜索约束，未自动重分配"]
+          : undefined
       });
     }
   }
@@ -142,7 +165,8 @@ export function decideNextAgentAction(state: SessionState): AgentDecision {
       evidence: [
         `执行顺序：${state.shopping_plan.execution_strategy.module_sequence.join(" → ")}`,
         `模块预算：${module.budget_allocation} 元`,
-        `自主档位：${state.shopping_plan.agent_directives.autonomy_level}`
+        `自主档位：${state.shopping_plan.agent_directives.autonomy_level}`,
+        state.market_feedback.summary
       ]
     });
   }

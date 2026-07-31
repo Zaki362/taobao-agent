@@ -89,6 +89,10 @@ export function ResultsPage({
   const selectedModule = session.shopping_plan.modules.find((item) => item.module_id === selectedModuleId);
   const selectedReview = session.module_reviews?.[selectedModuleId];
   const selectedTrace = session.module_search_traces?.[selectedModuleId];
+  const selectedMarketSignal = session.market_feedback.module_signals[selectedModuleId];
+  const selectedBudgetSuggestion = session.market_feedback.reallocation_suggestions.find(
+    (suggestion) => suggestion.from_module_id === selectedModuleId || suggestion.to_module_id === selectedModuleId
+  );
   const selectedTypeCount = new Set(selectedProducts.map((product) => product.recommendation_type)).size;
   const sceneLabel = session.current_scene_label || session.scene_brief.scene_type || "当前场景";
   const aiPlanningLabel =
@@ -267,6 +271,32 @@ export function ResultsPage({
                 当前模块先按规划阶段生成的搜索意图找商品，再结合预算、偏好、店铺可信度和标题适配度挑出三个档位。
               </p>
             </div>
+            {selectedMarketSignal && selectedMarketSignal.pressure !== "unobserved" ? (
+              <div className="rounded-[22px] border border-[#f4d7c7] bg-[#fff8f3] p-4 text-sm text-muted-foreground">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <p className="font-medium text-foreground">实际价格校准</p>
+                  <Badge variant={selectedMarketSignal.pressure === "over_budget" || selectedMarketSignal.pressure === "tight" ? "danger" : "secondary"}>
+                    {selectedMarketSignal.pressure === "over_budget"
+                      ? "超出预算"
+                      : selectedMarketSignal.pressure === "tight"
+                        ? "预算偏紧"
+                        : selectedMarketSignal.pressure === "opportunity"
+                          ? "存在余量"
+                          : "预算匹配"}
+                  </Badge>
+                </div>
+                <p className="mt-2 leading-6">{selectedMarketSignal.summary}</p>
+                <p className="mt-2 text-xs leading-5">
+                  有效价格样本 {selectedMarketSignal.priced_candidate_count} 件
+                  {selectedMarketSignal.median_price === undefined ? "" : ` · 中位价 ${formatCurrency(selectedMarketSignal.median_price)}`}
+                </p>
+                {selectedBudgetSuggestion ? (
+                  <p className="mt-2 text-xs leading-5">
+                    预算建议：可考虑从「{selectedBudgetSuggestion.from_module_name}」向「{selectedBudgetSuggestion.to_module_name}」调配 {formatCurrency(selectedBudgetSuggestion.amount)}，确认前不会修改方案。
+                  </p>
+                ) : null}
+              </div>
+            ) : null}
             {selectedReview ? (
               <div className="rounded-[22px] border border-primary/10 bg-[#fff8f3] p-4 text-sm text-muted-foreground">
                 <div className="flex flex-wrap items-center justify-between gap-2">

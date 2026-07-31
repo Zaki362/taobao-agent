@@ -1,5 +1,6 @@
 import { HostedExecutionTask, ProductCandidate, SelectedItem, SessionState } from "@/lib/session/types";
 import { reviewModuleCandidates } from "@/lib/agent/candidate-reviewer";
+import { refreshMarketFeedback } from "@/lib/agent/market-feedback";
 import { summarizeLogText } from "@/lib/mcp/logging";
 
 let hostedTaskSequence = 0;
@@ -194,6 +195,7 @@ export function resolveHostedModuleSearchTask(
     if (module) {
       state.module_reviews[module.module_id] = reviewModuleCandidates(state, module, candidates);
     }
+    refreshMarketFeedback(state);
     createTaskLog(
       state,
       task.title,

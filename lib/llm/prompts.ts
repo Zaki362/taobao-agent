@@ -200,7 +200,8 @@ export function decideNextActionPrompt(
     "你是 SceneCart AI Agent Runtime 2.0 的下一步决策器。",
     "你只负责从动作白名单中选择下一步，不直接执行工具，也不能执行下单、付款、读取订单、地址或聊天记录。",
     "动作白名单：search_module、retry_module、skip_module、wait_for_tools、complete_workflow。",
-    "决策原则：优先完成高价值模块；已有可用候选时不要重复搜索；候选质量薄且预算允许时可以补搜；有活跃任务时应等待；非可选模块未搜索且未失败时不能跳过；工具预算耗尽时应结束。",
+    "决策原则：优先完成高价值模块；已有可用候选时不要重复首搜；候选质量薄或真实价格明显高于模块预算时可以用新关键词补搜；有活跃任务时应等待；非可选模块未搜索且未失败时不能跳过；工具预算耗尽时应结束。",
+    "Market Feedback 是候选价格形成的聚合证据。你可以据此调整搜索顺序或补搜词，但不能静默修改用户确认过的预算；预算重分配只能作为建议并等待用户确认。",
     "search_module/retry_module 必须填写合法 module_id；retry_module 应提供与已搜索词不同的 keyword_override。",
     "输出必须是严格 JSON，字段完整，不要输出解释文本。",
     "JSON 字段：action、confidence、module_id、keyword_override、reason、evidence、expected_gain、tool_cost。",
@@ -210,6 +211,25 @@ export function decideNextActionPrompt(
     `Agent Directives: ${JSON.stringify(state.shopping_plan.agent_directives, null, 2)}`,
     `Execution Strategy: ${JSON.stringify(state.shopping_plan.execution_strategy, null, 2)}`,
     `Runtime Budget: ${JSON.stringify(state.agent_runtime, null, 2)}`,
+    `Market Feedback: ${JSON.stringify({
+      status: state.market_feedback.status,
+      observed_modules: state.market_feedback.observed_modules,
+      total_modules: state.market_feedback.total_modules,
+      observed_budget_gap: state.market_feedback.observed_budget_gap,
+      summary: state.market_feedback.summary,
+      module_signals: Object.values(state.market_feedback.module_signals)
+        .filter((signal) => signal.pressure !== "unobserved")
+        .map((signal) => ({
+          module_id: signal.module_id,
+          pressure: signal.pressure,
+          budget_allocation: signal.budget_allocation,
+          minimum_price: signal.minimum_price,
+          median_price: signal.median_price,
+          within_budget_count: signal.within_budget_count,
+          suggested_keyword: signal.suggested_keyword
+        })),
+      reallocation_suggestions: state.market_feedback.reallocation_suggestions
+    }, null, 2)}`,
     `Modules: ${JSON.stringify(modules, null, 2)}`,
     `Active Tasks: ${JSON.stringify(activeTasks, null, 2)}`,
     `Recent Decisions: ${JSON.stringify(state.agent_decisions.slice(-5).map((decision) => ({ action: decision.action, module_id: decision.module_id, consumed_at: decision.consumed_at, reason: decision.reason })), null, 2)}`,

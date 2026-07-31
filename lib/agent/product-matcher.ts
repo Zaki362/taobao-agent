@@ -1,4 +1,5 @@
 import { getExecutionBackend } from "@/lib/mcp/client";
+import { refreshMarketFeedback } from "@/lib/agent/market-feedback";
 import { reviewModuleCandidatesWithAgent } from "@/lib/agent/candidate-reviewer";
 import { executeMcpTool } from "@/lib/mcp/executor";
 import { queueModuleSearchTask } from "@/lib/mcp/hosted";
@@ -458,5 +459,6 @@ export async function runModuleSearch(
     review,
     recoveryKeyword
   });
+  refreshMarketFeedback(state);
   return candidates;
 }

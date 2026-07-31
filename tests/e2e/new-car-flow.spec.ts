@@ -199,6 +199,8 @@ test("authenticated new-car workflow reaches recommendations through the durable
     await page.goto("/hosted");
     await expect(page.getByText("Agent Runtime 2.0")).toBeVisible();
     await expect(page.getByText("运行健康诊断")).toBeVisible();
+    await expect(page.getByText("真实市场反馈")).toBeVisible();
+    await expect(page.getByText(/已观察：\d+\/\d+ 个模块/)).toBeVisible();
     await expect(page.getByText("本地执行器队列", { exact: false }).first()).toBeVisible();
 
     stopExecutor = true;
@@ -214,10 +216,18 @@ test("authenticated new-car workflow reaches recommendations through the durable
       sessions: Array<{
         session_id: string;
         shopping_plan: { modules: Array<{ module_id: string }> };
+        market_feedback: {
+          observed_modules: number;
+          total_modules: number;
+          user_confirmation_required: boolean;
+        };
       }>;
     };
     const currentSession = sessionList.sessions.find((session) => session.session_id === persistedSessionId)!;
     expect(currentSession).toBeTruthy();
+    expect(currentSession.market_feedback.observed_modules).toBeGreaterThan(0);
+    expect(currentSession.market_feedback.total_modules).toBe(currentSession.shopping_plan.modules.length);
+    expect(currentSession.market_feedback.user_confirmation_required).toBe(true);
     const retryModule = currentSession.shopping_plan.modules[0];
     const retryKeyword = `E2E 失败恢复 ${Date.now()}`;
     const queuedForFailure = await page.request.post("/api/modules/search", {

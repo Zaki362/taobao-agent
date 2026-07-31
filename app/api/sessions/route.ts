@@ -49,6 +49,7 @@ export async function GET() {
         module_candidates: summarizeModuleCandidates(session.module_candidates),
         module_reviews: session.module_reviews,
         module_search_traces: summarizeModuleSearchTraces(session.module_search_traces),
+        market_feedback: session.market_feedback,
         agent_decisions: session.agent_decisions.slice(-MAX_SESSION_LIST_AGENT_DECISIONS),
         agent_runtime: session.agent_runtime,
         tool_logs: session.tool_logs.slice(0, MAX_SESSION_LIST_TOOL_LOGS),
