@@ -4,12 +4,17 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import process from "node:process";
 import { promisify } from "node:util";
+import nextEnv from "@next/env";
+import protocol from "../lib/runtime/executor-protocol.json" with { type: "json" };
+
+nextEnv.loadEnvConfig(process.cwd());
 
 const execFileAsync = promisify(execFile);
 const apiBaseUrl = (process.env.SCENECART_API_URL || "http://127.0.0.1:3000").replace(/\/$/, "");
 const qoderPath = process.env.QODERCLI_PATH || `${os.homedir()}/.local/bin/qodercli`;
 const deviceToken = process.env.SCENECART_DEVICE_TOKEN;
 const checks = [];
+const executorProtocolVersion = protocol.version;
 
 async function check(name, task) {
   try {
@@ -80,7 +85,10 @@ await check("scenecart_api", async () => {
   if (!response.ok || payload.status !== "healthy") {
     throw new Error(payload.error || `HTTP ${response.status}`);
   }
-  return `${apiBaseUrl} · runtime=${payload.runtime_store} · backend=${payload.effective_executor_backend}`;
+  if (payload.executor_protocol_version !== executorProtocolVersion) {
+    throw new Error(`执行器协议不兼容：本地=${executorProtocolVersion}，服务端=${payload.executor_protocol_version ?? "未知"}`);
+  }
+  return `${apiBaseUrl} · runtime=${payload.runtime_store} · backend=${payload.effective_executor_backend} · protocol=${executorProtocolVersion}`;
 });
 
 await check("device_token", async () => {
@@ -91,13 +99,17 @@ await check("device_token", async () => {
     method: "POST",
     headers: {
       Authorization: `Bearer ${deviceToken}`,
-      "Content-Type": "application/json"
+      "Content-Type": "application/json",
+      "X-SceneCart-Executor-Protocol": executorProtocolVersion
     },
     body: "{}",
     signal: AbortSignal.timeout(8_000)
   });
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
+  if (payload.protocol_version !== executorProtocolVersion) {
+    throw new Error("服务端未确认当前执行器协议版本");
+  }
   const capabilities = Array.isArray(payload.device?.capabilities) ? payload.device.capabilities : [];
   if (!capabilities.includes("module_search")) {
     throw new Error("设备令牌有效，但缺少 module_search 能力；请在设置页重新注册设备");

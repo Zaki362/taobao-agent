@@ -41,6 +41,12 @@ type RuntimeMetrics = {
       add_to_cart: { registered: number; online: number; available: boolean };
     };
   };
+  device_audit_events: Array<{
+    id: number;
+    event_type: string;
+    payload: Record<string, unknown>;
+    created_at: string;
+  }>;
   llm: {
     calls: number;
     connected: number;
@@ -606,6 +612,33 @@ export function HostedConsole() {
                         <div className="panel-muted p-4 text-sm text-muted-foreground">
                           当前会话还没有工具调用日志。
                         </div>
+                      )}
+                    </CardContent>
+                  </Card>
+
+                  <Card className="section-card">
+                    <CardHeader>
+                      <CardTitle>执行器安全审计</CardTitle>
+                    </CardHeader>
+                    <CardContent className="space-y-3">
+                      {runtimeMetrics?.device_audit_events?.length ? runtimeMetrics.device_audit_events.slice(0, 8).map((event) => {
+                        const action = event.event_type === "executor.device_registered"
+                          ? "注册设备"
+                          : event.event_type === "executor.device_revoked"
+                            ? "撤销设备"
+                            : "变更权限";
+                        const deviceName = typeof event.payload.device_name === "string" ? event.payload.device_name : "本地执行器";
+                        return (
+                          <div key={event.id} className="rounded-[18px] border border-border/80 bg-white p-3 text-sm shadow-sm">
+                            <div className="flex items-center justify-between gap-3">
+                              <p className="font-medium">{action} · {deviceName}</p>
+                              <span className="text-xs text-muted-foreground">{formatTime(event.created_at)}</span>
+                            </div>
+                            <p className="mt-2 text-xs text-muted-foreground">事件：{event.event_type}</p>
+                          </div>
+                        );
+                      }) : (
+                        <div className="panel-muted p-4 text-sm text-muted-foreground">当前还没有设备权限审计记录。</div>
                       )}
                     </CardContent>
                   </Card>

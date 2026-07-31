@@ -54,6 +54,16 @@ describe("durable job queue contract", () => {
   it("grants only search capability when device registration omits an explicit scope", async () => {
     const registered = await registerExecutorDevice("least-privilege-user", "least privilege device");
     expect(registered.device.capabilities).toEqual(["module_search"]);
+    const auditEvents = await localRuntimeRepository.listAuditEvents("least-privilege-user");
+    expect(auditEvents).toHaveLength(1);
+    expect(auditEvents[0]).toMatchObject({
+      event_type: "executor.device_registered",
+      payload: {
+        device_id: registered.device.id,
+        capabilities: ["module_search"]
+      }
+    });
+    expect(await localRuntimeRepository.listAuditEvents("other-user")).toEqual([]);
     expect((await localRuntimeRepository.updateDeviceCapabilities(
       registered.device.id,
       "other-user",

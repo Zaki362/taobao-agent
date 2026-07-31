@@ -10,6 +10,7 @@
     "lint": "npm run typecheck",
     "typecheck": "tsc --noEmit",
     "preflight": "node scripts/preflight.mjs",
+    "release:audit": "node scripts/release-audit.mjs",
     "check": "npm run preflight && npm run typecheck && npm run build",
     "db:migrate": "node scripts/db-migrate.mjs",
     "db:check": "node scripts/db-check.mjs",

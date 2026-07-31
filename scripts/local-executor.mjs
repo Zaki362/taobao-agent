@@ -5,6 +5,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
 import process from "node:process";
+import nextEnv from "@next/env";
+import protocol from "../lib/runtime/executor-protocol.json" with { type: "json" };
+
+nextEnv.loadEnvConfig(process.cwd());
 
 const execFileAsync = promisify(execFile);
 const apiBaseUrl = (process.env.SCENECART_API_URL || "http://127.0.0.1:3000").replace(/\/$/, "");
@@ -13,6 +17,7 @@ const qoderPath = process.env.QODERCLI_PATH || `${os.homedir()}/.local/bin/qoder
 const pollMs = Math.max(Number(process.env.EXECUTOR_POLL_MS || 2500), 500);
 const qoderTimeoutMs = Math.max(Number(process.env.EXECUTOR_QODER_TIMEOUT_MS || 180000), 30000);
 const resultDir = path.join(process.cwd(), ".data", "local-executor", "results");
+const executorProtocolVersion = protocol.version;
 
 if (!deviceToken) {
   throw new Error("SCENECART_DEVICE_TOKEN is required. Register a device at /settings/executor first.");
@@ -39,6 +44,7 @@ async function api(path, options = {}) {
     headers: {
       Authorization: `Bearer ${deviceToken}`,
       "Content-Type": "application/json",
+      "X-SceneCart-Executor-Protocol": executorProtocolVersion,
       ...(options.headers || {})
     }
   });
@@ -80,6 +86,11 @@ async function verifyStartup() {
   if (!response.ok || payload.status !== "healthy") {
     throw new Error(payload.error || `SceneCart API health check failed with ${response.status}`);
   }
+  if (payload.executor_protocol_version !== executorProtocolVersion) {
+    throw new Error(
+      `执行器协议不兼容：本地=${executorProtocolVersion}，服务端=${payload.executor_protocol_version ?? "未知"}。请更新项目代码后重启。`
+    );
+  }
   const heartbeatPayload = await api("/api/executor/heartbeat", {
     method: "POST",
     body: "{}"
@@ -89,6 +100,9 @@ async function verifyStartup() {
     : [];
   if (!capabilities.includes("module_search")) {
     throw new Error("设备令牌没有 module_search 能力，请在执行器设置页重新注册搜索设备。");
+  }
+  if (heartbeatPayload.protocol_version !== executorProtocolVersion) {
+    throw new Error("服务端未确认当前执行器协议，请更新项目代码后重启。");
   }
   process.stdout.write(
     `[local-executor] startup checks passed; qoder=session-ready; runtime=${payload.runtime_store}; backend=${payload.effective_executor_backend}; capabilities=${capabilities.join(",")}\n`

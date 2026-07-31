@@ -27,6 +27,8 @@ SceneCart AI 是一个正在按正式产品架构推进的“场景化购物 Age
 - 运行时可观测性：执行台展示队列积压、在线设备、失败/取消任务、最久等待时间与模型 guardrail fallback
 - 可操作运行告警：执行台根据队列等待、执行器在线状态、任务失败率、模型 fallback 和 guardrail 拒绝率生成分级告警与修复建议
 - 能力感知执行器：设备默认只获得 `module_search`，`add_to_cart` 必须注册时显式开启；任务只会被匹配设备领取，就绪度、MCP 状态和执行台会分别显示真实搜索与真实加购是否可用
+- 执行器协议握手：Worker、Doctor 与服务端共享协议版本，版本缺失或不兼容时在领取任务前返回明确错误，避免旧执行器运行到一半才失败
+- 设备权限审计：设备注册、真实加购权限开关和令牌撤销都会生成用户隔离的审计事件，并在设置页和后端执行台中可见
 - 失败任务恢复：完成任务继续幂等去重；失败或取消的搜索/加购只有在用户再次确认后才会重置并重新入队，执行台提供明确的“重新入队”入口
 - 发布就绪检查：`/api/runtime/readiness` 将开发态与正式可发布状态分开，逐项检查 PostgreSQL、认证、HTTPS Origin、安全 Cookie、DeepSeek、本地执行器和旧 Mock 配置
 - Agent 质量门槛：`npm run eval:agent` 离线检查多组新车需求的预算守恒、模块覆盖、优先级层次、搜索词差异化和安全边界；`npm run eval:agent:live` 通过专用启动器读取本地 Key 并显式调用 DeepSeek，缺少 Key 或全部降级时会直接失败，避免产生“在线评测实际未调用模型”的假阳性
@@ -75,6 +77,7 @@ npm run check
 
 ```bash
 npm run preflight
+npm run release:audit
 npm run typecheck
 npm run build
 ```
@@ -115,6 +118,7 @@ SCENECART_DEVICE_TOKEN=
 - `AUTH_REQUIRED=true`：正式部署必须开启，确保 Session、设备与任务按用户隔离。
 - `APP_ORIGIN`：正式产品允许发起写请求的网页 Origin；多个地址使用逗号分隔。
 - `SCENECART_DEVICE_TOKEN`：在 `/settings/executor` 注册设备后一次性获得，配置在运行 Qoder/Taobao 的本机，不应写入仓库。
+- `executor:doctor` 和 `worker:local` 会直接读取 `.env.local`；也可以使用临时环境变量覆盖本地配置。Token 生成后无需把它写入命令历史。
 - `QODERCLI_PATH`：可选，指定本机 qodercli 路径；默认会尝试读取当前用户目录下的 `~/.local/bin/qodercli`。
 - `TAOBAO_NATIVE_BIN`：仅 experimental local bridge 使用，可选，指定 `taobao-native` 命令名或可执行文件路径。
 - `TAOBAO_MCP_BASE_URL`：experimental local bridge 使用的淘宝 MCP bridge 地址。
@@ -222,6 +226,7 @@ lib/scenarios/
 ```bash
 npm run db:migrate
 npm run db:check
+npm run release:audit
 npm run build
 npm run start
 ```

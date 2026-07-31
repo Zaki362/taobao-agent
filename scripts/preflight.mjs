@@ -76,7 +76,7 @@ function assertNoForbiddenText() {
     {
       pattern: /TAOBAO_MCP_MODE/,
       message: "发现旧环境变量 TAOBAO_MCP_MODE，请使用 TAOBAO_EXECUTION_BACKEND",
-      allowedFiles: new Set(["lib/runtime/readiness.ts"])
+      allowedFiles: new Set(["lib/runtime/readiness.ts", "scripts/release-audit.mjs"])
     },
     {
       pattern: /TAOBAO_NATIVE_PATH/,
@@ -151,7 +151,7 @@ function assertPackageScripts() {
   }
 
   const scripts = pkg.scripts ?? {};
-  const required = ["dev", "build", "typecheck", "preflight", "check", "db:migrate", "db:check", "test:unit", "test:integration", "test:e2e", "eval:agent", "worker:local", "executor:doctor"];
+  const required = ["dev", "build", "typecheck", "preflight", "release:audit", "check", "db:migrate", "db:check", "test:unit", "test:integration", "test:e2e", "eval:agent", "worker:local", "executor:doctor"];
 
   for (const scriptName of required) {
     if (typeof scripts[scriptName] !== "string") {
@@ -217,7 +217,10 @@ function assertRequiredFiles() {
     "lib/llm/telemetry.ts",
     "lib/mcp/client.ts",
     "lib/mcp/local-executor.ts",
+    "lib/runtime/executor-protocol.json",
+    "lib/runtime/executor-protocol.ts",
     "lib/runtime/postgres-repository.ts",
+    "scripts/release-audit.mjs",
     "lib/runtime/readiness.ts",
     "lib/runtime/product-mode.ts",
     "lib/runtime/monitoring.ts",

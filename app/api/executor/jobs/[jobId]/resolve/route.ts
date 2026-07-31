@@ -6,12 +6,14 @@ import {
   authenticateExecutorToken,
   bearerToken
 } from "@/lib/runtime/jobs";
+import { assertExecutorProtocol, EXECUTOR_PROTOCOL_VERSION } from "@/lib/runtime/executor-protocol";
 
 export async function POST(
   request: NextRequest,
   context: { params: Promise<{ jobId: string }> }
 ) {
   try {
+    assertExecutorProtocol(request);
     const device = await authenticateExecutorToken(bearerToken(request));
     if (!device) throw new ApiRouteError("invalid executor token", 401, "invalid_executor_token");
     const { jobId } = await context.params;
@@ -23,13 +25,17 @@ export async function POST(
         typeof body.error === "string" ? body.error : "local executor failed",
         { retryable: body.retryable !== false }
       );
-      return apiOk({ job, retry_scheduled: job.status === "pending" });
+      return apiOk({ job, retry_scheduled: job.status === "pending", protocol_version: EXECUTOR_PROTOCOL_VERSION });
     }
     const result = body.result && typeof body.result === "object" && !Array.isArray(body.result)
       ? body.result as Record<string, unknown>
       : {};
     const completion = await applyCompletedRuntimeJob(jobId, device, result);
-    return apiOk({ job: completion.job, already_completed: completion.alreadyCompleted });
+    return apiOk({
+      job: completion.job,
+      already_completed: completion.alreadyCompleted,
+      protocol_version: EXECUTOR_PROTOCOL_VERSION
+    });
   } catch (error) {
     return apiRouteError(error, "failed to resolve executor job");
   }

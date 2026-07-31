@@ -324,5 +324,17 @@ export const localRuntimeRepository: RuntimeRepository = {
       )
       .slice(0, Math.min(Math.max(limit, 1), 500))
       .map(copy);
+  },
+
+  async listAuditEvents(userId, limit = 50) {
+    return runtimeState().events
+      .filter(
+        (event) =>
+          event.user_id === userId &&
+          event.event_type.startsWith("executor.")
+      )
+      .sort((a, b) => b.id - a.id)
+      .slice(0, Math.min(Math.max(limit, 1), 100))
+      .map(copy);
   }
 };

@@ -13,6 +13,13 @@ type Device = {
   last_heartbeat_at?: string;
 };
 
+type DeviceAuditEvent = {
+  id: number;
+  event_type: string;
+  payload: Record<string, unknown>;
+  created_at: string;
+};
+
 type ReadinessCheck = {
   id: string;
   label: string;
@@ -52,6 +59,7 @@ function deviceStatus(device: Device) {
 
 export function ExecutorSettings() {
   const [devices, setDevices] = useState<Device[]>([]);
+  const [auditEvents, setAuditEvents] = useState<DeviceAuditEvent[]>([]);
   const [token, setToken] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -78,6 +86,7 @@ export function ExecutorSettings() {
     if (!devicesResponse.ok) throw new Error(devicesPayload.error || "读取执行器失败");
     if (!readinessResponse.ok) throw new Error(readinessPayload.error || "读取发布就绪状态失败");
     setDevices(devicesPayload.devices || []);
+    setAuditEvents(devicesPayload.audit_events || []);
     setReadiness(readinessPayload as Readiness);
     setLastCheckedAt(new Date().toLocaleTimeString("zh-CN", { hour12: false }));
   }
@@ -269,6 +278,34 @@ export function ExecutorSettings() {
               );
             })}
           </div>
+        </CardContent>
+      </Card>
+
+      <Card className="section-card">
+        <CardHeader><CardTitle>设备权限审计</CardTitle></CardHeader>
+        <CardContent className="space-y-3">
+          {auditEvents.length ? auditEvents.slice(0, 8).map((event) => {
+            const eventLabel = event.event_type === "executor.device_registered"
+              ? "注册执行器"
+              : event.event_type === "executor.device_revoked"
+                ? "撤销执行器"
+                : "更新执行权限";
+            const deviceName = typeof event.payload.device_name === "string" ? event.payload.device_name : "本地执行器";
+            const added = Array.isArray(event.payload.added) ? event.payload.added.map(String) : [];
+            const removed = Array.isArray(event.payload.removed) ? event.payload.removed.map(String) : [];
+            const changeSummary = added.length || removed.length
+              ? `${added.length ? `新增 ${added.map(capabilityLabel).join("、")}` : ""}${added.length && removed.length ? "；" : ""}${removed.length ? `移除 ${removed.map(capabilityLabel).join("、")}` : ""}`
+              : "权限状态已记录";
+            return (
+              <div key={event.id} className="subtle-card flex flex-wrap items-start justify-between gap-3 p-4">
+                <div>
+                  <p className="font-medium">{eventLabel} · {deviceName}</p>
+                  <p className="mt-1 text-xs text-muted-foreground">{changeSummary}</p>
+                </div>
+                <p className="text-xs text-muted-foreground">{new Date(event.created_at).toLocaleString("zh-CN", { hour12: false })}</p>
+              </div>
+            );
+          }) : <p className="text-sm text-muted-foreground">还没有设备权限变更记录。</p>}
         </CardContent>
       </Card>
 

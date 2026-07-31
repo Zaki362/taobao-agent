@@ -1,6 +1,11 @@
 import { expect, test, type APIRequestContext } from "@playwright/test";
+import protocol from "../../lib/runtime/executor-protocol.json";
 
 const recommendationTypes = ["稳妥推荐", "性价比推荐", "升级推荐"] as const;
+const executorHeaders = (token: string) => ({
+  Authorization: `Bearer ${token}`,
+  "X-SceneCart-Executor-Protocol": protocol.version
+});
 
 function candidatesFor(job: { id: string; payload: Record<string, unknown> }) {
   const moduleId = String(job.payload.module_id ?? "module");
@@ -27,7 +32,7 @@ async function runExecutorUntilStopped(
   token: string,
   shouldStop: () => boolean
 ) {
-  const headers = { Authorization: `Bearer ${token}` };
+  const headers = executorHeaders(token);
   while (!shouldStop()) {
     const claim = await api.post("/api/executor/jobs/claim", { headers, data: {} });
     expect(claim.ok()).toBeTruthy();
@@ -86,14 +91,25 @@ test("authenticated new-car workflow reaches recommendations through the durable
   };
   const deviceToken = registeredDevice.device_token;
   const heartbeatResponse = await page.request.post("/api/executor/heartbeat", {
-    headers: { Authorization: `Bearer ${deviceToken}` },
+    headers: executorHeaders(deviceToken),
     data: {}
   });
   expect(heartbeatResponse.ok()).toBeTruthy();
   const heartbeat = await heartbeatResponse.json() as {
     device: { capabilities: string[] };
+    protocol_version: string;
   };
   expect(heartbeat.device.capabilities).toEqual(["module_search"]);
+  expect(heartbeat.protocol_version).toBe(protocol.version);
+
+  const outdatedHeartbeat = await page.request.post("/api/executor/heartbeat", {
+    headers: {
+      Authorization: `Bearer ${deviceToken}`,
+      "X-SceneCart-Executor-Protocol": "0"
+    },
+    data: {}
+  });
+  expect(outdatedHeartbeat.status()).toBe(426);
 
   const mcpStatusResponse = await page.request.get("/api/mcp/status");
   expect(mcpStatusResponse.ok()).toBeTruthy();
@@ -118,6 +134,16 @@ test("authenticated new-car workflow reaches recommendations through the durable
     }
   });
   expect(capabilityUpdate.ok(), await capabilityUpdate.text()).toBeTruthy();
+  const devicesAfterUpdate = await page.request.get("/api/executor/devices");
+  expect(devicesAfterUpdate.ok()).toBeTruthy();
+  const deviceAudit = await devicesAfterUpdate.json() as {
+    audit_events: Array<{ event_type: string; payload: Record<string, unknown> }>;
+  };
+  expect(deviceAudit.audit_events.some((event) =>
+    event.event_type === "executor.capabilities_updated" &&
+    Array.isArray(event.payload.added) &&
+    event.payload.added.includes("add_to_cart")
+  )).toBe(true);
   const updatedMcpStatus = await page.request.get("/api/mcp/status");
   expect(updatedMcpStatus.ok()).toBeTruthy();
   expect((await updatedMcpStatus.json() as typeof mcpStatus).executor_devices.capabilities.add_to_cart.available).toBe(true);
@@ -204,13 +230,13 @@ test("authenticated new-car workflow reaches recommendations through the durable
     });
     expect(queuedForFailure.ok(), await queuedForFailure.text()).toBeTruthy();
     const failedClaim = await page.request.post("/api/executor/jobs/claim", {
-      headers: { Authorization: `Bearer ${deviceToken}` },
+      headers: executorHeaders(deviceToken),
       data: {}
     });
     const { job: failedJob } = await failedClaim.json() as { job: { id: string } | null };
     expect(failedJob).not.toBeNull();
     const failedResolution = await page.request.post(`/api/executor/jobs/${failedJob!.id}/resolve`, {
-      headers: { Authorization: `Bearer ${deviceToken}` },
+      headers: executorHeaders(deviceToken),
       data: { status: "failed", error: "E2E terminal executor failure", retryable: false }
     });
     expect(failedResolution.ok()).toBeTruthy();

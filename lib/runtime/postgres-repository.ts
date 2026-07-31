@@ -419,5 +419,15 @@ export const postgresRuntimeRepository: RuntimeRepository = {
       values
     );
     return result.rows.map(normalizeEvent);
+  },
+
+  async listAuditEvents(userId, limit = 50) {
+    const result = await query(
+      `SELECT * FROM execution_events
+       WHERE user_id = $1 AND event_type LIKE 'executor.%'
+       ORDER BY id DESC LIMIT $2`,
+      [userId, Math.min(Math.max(limit, 1), 100)]
+    );
+    return result.rows.map(normalizeEvent);
   }
 };

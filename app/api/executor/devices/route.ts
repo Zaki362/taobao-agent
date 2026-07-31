@@ -2,7 +2,7 @@ import { NextRequest } from "next/server";
 import { requireAuthenticatedIdentity } from "@/lib/auth/request";
 import { ApiRouteError, apiOk, apiRouteError, requireString } from "@/lib/api/responses";
 import { getRuntimeRepository } from "@/lib/runtime";
-import { registerExecutorDevice } from "@/lib/runtime/jobs";
+import { executorAuditSessionId, registerExecutorDevice } from "@/lib/runtime/jobs";
 import type { RuntimeJobType } from "@/lib/runtime/types";
 
 const ALLOWED_CAPABILITIES: RuntimeJobType[] = ["module_search", "add_to_cart"];
@@ -17,9 +17,14 @@ function capabilities(value: unknown) {
 export async function GET() {
   try {
     const identity = await requireAuthenticatedIdentity();
-    const devices = await getRuntimeRepository().listDevices(identity.userId);
+    const repository = getRuntimeRepository();
+    const [devices, auditEvents] = await Promise.all([
+      repository.listDevices(identity.userId),
+      repository.listAuditEvents(identity.userId, 20)
+    ]);
     return apiOk({
-      devices: devices.map(({ token_hash: _tokenHash, ...device }) => device)
+      devices: devices.map(({ token_hash: _tokenHash, ...device }) => device),
+      audit_events: auditEvents
     });
   } catch (error) {
     return apiRouteError(error, "failed to list executor devices");
@@ -50,12 +55,29 @@ export async function PATCH(request: NextRequest) {
   try {
     const identity = await requireAuthenticatedIdentity();
     const body = await request.json().catch(() => ({}));
-    const updated = await getRuntimeRepository().updateDeviceCapabilities(
-      requireString(body.device_id, "device_id"),
+    const repository = getRuntimeRepository();
+    const deviceId = requireString(body.device_id, "device_id");
+    const previous = (await repository.listDevices(identity.userId)).find((device) => device.id === deviceId);
+    const updated = await repository.updateDeviceCapabilities(
+      deviceId,
       identity.userId,
       capabilities(body.capabilities)
     );
     if (!updated) throw new ApiRouteError("executor device not found", 404, "not_found");
+    const previousCapabilities = previous?.capabilities ?? [];
+    await repository.appendEvent({
+      user_id: identity.userId,
+      session_id: executorAuditSessionId(updated.id),
+      event_type: "executor.capabilities_updated",
+      payload: {
+        device_id: updated.id,
+        device_name: updated.name,
+        previous_capabilities: previousCapabilities,
+        current_capabilities: updated.capabilities,
+        added: updated.capabilities.filter((item) => !previousCapabilities.includes(item)),
+        removed: previousCapabilities.filter((item) => !updated.capabilities.includes(item))
+      }
+    });
     const { token_hash: _tokenHash, ...device } = updated;
     return apiOk({ device });
   } catch (error) {
@@ -67,10 +89,25 @@ export async function DELETE(request: NextRequest) {
   try {
     const identity = await requireAuthenticatedIdentity();
     const body = await request.json().catch(() => ({}));
-    const revoked = await getRuntimeRepository().revokeDevice(
-      requireString(body.device_id, "device_id"),
+    const repository = getRuntimeRepository();
+    const deviceId = requireString(body.device_id, "device_id");
+    const previous = (await repository.listDevices(identity.userId)).find((device) => device.id === deviceId);
+    const revoked = await repository.revokeDevice(
+      deviceId,
       identity.userId
     );
+    if (revoked && previous) {
+      await repository.appendEvent({
+        user_id: identity.userId,
+        session_id: executorAuditSessionId(previous.id),
+        event_type: "executor.device_revoked",
+        payload: {
+          device_id: previous.id,
+          device_name: previous.name,
+          capabilities: previous.capabilities
+        }
+      });
+    }
     return apiOk({ revoked });
   } catch (error) {
     return apiRouteError(error, "failed to revoke executor device");

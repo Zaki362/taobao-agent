@@ -127,4 +127,5 @@ export interface RuntimeRepository {
 
   appendEvent(input: Omit<ExecutionEvent, "id" | "created_at">): Promise<ExecutionEvent>;
   listEvents(sessionId: string, afterId: number, userId?: string, limit?: number): Promise<ExecutionEvent[]>;
+  listAuditEvents(userId: string, limit?: number): Promise<ExecutionEvent[]>;
 }

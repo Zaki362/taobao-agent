@@ -2,9 +2,11 @@ import { NextRequest } from "next/server";
 import { ApiRouteError, apiOk, apiRouteError } from "@/lib/api/responses";
 import { getRuntimeRepository } from "@/lib/runtime";
 import { authenticateExecutorToken, bearerToken, DEFAULT_JOB_LEASE_MS } from "@/lib/runtime/jobs";
+import { assertExecutorProtocol, EXECUTOR_PROTOCOL_VERSION } from "@/lib/runtime/executor-protocol";
 
 export async function POST(request: NextRequest) {
   try {
+    assertExecutorProtocol(request);
     const device = await authenticateExecutorToken(bearerToken(request));
     if (!device) throw new ApiRouteError("invalid executor token", 401, "invalid_executor_token");
     const body = await request.json().catch(() => ({}));
@@ -23,6 +25,7 @@ export async function POST(request: NextRequest) {
         last_heartbeat_at: updated.last_heartbeat_at
       } : null,
       lease_renewed: Boolean(renewedJob),
+      protocol_version: EXECUTOR_PROTOCOL_VERSION,
       server_time: new Date().toISOString()
     });
   } catch (error) {

@@ -14,6 +14,10 @@ const ALLOWED_CAPABILITIES: RuntimeJobType[] = ["module_search", "add_to_cart"];
 const MINIMUM_CAPABILITIES: RuntimeJobType[] = ["module_search"];
 export const DEFAULT_JOB_LEASE_MS = 5 * 60 * 1000;
 
+export function executorAuditSessionId(deviceId: string) {
+  return `executor-device:${deviceId}`;
+}
+
 function stableDigest(value: string) {
   return createHash("sha256").update(value).digest("hex").slice(0, 16);
 }
@@ -87,6 +91,16 @@ export async function registerExecutorDevice(
     status: "offline",
     created_at: now,
     updated_at: now
+  });
+  await repository.appendEvent({
+    user_id: userId,
+    session_id: executorAuditSessionId(device.id),
+    event_type: "executor.device_registered",
+    payload: {
+      device_id: device.id,
+      device_name: device.name,
+      capabilities: device.capabilities
+    }
   });
   return { device, token };
 }

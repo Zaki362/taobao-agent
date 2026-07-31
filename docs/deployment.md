@@ -35,12 +35,13 @@ TAOBAO_EXECUTION_BACKEND=local_executor
 ## 发布检查
 
 1. GitHub Actions `quality` 全部通过。
-2. `npm run db:migrate`、`npm run db:check`、`npm run check` 和 `npm run eval:agent` 成功。
-3. `/api/runtime/health` 返回 `healthy`。
-4. 登录后访问 `/api/runtime/readiness`，确认 `ready_for_production=true`。
-5. 注册测试设备并运行 `npm run executor:doctor`；设备在线后应得到 `operational_for_shopping=true`。
-6. 使用隔离淘宝测试账号完成一次搜索；真实加购仅在明确授权且账号能力稳定时验收。
-7. 检查执行台中的任务积压、在线设备、模型 fallback、失败任务和“运行健康诊断”，不得带着严重告警发布。
+2. `npm run release:audit` 返回 `READY`。该命令只报告配置是否满足正式要求，不打印 Key、Token 或数据库连接串。
+3. `npm run db:migrate`、`npm run db:check`、`npm run check` 和 `npm run eval:agent` 成功。
+4. `/api/runtime/health` 返回 `healthy`。
+5. 登录后访问 `/api/runtime/readiness`，确认 `ready_for_production=true`。
+6. 注册测试设备并运行 `npm run executor:doctor`；设备在线后应得到 `operational_for_shopping=true`。
+7. 使用隔离淘宝测试账号完成一次搜索；真实加购仅在明确授权且账号能力稳定时验收。
+8. 检查执行台中的任务积压、在线设备、模型 fallback、失败任务和“运行健康诊断”，不得带着严重告警发布。
 
 `health` 只回答进程和数据库是否存活；`readiness` 才会检查正式产品模式、演示加购回退、数据库持久化、认证、安全 Cookie、正式 HTTPS Origin、DeepSeek、`local_executor`、旧 Mock 标志和当前账号执行器状态，不能用前者代替发布验收。
 

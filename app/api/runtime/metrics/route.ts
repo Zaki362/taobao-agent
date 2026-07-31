@@ -15,9 +15,10 @@ export async function GET(request: NextRequest) {
     if (!session) return apiOk({ available: false });
 
     const repository = getRuntimeRepository();
-    const [jobs, devices] = await Promise.all([
+    const [jobs, devices, deviceAuditEvents] = await Promise.all([
       repository.listJobs(sessionId, identity.userId),
-      identity.userId ? repository.listDevices(identity.userId) : Promise.resolve([])
+      identity.userId ? repository.listDevices(identity.userId) : Promise.resolve([]),
+      identity.userId ? repository.listAuditEvents(identity.userId, 12) : Promise.resolve([])
     ]);
     const now = Date.now();
     const counts = jobs.reduce<Record<string, number>>((result, job) => {
@@ -68,6 +69,7 @@ export async function GET(request: NextRequest) {
       session_id: sessionId,
       jobs: jobMetrics,
       devices: deviceMetrics,
+      device_audit_events: deviceAuditEvents,
       llm: llmMetrics,
       health: evaluateRuntimeHealth({
         jobs: jobMetrics,
