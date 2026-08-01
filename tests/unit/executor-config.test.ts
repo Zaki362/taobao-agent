@@ -5,11 +5,13 @@ import * as executorConfig from "../../scripts/executor-config-utils.mjs";
 
 const {
   normalizeExecutorApiUrl,
+  preferredExecutorApiUrl,
   readEnvValue,
   updateExecutorEnv,
   validateExecutorDeviceToken
 } = executorConfig as {
   normalizeExecutorApiUrl: (value: string) => string;
+  preferredExecutorApiUrl: (content: string, environmentValue?: string) => string;
   readEnvValue: (content: string, key: string) => string;
   updateExecutorEnv: (
     content: string,
@@ -27,6 +29,14 @@ describe("local executor configuration", () => {
     expect(validateExecutorDeviceToken(token)).toBe(token);
     expect(() => normalizeExecutorApiUrl("file:///tmp/app")).toThrow("只支持 http 或 https");
     expect(() => validateExecutorDeviceToken("short token")).toThrow("长度不正确");
+  });
+
+  it("prefers the active page origin over a stale saved development port", () => {
+    const existing = "SCENECART_API_URL=http://127.0.0.1:3000\n";
+    expect(preferredExecutorApiUrl(existing, "http://127.0.0.1:3001")).toBe(
+      "http://127.0.0.1:3001"
+    );
+    expect(preferredExecutorApiUrl(existing)).toBe("http://127.0.0.1:3000");
   });
 
   it("updates only managed values, removes duplicates and preserves unrelated secrets", () => {

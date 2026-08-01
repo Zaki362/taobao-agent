@@ -74,7 +74,7 @@ npm run dev
 npm run executor:configure
 ```
 
-该命令会隐藏令牌输入、保留 `.env.local` 中的其他配置、强制使用 `local_executor`，并将文件权限设为仅当前用户可读写。令牌不会进入 shell history。配置完成后运行 `npm run executor:doctor`。
+设置页复制的命令会显式携带当前 SceneCart 页面地址，即使 `3000` 被其他项目占用，也不会误用 `.env.local` 中的旧端口。配置脚本会隐藏令牌输入、保留其他配置、强制使用 `local_executor`，并将文件权限设为仅当前用户可读写。令牌不会进入 shell history。配置完成后运行 `npm run executor:doctor`。
 
 打开终端实际打印的地址，例如：
 

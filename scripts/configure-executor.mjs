@@ -5,6 +5,7 @@ import process from "node:process";
 import readline from "node:readline/promises";
 import {
   normalizeExecutorApiUrl,
+  preferredExecutorApiUrl,
   readEnvValue,
   updateExecutorEnv,
   validateExecutorDeviceToken
@@ -95,7 +96,7 @@ async function main() {
   }
 
   const existing = await readExisting();
-  const currentApiUrl = readEnvValue(existing, "SCENECART_API_URL") || "http://127.0.0.1:3000";
+  const currentApiUrl = preferredExecutorApiUrl(existing, process.env.SCENECART_API_URL);
   const currentQoderPath = readEnvValue(existing, "QODERCLI_PATH") || path.join(os.homedir(), ".local/bin/qodercli");
   const currentToken = readEnvValue(existing, "SCENECART_DEVICE_TOKEN");
   const input = readline.createInterface({ input: process.stdin, output: process.stdout });
@@ -134,4 +135,3 @@ main().catch((error) => {
   console.error(`配置失败：${error instanceof Error ? error.message : String(error)}`);
   process.exitCode = 1;
 });
-

@@ -91,7 +91,7 @@ export function ExecutorSettings() {
   const searchAvailable = readiness?.executor_capabilities.capabilities.module_search.available ?? false;
   const cartAvailable = readiness?.executor_capabilities.capabilities.add_to_cart.available ?? false;
   const environmentConfig = `TAOBAO_EXECUTION_BACKEND=local_executor\nSCENECART_API_URL=${apiUrl}\nSCENECART_DEVICE_TOKEN=${token || "你的设备令牌"}`;
-  const configureCommand = "npm run executor:configure";
+  const configureCommand = `SCENECART_API_URL=${apiUrl} npm run executor:configure`;
   const doctorCommand = "npm run executor:doctor";
   const workerCommand = "npm run worker:local";
 
@@ -475,7 +475,7 @@ export function ExecutorSettings() {
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div>
                   <p className="text-sm font-semibold text-foreground">推荐：交互式安全配置</p>
-                  <p className="mt-1 text-xs leading-5 text-muted-foreground">在项目目录运行，按 Enter 接受默认 API 与 Qoder 路径。</p>
+                  <p className="mt-1 text-xs leading-5 text-muted-foreground">在项目目录运行；命令会锁定当前页面地址，避免误连其他端口。</p>
                 </div>
                 <Button variant="outline" size="sm" onClick={() => copyCommand(configureCommand, "configure")}>
                   <Copy className="mr-2 h-4 w-4" />{copied === "configure" ? "已复制" : "复制配置命令"}

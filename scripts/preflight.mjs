@@ -199,6 +199,7 @@ function assertExecutorConfigurator() {
     !utilities.includes("TAOBAO_EXECUTION_BACKEND") ||
     !utilities.includes("SCENECART_DEVICE_TOKEN") ||
     !settings.includes("npm run executor:configure") ||
+    !settings.includes("SCENECART_API_URL=${apiUrl}") ||
     !settings.includes("/login?next=%2Fsettings%2Fexecutor") ||
     !settingsPage.includes("requireAuthenticatedPageIdentity") ||
     !loginPage.includes("normalizeAuthReturnPath") ||

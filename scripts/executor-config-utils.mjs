@@ -54,6 +54,14 @@ export function normalizeExecutorApiUrl(value) {
   return candidate;
 }
 
+export function preferredExecutorApiUrl(content, environmentValue = "") {
+  return normalizeExecutorApiUrl(
+    environmentValue.trim() ||
+    readEnvValue(content, "SCENECART_API_URL") ||
+    "http://127.0.0.1:3000"
+  );
+}
+
 export function validateExecutorDeviceToken(value) {
   const candidate = value.trim();
   if (candidate.length < 32 || candidate.length > 256) {
@@ -101,4 +109,3 @@ export function updateExecutorEnv(content, values) {
 
   return `${lines.join("\n")}\n`;
 }
-
