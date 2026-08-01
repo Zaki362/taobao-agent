@@ -1,6 +1,6 @@
 "use client";
 
-import { ShoppingCart, Store } from "lucide-react";
+import { ExternalLink, ShoppingCart, Store, Trash2 } from "lucide-react";
 import { HostedInstructionCard, InfoBlock } from "@/components/dashboard-common";
 import { hasRealDetailUrl, isHostedMode, isQueuedExecutionMode } from "@/components/dashboard-helpers";
 import { CartReviewItem, HostedWorkerStatus, MpcStatus } from "@/components/dashboard-types";
@@ -215,13 +215,19 @@ export function SearchSummaryPage({
 export function CartReviewPage({
   items,
   total,
-  onBack
+  onBack,
+  onRemoveDemoItem,
+  removingProductId
 }: {
   items: CartReviewItem[];
   total: number;
   onBack: () => void;
+  onRemoveDemoItem: (item: CartReviewItem) => void;
+  removingProductId: string;
 }) {
   const hasTaobaoCartItems = items.some((item) => item.cart_source !== "demo");
+  const taobaoItemCount = items.filter((item) => item.cart_source !== "demo").length;
+  const demoItemCount = items.length - taobaoItemCount;
 
   return (
     <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_320px]">
@@ -276,6 +282,26 @@ export function CartReviewPage({
                     >
                       查看商品页
                     </Button>
+                    {item.cart_source === "demo" ? (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        disabled={Boolean(removingProductId)}
+                        onClick={() => onRemoveDemoItem(item)}
+                      >
+                        <Trash2 className="h-4 w-4" />
+                        {removingProductId === item.product_id ? "正在移除" : "从演示清单移除"}
+                      </Button>
+                    ) : (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => window.open("https://cart.taobao.com/cart.htm", "_blank", "noopener,noreferrer")}
+                      >
+                        <ExternalLink className="h-4 w-4" />
+                        在淘宝购物车中管理
+                      </Button>
+                    )}
                   </div>
                 </div>
               </div>
@@ -293,7 +319,7 @@ export function CartReviewPage({
           </div>
           <div className="panel-muted p-4 text-sm text-muted-foreground">
             当前页展示的是本产品已加入购物车的商品清单。标记为“淘宝购物车”的商品表示真实加购已成功；标记为“演示购物车”的商品表示真实加购失败后已自动回退到产品内演示清单。
-            购物车删除能力正在单独评估，只会在确认不会影响其他商品时接入。
+            演示项可以直接从本页移除；真实淘宝商品必须前往淘宝购物车管理，本产品不会伪装删除或影响购物车里的其他商品。
           </div>
         </CardContent>
       </Card>
@@ -304,8 +330,17 @@ export function CartReviewPage({
         </CardHeader>
         <CardContent className="space-y-4">
           <InfoBlock label="已加购商品" value={`${items.length} 件`} />
-          <InfoBlock label="商品总价" value={formatCurrency(total)} />
-          <InfoBlock label="当前状态" value={items.length > 0 ? "可前往淘宝购物车结算" : "请先从推荐页加入商品"} />
+          <InfoBlock label="淘宝真实加购" value={`${taobaoItemCount} 件`} />
+          <InfoBlock label="产品内演示项" value={`${demoItemCount} 件`} />
+          <InfoBlock label="清单估算总价" value={formatCurrency(total)} />
+          <InfoBlock
+            label="当前状态"
+            value={taobaoItemCount > 0
+              ? "可前往淘宝确认规格与结算"
+              : demoItemCount > 0
+                ? "当前只有演示清单，尚未真实加购"
+                : "请先从推荐页加入商品"}
+          />
         </CardContent>
       </Card>
     </div>

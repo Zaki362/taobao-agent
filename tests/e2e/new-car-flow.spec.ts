@@ -375,6 +375,30 @@ test("authenticated new-car workflow reaches recommendations through the durable
     await page.getByRole("button", { name: "进入下单购买" }).click();
     await expect(page.getByText("确认下单清单")).toBeVisible();
     await expect(page.getByText(/E2E 真实链路候选/).first()).toBeVisible();
+    await expect(page.getByRole("button", { name: "在淘宝购物车中管理" }).first()).toBeVisible();
+
+    const selectedProductId = adoptedState.bundle_adoption.product_ids[0];
+    const unconfirmedRemoval = await page.request.post("/api/cart/remove", {
+      headers: { Origin: "http://127.0.0.1:3100" },
+      data: {
+        session_id: persistedSessionId,
+        product_id: selectedProductId,
+        confirmed: false
+      }
+    });
+    expect(unconfirmedRemoval.status()).toBe(400);
+
+    const realCartRemoval = await page.request.post("/api/cart/remove", {
+      headers: { Origin: "http://127.0.0.1:3100" },
+      data: {
+        session_id: persistedSessionId,
+        product_id: selectedProductId,
+        confirmed: true
+      }
+    });
+    expect(realCartRemoval.status()).toBe(409);
+    const realCartRemovalPayload = await realCartRemoval.json() as { code: string };
+    expect(realCartRemovalPayload.code).toBe("taobao_cart_managed_externally");
 
     await page.goto("/settings/executor");
     await expect(page.getByText("正式运行就绪度")).toBeVisible();

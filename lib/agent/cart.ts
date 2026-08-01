@@ -7,6 +7,18 @@ import { enqueueAddToCartJob } from "@/lib/runtime/jobs";
 import { allowDemoCartFallback } from "@/lib/runtime/product-mode";
 import { refreshBundleAdoptionProgress } from "@/lib/session/bundle-adoption";
 
+export type CartItemRemovalErrorCode = "cart_item_not_found" | "taobao_cart_managed_externally";
+
+export class CartItemRemovalError extends Error {
+  constructor(
+    message: string,
+    public readonly code: CartItemRemovalErrorCode
+  ) {
+    super(message);
+    this.name = "CartItemRemovalError";
+  }
+}
+
 function normalizeProductDetailUrl(productId: string, rawUrl?: string) {
   const sourceUrl = rawUrl ?? "";
 
@@ -40,6 +52,26 @@ function buildSelectedItem(
     cart_note: options?.cartNote,
     added_at: new Date().toISOString()
   };
+}
+
+export function removeDemoCartItem(state: SessionState, productId: string) {
+  const selectedItem = state.selected_items.find((item) => item.product_id === productId);
+  if (!selectedItem) {
+    throw new CartItemRemovalError("当前下单清单中没有这件商品。", "cart_item_not_found");
+  }
+
+  // Missing source is treated as a historical real-cart record. Only explicitly
+  // labeled demo entries may be mutated without touching the user's Taobao cart.
+  if (selectedItem.cart_source !== "demo") {
+    throw new CartItemRemovalError(
+      "真实淘宝购物车商品需要在淘宝购物车中管理，本产品不会伪装删除或影响其他商品。",
+      "taobao_cart_managed_externally"
+    );
+  }
+
+  state.selected_items = state.selected_items.filter((item) => item.product_id !== productId);
+  refreshBundleAdoptionProgress(state);
+  return selectedItem;
 }
 
 export async function runCartExecutor(state: SessionState, productId: string) {

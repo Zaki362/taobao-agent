@@ -9,7 +9,7 @@ import { CartReviewPage, SearchSummaryPage } from "@/components/dashboard-execut
 import { buildSceneInputFromBrief, getExecutionModeLabel, isHostedMode, isQueuedExecutionMode } from "@/components/dashboard-helpers";
 import { LandingPage, RequirementPage, ResumeBanner, TopHeader } from "@/components/dashboard-intake";
 import { ResultsPage } from "@/components/dashboard-results";
-import { HostedWorkerStatus, MpcStatus } from "@/components/dashboard-types";
+import { CartReviewItem, HostedWorkerStatus, MpcStatus } from "@/components/dashboard-types";
 import {
   ResumeSnapshot,
   SelectedScenario,
@@ -87,6 +87,7 @@ export function Dashboard() {
   const [workerStatus, setWorkerStatus] = useState<HostedWorkerStatus | null>(null);
   const [resumeSnapshot, setResumeSnapshot] = useState<ResumeSnapshot>(null);
   const [cartingProductId, setCartingProductId] = useState("");
+  const [removingCartProductId, setRemovingCartProductId] = useState("");
 
   const selectedModule = session?.shopping_plan.modules.find((item) => item.module_id === selectedModuleId) ?? session?.shopping_plan.modules[0];
   const selectedProducts = selectedModule ? session?.module_candidates[selectedModule.module_id] ?? [] : [];
@@ -1093,6 +1094,41 @@ export function Dashboard() {
     }
   }
 
+  async function removeDemoCartItem(item: CartReviewItem) {
+    if (!session || item.cart_source !== "demo") {
+      return;
+    }
+    const confirmed = window.confirm(`确认将「${item.title}」从产品内演示清单移除吗？`);
+    if (!confirmed) {
+      return;
+    }
+
+    setBusy(true);
+    setRemovingCartProductId(item.product_id);
+    setErrorMessage("");
+    setStatusMessage(`正在从演示清单移除 ${item.title}`);
+    try {
+      const response = await jsonFetch<{ state: unknown }>("/api/cart/remove", {
+        method: "POST",
+        body: JSON.stringify({
+          session_id: session.session_id,
+          product_id: item.product_id,
+          confirmed: true
+        })
+      });
+      if (!isRenderableSessionState(response.state)) {
+        throw new Error("移除商品后返回的会话状态不完整");
+      }
+      setSession(response.state);
+      setStatusMessage(`已将 ${item.title} 从产品内演示清单移除`);
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "移除演示商品失败");
+    } finally {
+      setBusy(false);
+      setRemovingCartProductId("");
+    }
+  }
+
   async function acceptPurchaseBundle() {
     const purchaseBundle = session?.completion_report?.purchase_bundle;
     if (!session || !purchaseBundle) return;
@@ -1244,6 +1280,8 @@ export function Dashboard() {
             items={cartReviewItems}
             total={estimatedTotal}
             onBack={() => setStage("review_results")}
+            onRemoveDemoItem={removeDemoCartItem}
+            removingProductId={removingCartProductId}
           />
         ) : null}
 

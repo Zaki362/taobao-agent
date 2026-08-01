@@ -1,4 +1,4 @@
-import { runCartExecutor } from "@/lib/agent/cart";
+import { removeDemoCartItem as removeDemoSelectedItem, runCartExecutor } from "@/lib/agent/cart";
 import { consumeAgentDecision, pendingAgentDecision, recordAgentDecision, removeModuleAgentDecisions } from "@/lib/agent/decision-engine";
 import {
   applyBudgetReallocationSuggestion,
@@ -202,6 +202,32 @@ export async function addToCart(sessionId: string, productId: string, userId?: s
     state,
     result
   };
+}
+
+export async function removeDemoCartItem(sessionId: string, productId: string, userId?: string) {
+  return withWorkflowSessionTransaction(sessionId, async () => {
+    const state = await ensureSession(sessionId, userId);
+    if (!state) {
+      throw new Error("session not found");
+    }
+
+    const removedItem = removeDemoSelectedItem(state, productId);
+    await persistSession(state);
+    await getRuntimeRepository().appendEvent({
+      user_id: state.owner_id ?? userId,
+      session_id: state.session_id,
+      event_type: "cart.demo_item_removed",
+      payload: {
+        product_id: removedItem.product_id,
+        module_id: removedItem.module_id,
+        cart_source: removedItem.cart_source,
+        remaining_items: state.selected_items.length,
+        bundle_adoption_status: state.bundle_adoption?.status
+      }
+    });
+
+    return { state, removedItem };
+  });
 }
 
 export async function adoptPurchaseBundle(

@@ -277,6 +277,7 @@ export function resolveHostedAddToCartTask(
         shop_name: product.shop_name,
         module_name: task.module_name,
         selected_spec: "默认可选规格（以淘宝购物车页为准）",
+        cart_source: "taobao",
         added_at: new Date().toISOString()
       };
       state.selected_items = [...state.selected_items.filter((item) => item.product_id !== product.product_id), selected];

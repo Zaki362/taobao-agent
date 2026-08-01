@@ -147,6 +147,7 @@ describe("Agent purchase bundle adoption", () => {
     });
 
     expect(state.selected_items.map((item) => item.product_id)).toContain(productId);
+    expect(state.selected_items.find((item) => item.product_id === productId)?.cart_source).toBe("taobao");
     expect(state.bundle_adoption?.added_product_ids).toContain(productId);
     expect(state.bundle_adoption?.pending_product_ids).not.toContain(productId);
   });

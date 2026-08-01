@@ -1001,6 +1001,8 @@ executor 不只负责转发工具调用，也负责把 adapter 输出归一化�
 - 正式产品模式失败时明确返回错误并保留重试能力
 - 只有开发预览模式可选择写入明确标记的 demo cart
 
+购物车确认页进一步采用来源隔离：`selected_items.cart_source` 明确区分 `taobao` 与 `demo`。`/api/cart/remove` 只允许删除经过用户确认的 `demo` 条目，并在 Session 锁内同步 `bundle_adoption`；真实淘宝条目和缺少来源的历史条目全部 fail-closed，只提供前往淘宝购物车管理的入口。这样不会把“删除产品内账本记录”伪装成“删除淘宝购物车商品”，也不会误伤用户原有购物车。
+
 调试接口 `/api/mcp/run` 也不能绕过这套机制。它默认关闭，仅在 development 显式配置 `SCENECART_ENABLE_MCP_DEBUG=true` 后存在；production 始终返回 404。即使在调试模式，高风险工具仍必须同时满足：
 
 - 请求体 `confirm_high_risk=true`
@@ -1460,6 +1462,12 @@ executor 不只负责转发工具调用，也负责把 adapter 输出归一化�
 -> 若成功：写入真实加购结果
 -> 若失败：正式模式返回失败；开发预览可按配置回退到 demo cart
 -> 前端进入购物确认页
+
+购物确认页的移除链路：
+
+- 演示项：用户确认 -> `/api/cart/remove` -> Session 锁 -> 校验 `cart_source=demo` -> 删除产品内条目 -> 重算组合采纳进度
+- 真实淘宝项：前端打开淘宝购物车；服务端若收到移除请求则返回 `409 taobao_cart_managed_externally`
+- 来源不明的历史项：按真实淘宝项处理并拒绝删除，避免宽松兼容造成误操作
 
 ---
 

@@ -24,7 +24,7 @@ vi.mock("@/lib/runtime/jobs", () => ({
   enqueueAddToCartJob: vi.fn()
 }));
 
-import { runCartExecutor } from "@/lib/agent/cart";
+import { CartItemRemovalError, removeDemoCartItem, runCartExecutor } from "@/lib/agent/cart";
 
 const originalProductMode = process.env.SCENECART_PRODUCT_MODE;
 const originalDemoFallback = process.env.ALLOW_DEMO_CART_FALLBACK;
@@ -77,6 +77,15 @@ describe("cart behavior by product mode", () => {
     expect(state.selected_items[0].cart_source).toBe("demo");
     expect(state.tool_logs[0].tool_name).toBe("demo_cart_fallback");
     expect(state.bundle_adoption?.status).toBe("completed");
+
+    const removed = removeDemoCartItem(state, "product-1");
+    expect(removed.cart_source).toBe("demo");
+    expect(state.selected_items).toHaveLength(0);
+    expect(state.bundle_adoption).toMatchObject({
+      status: "accepted",
+      added_product_ids: [],
+      pending_product_ids: ["product-1"]
+    });
   });
 
   it("fails closed without mutating the cart in formal product mode", async () => {
@@ -89,5 +98,34 @@ describe("cart behavior by product mode", () => {
     await expect(runCartExecutor(state, "product-1")).rejects.toThrow("淘宝真实加购失败");
     expect(state.selected_items).toHaveLength(0);
     expect(state.tool_logs).toHaveLength(0);
+  });
+
+  it("fails closed when asked to remove a real or historical cart item", () => {
+    const state = createSessionFixture();
+    const moduleId = state.shopping_plan.modules[0].module_id;
+    state.selected_items = [{
+      product_id: "real-product",
+      module_id: moduleId,
+      title: "真实淘宝商品",
+      price: 99,
+      cart_source: "taobao",
+      added_at: new Date().toISOString()
+    }];
+
+    expect(() => removeDemoCartItem(state, "real-product"))
+      .toThrow(CartItemRemovalError);
+    expect(state.selected_items).toHaveLength(1);
+
+    state.selected_items[0].cart_source = undefined;
+    expect(() => removeDemoCartItem(state, "real-product"))
+      .toThrow("真实淘宝购物车商品需要在淘宝购物车中管理");
+    expect(state.selected_items).toHaveLength(1);
+  });
+
+  it("returns a not-found error without changing the current selection", () => {
+    const state = createSessionFixture();
+    expect(() => removeDemoCartItem(state, "missing-product"))
+      .toThrow("当前下单清单中没有这件商品");
+    expect(state.selected_items).toEqual([]);
   });
 });

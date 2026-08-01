@@ -207,6 +207,7 @@ function assertRequiredFiles() {
     "app/api/agent/next-action/route.ts",
     "app/api/modules/search/route.ts",
     "app/api/cart/add/route.ts",
+    "app/api/cart/remove/route.ts",
     "app/api/mcp/status/route.ts",
     "app/api/session/agent-directives/route.ts",
     "app/api/session/budget-reallocation/route.ts",
@@ -328,6 +329,7 @@ function assertArchitectureContracts() {
   const hostedWorkerAuth = tryReadText("lib/auth/hosted-worker.ts");
   const cart = tryReadText("lib/agent/cart.ts");
   const cartRoute = tryReadText("app/api/cart/add/route.ts");
+  const cartRemoveRoute = tryReadText("app/api/cart/remove/route.ts");
   const qoder = tryReadText("lib/mcp/qoder.ts");
   const mcpExecutor = tryReadText("lib/mcp/executor.ts");
   const mcpLogging = tryReadText("lib/mcp/logging.ts");
@@ -779,6 +781,16 @@ function assertArchitectureContracts() {
     },
     {
       ok:
+        cart.includes('selectedItem.cart_source !== "demo"') &&
+        cart.includes("taobao_cart_managed_externally") &&
+        cartRemoveRoute.includes("body.confirmed !== true") &&
+        cartRemoveRoute.includes("removeDemoCartItem") &&
+        dashboardExecution.includes("从演示清单移除") &&
+        dashboardExecution.includes("在淘宝购物车中管理"),
+      message: "购物车确认页只能移除明确标记的演示项；真实淘宝条目必须 fail-closed 并引导到淘宝管理"
+    },
+    {
+      ok:
         dashboard.includes("cartingProductId") &&
         dashboardResults.includes("cartingProductId === productId") &&
         !dashboard.includes('setStage("carting");'),
@@ -917,6 +929,13 @@ function assertDocumentationContracts() {
     {
       ok: readme.includes("预算组合采纳") && architecture.includes("bundle_adoption"),
       message: "README 与架构文档必须同步说明组合采纳、待处理清单与逐件确认边界"
+    },
+    {
+      ok:
+        readme.includes("购物车来源隔离") &&
+        architecture.includes("taobao_cart_managed_externally") &&
+        architecture.includes("cart_source=demo"),
+      message: "README 与架构文档必须同步说明演示购物项移除和真实淘宝购物车 fail-closed 边界"
     },
     {
       ok: readme.includes("候选池复盘") && readme.includes("按 Agent 建议补搜"),
