@@ -10,13 +10,15 @@ import { composePurchaseBundle } from "@/lib/llm/deepseek";
 import { runModuleSearch } from "@/lib/agent/product-matcher";
 import { decideNextAgentActionV2 } from "@/lib/agent/runtime-v2";
 import { getRuntimeRepository } from "@/lib/runtime";
-import { withWorkflowSessionLock } from "@/lib/runtime/database";
+import { withWorkflowSessionLock, withWorkflowSessionTransaction } from "@/lib/runtime/database";
 import { loadSession, persistSession } from "@/lib/session/repository";
 import { invalidateAgentCompletionArtifacts } from "@/lib/session/bundle-adoption";
 import type { AgentDecision, SessionState } from "@/lib/session/types";
 
 export type AgentWorkflowTrigger =
   | "user_start"
+  | "user_pause"
+  | "user_resume"
   | "user_recover_gaps"
   | "user_improve_quality"
   | "job_completed"
@@ -34,6 +36,16 @@ export class AgentCompletionRecoveryError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "AgentCompletionRecoveryError";
+  }
+}
+
+export class AgentWorkflowControlError extends Error {
+  constructor(
+    message: string,
+    public readonly code: "workflow_not_running" | "workflow_not_paused"
+  ) {
+    super(message);
+    this.name = "AgentWorkflowControlError";
   }
 }
 
@@ -290,6 +302,68 @@ export async function advanceAgentWorkflow(
       activeRunners.delete(runnerKey);
     }
   }
+}
+
+export async function pauseAgentWorkflow(sessionId: string, userId: string | undefined) {
+  return withWorkflowSessionTransaction(sessionId, async () => {
+    const state = await loadSession(sessionId, userId);
+    if (!state) throw new Error("session not found");
+    if (state.agent_runtime.workflow_status === "paused" && !state.agent_runtime.auto_continue) {
+      return { state, outcome: "paused" as const };
+    }
+
+    const activeTask = activeModuleTask(state);
+    const running =
+      state.agent_runtime.auto_continue ||
+      state.agent_runtime.workflow_status === "running" ||
+      state.agent_runtime.workflow_status === "waiting_for_tools" ||
+      Boolean(activeTask);
+    if (!running || state.agent_runtime.workflow_status === "completed") {
+      throw new AgentWorkflowControlError("当前没有可暂停的 Agent 搜索流程。", "workflow_not_running");
+    }
+
+    transition(state, {
+      status: "paused",
+      moduleId: activeTask?.module_id ?? state.agent_runtime.current_module_id,
+      message: activeTask
+        ? `已按用户要求暂停自动推进；「${activeTask.module_name ?? "当前模块"}」完成后不会继续下一个模块`
+        : "已按用户要求暂停 Agent 搜索，可随时从当前进度继续",
+      autoContinue: false
+    });
+    await persistSession(state);
+    await emitWorkflowEvent(state, "user_pause", "paused");
+    return { state, outcome: "paused" as const };
+  });
+}
+
+export async function resumeAgentWorkflow(sessionId: string, userId: string | undefined) {
+  const prepared = await withWorkflowSessionTransaction(sessionId, async () => {
+    const state = await loadSession(sessionId, userId);
+    if (!state) throw new Error("session not found");
+    if (state.agent_runtime.workflow_status !== "paused" || state.agent_runtime.auto_continue) {
+      throw new AgentWorkflowControlError("当前 Agent 搜索流程不处于暂停状态。", "workflow_not_paused");
+    }
+
+    const activeTask = activeModuleTask(state);
+    transition(state, {
+      status: activeTask ? "waiting_for_tools" : "running",
+      moduleId: activeTask?.module_id ?? state.agent_runtime.current_module_id,
+      message: activeTask
+        ? `已恢复自动推进，等待「${activeTask.module_name ?? "当前模块"}」完成后继续`
+        : "已从原进度恢复，Agent 正在选择下一个未完成模块",
+      autoContinue: true
+    });
+    await persistSession(state);
+    if (activeTask) {
+      await emitWorkflowEvent(state, "user_resume", "waiting");
+    }
+    return { state, activeTask: Boolean(activeTask) };
+  });
+
+  if (prepared.activeTask) {
+    return { state: prepared.state, outcome: "waiting" as const };
+  }
+  return advanceAgentWorkflow(sessionId, userId, { trigger: "user_resume" });
 }
 
 export async function recoverAgentCompletionGaps(

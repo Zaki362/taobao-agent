@@ -816,6 +816,8 @@ DeepSeek 目前承担六类结构化任务：
 
 `workflow-runner` 把 `workflow_run_id`、`workflow_status`、`current_module_id`、`auto_continue`、`continuation_count` 和状态说明写入 Session。每轮最多排队一个外部工具任务；成功回填后继续下一模块，终态失败则形成失败轨迹并容错跳过，用户取消则暂停整轮自动推进。任务幂等键按会话、模块、搜索词和本轮运行 ID 构造，重复完成回执不会二次续跑。`workflow-recovery` 可由 Worker 空闲轮询、独立恢复进程或云端 Cron 触发；Repository 直接筛选无活跃工具任务或关联 Job 已终态的候选，按旧会话优先恢复，并隔离单个 Session 的恢复失败。它只重放已经持久化但尚未续跑的结果，再补排后续模块，不重新执行淘宝动作。浏览器只通过 SSE 和恢复轮询观察进度，并保留“查看推荐结果”的用户确认门槛。
 
+用户控制采用协作式暂停而不是强杀外部进程。`/api/agent/pause` 在 Session 事务锁内把状态切到 `paused` 并关闭 `auto_continue`；已经被执行器领取的当前模块仍可安全完成与回填，回填后的续跑入口会得到 `no_op`，不会创建下一任务。`/api/agent/resume` 恢复同一 `workflow_run_id`，保留已有候选、搜索轨迹、工具预算和已完成模块：若当前任务仍在运行则等待其完成，否则立即让 Agent 选择下一个未完成模块。主搜索页和执行台都提供相同控制，且两种动作均要求用户显式确认。
+
 补搜采用跨轮次候选池，而不是“最后一次搜索覆盖前一次”。`candidate-ranker` 将已有 `ProductCandidate` 与本轮回填按 `product_id` 去重，合并完整字段后，用当前 Scene Brief、模块预算、搜索策略和 Agent 重排规则重新选择三档候选。`runtime/jobs` 在 DeepSeek 候选复盘前完成这次合并，因此模型评估的是完整证据池；`hosted.resolve` 再执行一次幂等合并，覆盖进程恢复和旧宿主兼容路径。`module_search_traces` 保留每轮关键词和原始返回量，同时单独记录最终候选数；补搜失败只追加失败 attempt，已有候选不会被清空。
 
 当 Runtime 决定 `complete_workflow` 时，`completion-review` 会生成方案级 `completion_report`：计算规划覆盖率、必需模块覆盖率、候选总量、薄弱候选池、预算压力、缺价模块和容错跳过，并保留最终 DeepSeek Runtime/规则停止理由。同时，`purchase-bundle` 会先通过确定性搜索得到预算安全组合，再允许 DeepSeek `compose_purchase_bundle` 在已知候选 ID 内提出更符合用户偏好的组合。后端强制校验商品白名单、每模块最多一件、总预算上限和必需模块覆盖下限；不合格输出回退为规则组合。用户可以显式把该组合采纳为 `bundle_adoption`，但它只是一份产品内待处理清单：服务端重新核对当前报告、候选模块、标题和价格，真实加购仍逐件确认。任何重搜或规划变更都会同时清除旧报告和旧清单。
@@ -1574,6 +1576,8 @@ executor 不只负责转发工具调用，也负责把 adapter 输出归一化�
 - `POST /api/modules/search`
 - `POST /api/cart/add`
 - `POST /api/agent/run`
+- `POST /api/agent/pause`
+- `POST /api/agent/resume`
 - `POST /api/mcp/run`
 - `GET /api/session/state`
 - `GET /api/mcp/status`

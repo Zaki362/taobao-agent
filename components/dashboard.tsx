@@ -88,6 +88,7 @@ export function Dashboard() {
   const [resumeSnapshot, setResumeSnapshot] = useState<ResumeSnapshot>(null);
   const [cartingProductId, setCartingProductId] = useState("");
   const [removingCartProductId, setRemovingCartProductId] = useState("");
+  const [workflowControlBusy, setWorkflowControlBusy] = useState(false);
 
   const selectedModule = session?.shopping_plan.modules.find((item) => item.module_id === selectedModuleId) ?? session?.shopping_plan.modules[0];
   const selectedProducts = selectedModule ? session?.module_candidates[selectedModule.module_id] ?? [] : [];
@@ -567,11 +568,15 @@ export function Dashboard() {
         );
         setSelectedModuleId(completedModules[0]?.module_id ?? modules[0]?.module_id ?? "");
         setSearchSummary([
-          `服务端 Agent 已完成 ${completedModules.length}/${modules.length} 个模块的候选整理`,
+          `服务端 Agent 已整理 ${completedModules.length}/${modules.length} 个模块的候选`,
           latestSession.market_feedback.summary,
           latestSession.agent_runtime.workflow_message
         ]);
-        setStatusMessage("后台 Agent 搜索流程已完成。你可以直接查看推荐结果。");
+        setStatusMessage(
+          latestSession.agent_runtime.workflow_status === "paused"
+            ? latestSession.agent_runtime.workflow_message
+            : "后台 Agent 搜索流程已完成。你可以直接查看推荐结果。"
+        );
         return;
       }
 
@@ -718,8 +723,8 @@ export function Dashboard() {
           : runtime.workflow_message
       );
 
-      if (runtime.workflow_status === "completed") return latest;
-      if (runtime.workflow_status === "paused" || runtime.workflow_status === "error") {
+      if (runtime.workflow_status === "completed" || runtime.workflow_status === "paused") return latest;
+      if (runtime.workflow_status === "error") {
         throw new Error(runtime.workflow_message || "服务端 Agent 已暂停");
       }
 
@@ -728,6 +733,75 @@ export function Dashboard() {
     }
 
     throw new Error("搜索仍在后台执行。你可以关闭页面，稍后通过当前进度继续查看。");
+  }
+
+  async function pauseServerWorkflow() {
+    if (!session) return;
+    if (!window.confirm("当前模块可以继续完成，但 Agent 不会自动进入下一个模块。确认暂停自动搜索吗？")) {
+      return;
+    }
+    setWorkflowControlBusy(true);
+    setErrorMessage("");
+    try {
+      const response = await jsonFetch<{ state: unknown }>("/api/agent/pause", {
+        method: "POST",
+        body: JSON.stringify({ session_id: session.session_id, confirmed: true })
+      });
+      if (!isRenderableSessionState(response.state)) {
+        throw new Error("暂停后返回的会话状态不完整");
+      }
+      setSession(response.state);
+      setSearchSummary((current) => [
+        ...current.filter((item) => !item.startsWith("用户已暂停")),
+        "用户已暂停自动推进；当前模块如已被领取仍会完成，之后不会继续搜索"
+      ]);
+      setStatusMessage(response.state.agent_runtime.workflow_message);
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "暂停 Agent 搜索失败");
+    } finally {
+      setWorkflowControlBusy(false);
+    }
+  }
+
+  async function resumeServerWorkflow() {
+    if (!session) return;
+    if (!window.confirm("将保留已有候选和已完成模块，从当前进度继续搜索。确认继续吗？")) {
+      return;
+    }
+    setWorkflowControlBusy(true);
+    setBusy(true);
+    setErrorMessage("");
+    setStatusMessage("正在从原进度恢复 Agent 搜索");
+    try {
+      const response = await jsonFetch<{ state: unknown }>("/api/agent/resume", {
+        method: "POST",
+        body: JSON.stringify({ session_id: session.session_id, confirmed: true })
+      });
+      if (!isRenderableSessionState(response.state)) {
+        throw new Error("恢复后返回的会话状态不完整");
+      }
+      setSession(response.state);
+      const latest = await waitForServerWorkflow(session.session_id, session.shopping_plan.modules.length);
+      const completedModules = latest.shopping_plan.modules.filter(
+        (module) => (latest.module_candidates[module.module_id]?.length ?? 0) > 0
+      );
+      setSelectedModuleId(completedModules[0]?.module_id ?? latest.shopping_plan.modules[0]?.module_id ?? "");
+      setSearchSummary([
+        `服务端 Agent 已整理 ${completedModules.length}/${latest.shopping_plan.modules.length} 个模块`,
+        latest.market_feedback.summary,
+        latest.agent_runtime.workflow_message
+      ]);
+      setStatusMessage(
+        latest.agent_runtime.workflow_status === "paused"
+          ? latest.agent_runtime.workflow_message
+          : "后台 Agent 搜索流程已完成。你可以直接查看推荐结果。"
+      );
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "继续 Agent 搜索失败");
+    } finally {
+      setBusy(false);
+      setWorkflowControlBusy(false);
+    }
   }
 
   function waitForRuntimeJob(sessionId: string, jobId: string) {
@@ -1242,7 +1316,10 @@ export function Dashboard() {
               await refreshHostedInstruction(session.session_id);
             }}
             onViewResults={() => setStage("review_results")}
+            onPauseWorkflow={pauseServerWorkflow}
+            onResumeWorkflow={resumeServerWorkflow}
             busy={busy}
+            workflowControlBusy={workflowControlBusy}
           />
         ) : null}
 

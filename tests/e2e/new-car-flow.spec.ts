@@ -210,7 +210,7 @@ test("authenticated new-car workflow reaches recommendations through the durable
 
   let stopExecutor = false;
   const executorBehavior = { failFirstModuleSearch: true, failedModuleId: undefined as string | undefined };
-  const executor = runExecutorUntilStopped(page.request, deviceToken, () => stopExecutor, executorBehavior);
+  let executor: Promise<void> | null = null;
 
   try {
     await page.getByRole("button", { name: /新车选购/ }).click();
@@ -239,6 +239,30 @@ test("authenticated new-car workflow reaches recommendations through the durable
       };
       return state.agent_runtime.workflow_status;
     }, { timeout: 30_000 }).toBe("waiting_for_tools");
+
+    page.once("dialog", (dialog) => dialog.accept());
+    await page.getByRole("button", { name: "完成当前模块后暂停" }).click();
+    await expect(page.getByRole("button", { name: "从当前进度继续" })).toBeEnabled();
+    const pausedResponse = await page.request.get(`/api/session/state?session_id=${persistedSessionId}`);
+    const pausedState = await pausedResponse.json() as {
+      agent_runtime: { workflow_status: string; auto_continue: boolean; workflow_run_id?: string };
+    };
+    expect(pausedState.agent_runtime).toMatchObject({ workflow_status: "paused", auto_continue: false });
+    const originalWorkflowRunId = pausedState.agent_runtime.workflow_run_id;
+
+    executor = runExecutorUntilStopped(page.request, deviceToken, () => stopExecutor, executorBehavior);
+    page.once("dialog", (dialog) => dialog.accept());
+    await page.getByRole("button", { name: "从当前进度继续" }).click();
+    await expect.poll(async () => {
+      const response = await page.request.get(`/api/session/state?session_id=${persistedSessionId}`);
+      const state = await response.json() as {
+        agent_runtime: { workflow_status: string; auto_continue: boolean; workflow_run_id?: string };
+      };
+      return {
+        autoContinue: state.agent_runtime.auto_continue,
+        sameRun: state.agent_runtime.workflow_run_id === originalWorkflowRunId
+      };
+    }, { timeout: 30_000 }).toEqual({ autoContinue: true, sameRun: true });
 
     // Leave the product page after the first task is queued. The server and local executor
     // must continue the remaining modules without a browser-driven action loop.

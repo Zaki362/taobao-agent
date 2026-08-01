@@ -7,6 +7,8 @@ import { reviewModuleCandidates } from "@/lib/agent/candidate-reviewer";
 import {
   advanceAgentWorkflow,
   improveAgentCompletionQuality,
+  pauseAgentWorkflow,
+  resumeAgentWorkflow,
   recoverAgentCompletionGaps
 } from "@/lib/agent/workflow-runner";
 import { recoverAgentWorkflowForExecutor, recoverAgentWorkflows } from "@/lib/agent/workflow-recovery";
@@ -111,6 +113,54 @@ describe("server-managed Agent workflow", () => {
     expect((await localRuntimeRepository.listEvents(sessionId, 0, device.user_id, 100))
       .some((event) => event.event_type === "agent.purchase_bundle.composed"))
       .toBe(true);
+  });
+
+  it("pauses after the active module and resumes the same workflow without losing progress", async () => {
+    const sessionId = `session-workflow-pause-${Date.now()}`;
+    sessionFiles.add(sessionId);
+    const state = createSessionFixture({ session_id: sessionId });
+    await localRuntimeRepository.saveSession(state);
+
+    const started = await advanceAgentWorkflow(sessionId, device.user_id, {
+      start: true,
+      trigger: "user_start"
+    });
+    expect(started.outcome).toBe("queued");
+    const workflowRunId = started.state.agent_runtime.workflow_run_id;
+    const firstJob = await localRuntimeRepository.claimJob(device, 30_000);
+    expect(firstJob).not.toBeNull();
+
+    const paused = await pauseAgentWorkflow(sessionId, device.user_id);
+    expect(paused.state.agent_runtime).toMatchObject({
+      workflow_status: "paused",
+      auto_continue: false,
+      workflow_run_id: workflowRunId
+    });
+    expect(paused.state.agent_runtime.workflow_message).toContain("不会继续下一个模块");
+
+    const firstModuleId = String(firstJob!.payload.module_id);
+    await applyCompletedRuntimeJob(firstJob!.id, device, {
+      summary: "暂停前的模块仍正常完成",
+      candidates: candidates(firstModuleId, String(firstJob!.payload.module_name))
+    });
+    const stoppedContinuation = await advanceAgentWorkflow(sessionId, device.user_id, {
+      trigger: "job_completed"
+    });
+    expect(stoppedContinuation.outcome).toBe("no_op");
+    expect(await localRuntimeRepository.claimJob(device, 30_000)).toBeNull();
+
+    const resumed = await resumeAgentWorkflow(sessionId, device.user_id);
+    expect(resumed.outcome).toBe("queued");
+    expect(resumed.state.agent_runtime.workflow_run_id).toBe(workflowRunId);
+    expect(resumed.state.agent_runtime.auto_continue).toBe(true);
+    expect(resumed.state.module_candidates[firstModuleId]).toHaveLength(3);
+    const nextJob = await localRuntimeRepository.claimJob(device, 30_000);
+    expect(nextJob?.payload.module_id).not.toBe(firstModuleId);
+
+    const events = await localRuntimeRepository.listEvents(sessionId, 0, device.user_id, 100);
+    expect(events.some((event) =>
+      event.event_type === "agent.workflow.updated" && event.payload.trigger === "user_pause"
+    )).toBe(true);
   });
 
   it("coalesces concurrent start requests into one queued module", async () => {

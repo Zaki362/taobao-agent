@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { RefreshCcw } from "lucide-react";
+import { Pause, Play, RefreshCcw } from "lucide-react";
 import { jsonFetch } from "@/components/dashboard-api";
 import { HostedWorkerStatus } from "@/components/dashboard-types";
 import { Badge } from "@/components/ui/badge";
@@ -263,6 +263,42 @@ export function HostedConsole() {
       await loadData();
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : "重新入队失败");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function pauseWorkflow() {
+    if (!selectedSession) return;
+    if (!window.confirm("当前模块完成后不会继续下一个模块，确认暂停自动搜索吗？")) return;
+    setBusy(true);
+    setErrorMessage("");
+    try {
+      await jsonFetch("/api/agent/pause", {
+        method: "POST",
+        body: JSON.stringify({ session_id: selectedSession.session_id, confirmed: true })
+      });
+      await loadData();
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "暂停 Agent 搜索失败");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function resumeWorkflow() {
+    if (!selectedSession) return;
+    if (!window.confirm("将保留已有结果并从原进度继续，确认恢复自动搜索吗？")) return;
+    setBusy(true);
+    setErrorMessage("");
+    try {
+      await jsonFetch("/api/agent/resume", {
+        method: "POST",
+        body: JSON.stringify({ session_id: selectedSession.session_id, confirmed: true })
+      });
+      await loadData();
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "继续 Agent 搜索失败");
     } finally {
       setBusy(false);
     }
@@ -635,6 +671,24 @@ export function HostedConsole() {
                       </p>
                     </div>
                   </CardContent>
+                  {selectedSession.execution_mode === "local_executor" &&
+                  (selectedSession.agent_runtime.workflow_status === "running" ||
+                    selectedSession.agent_runtime.workflow_status === "waiting_for_tools" ||
+                    selectedSession.agent_runtime.workflow_status === "paused") ? (
+                    <CardContent className="flex flex-wrap gap-3 pt-0">
+                      {selectedSession.agent_runtime.workflow_status === "paused" ? (
+                        <Button variant="outline" disabled={busy} onClick={resumeWorkflow}>
+                          <Play className="h-4 w-4" />
+                          从原进度继续
+                        </Button>
+                      ) : (
+                        <Button variant="outline" disabled={busy} onClick={pauseWorkflow}>
+                          <Pause className="h-4 w-4" />
+                          完成当前模块后暂停
+                        </Button>
+                      )}
+                    </CardContent>
+                  ) : null}
                   {selectedSession.agent_runtime.last_fallback_reason ? (
                     <CardContent className="pt-0">
                       <div className="panel-muted p-4 text-xs leading-6 text-muted-foreground">

@@ -1,6 +1,6 @@
 "use client";
 
-import { ExternalLink, ShoppingCart, Store, Trash2 } from "lucide-react";
+import { ExternalLink, Pause, Play, ShoppingCart, Store, Trash2 } from "lucide-react";
 import { HostedInstructionCard, InfoBlock } from "@/components/dashboard-common";
 import { hasRealDetailUrl, isHostedMode, isQueuedExecutionMode } from "@/components/dashboard-helpers";
 import { CartReviewItem, HostedWorkerStatus, MpcStatus } from "@/components/dashboard-types";
@@ -22,7 +22,10 @@ export function SearchSummaryPage({
   setExpandedLogs,
   onRefresh,
   onViewResults,
-  busy
+  onPauseWorkflow,
+  onResumeWorkflow,
+  busy,
+  workflowControlBusy
 }: {
   session: SessionState;
   mcpStatus: MpcStatus | null;
@@ -35,7 +38,10 @@ export function SearchSummaryPage({
   setExpandedLogs: (value: boolean) => void;
   onRefresh: () => void;
   onViewResults: () => void;
+  onPauseWorkflow: () => void;
+  onResumeWorkflow: () => void;
   busy: boolean;
+  workflowControlBusy: boolean;
 }) {
   const hostedMode = isHostedMode(mcpStatus);
   const queuedMode = isQueuedExecutionMode(mcpStatus);
@@ -45,6 +51,8 @@ export function SearchSummaryPage({
       session.agent_runtime.workflow_status === "waiting_for_tools");
   const traceCount = Object.keys(session.module_search_traces ?? {}).length;
   const recentDecisions = [...session.agent_decisions].reverse().slice(0, 8);
+  const canControlServerWorkflow = mcpStatus?.mode === "local_executor";
+  const workflowPaused = session.agent_runtime.workflow_status === "paused";
 
   return (
     <Card className="section-card">
@@ -200,11 +208,31 @@ export function SearchSummaryPage({
         {hostedMode && hostedInstruction ? (
           <HostedInstructionCard instruction={hostedInstruction} />
         ) : null}
-        <div className="flex gap-3">
+        <div className="flex flex-wrap gap-3">
           <Button variant="outline" onClick={onRefresh}>{hostedMode ? "刷新宿主结果" : "刷新执行结果"}</Button>
           <Button variant="outline" onClick={() => setExpandedLogs(!expandedLogs)}>查看执行过程</Button>
+          {canControlServerWorkflow && serverWorkflowActive ? (
+            <Button
+              variant="outline"
+              onClick={onPauseWorkflow}
+              disabled={workflowControlBusy}
+            >
+              <Pause className="h-4 w-4" />
+              {workflowControlBusy ? "正在暂停" : "完成当前模块后暂停"}
+            </Button>
+          ) : null}
+          {canControlServerWorkflow && workflowPaused ? (
+            <Button
+              variant="outline"
+              onClick={onResumeWorkflow}
+              disabled={workflowControlBusy || busy}
+            >
+              <Play className="h-4 w-4" />
+              {workflowControlBusy ? "正在恢复" : "从当前进度继续"}
+            </Button>
+          ) : null}
           <Button onClick={onViewResults} disabled={busy || serverWorkflowActive}>
-            {serverWorkflowActive ? "后台仍在搜索" : "查看推荐结果"}
+            {serverWorkflowActive ? "后台仍在搜索" : workflowPaused ? "查看已有推荐" : "查看推荐结果"}
           </Button>
         </div>
       </CardContent>

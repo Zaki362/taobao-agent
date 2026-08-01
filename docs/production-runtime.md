@@ -145,6 +145,7 @@ pending -> leased -> running -> completed
 - 搜索空结果和最终失败会写入模块搜索轨迹，Agent 会跳过该模块继续执行，不阻塞整条工作流。
 - `agent_runtime.workflow_status` 保存 `running / waiting_for_tools / completed / paused / error`，同时记录运行 ID、当前模块和状态转换次数。
 - 本地执行器完成或终态失败一个模块后，回填 API 会调用服务端 `workflow-runner`；即使浏览器已关闭，后续模块仍会串行入队。
+- 用户可通过 `/api/agent/pause` 请求协作式暂停：当前已领取模块仍允许完成并回填，但 `auto_continue=false` 会阻止下一模块入队。`/api/agent/resume` 会复用原 `workflow_run_id`、候选池和工具预算继续，不会重置整轮搜索。
 - 重复提交已完成任务只返回 `already_completed=true`，不会再次触发 Agent 续跑。
 - Worker 领取不到新任务时会检查本账号仍处于自动续跑状态的会话；独立 `worker:recovery` 或云端 Cron 也会扫描所有持久会话。若发现 Job 结果已持久化但 Session 尚未回填，系统只重放数据库结果并补排下一模块，不会再次执行淘宝动作。
 

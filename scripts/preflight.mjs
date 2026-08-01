@@ -205,6 +205,8 @@ function assertRequiredFiles() {
     "app/api/scene/plan/route.ts",
     "app/api/scene/refine/route.ts",
     "app/api/agent/next-action/route.ts",
+    "app/api/agent/pause/route.ts",
+    "app/api/agent/resume/route.ts",
     "app/api/modules/search/route.ts",
     "app/api/cart/add/route.ts",
     "app/api/cart/remove/route.ts",
@@ -324,7 +326,9 @@ function assertArchitectureContracts() {
   const config = tryReadText("components/dashboard-config.ts");
   const modulesSearchRoute = tryReadText("app/api/modules/search/route.ts");
   const agentNextActionRoute = tryReadText("app/api/agent/next-action/route.ts");
+  const agentPauseRoute = tryReadText("app/api/agent/pause/route.ts");
   const agentRemediateRoute = tryReadText("app/api/agent/remediate/route.ts");
+  const agentResumeRoute = tryReadText("app/api/agent/resume/route.ts");
   const responses = tryReadText("lib/api/responses.ts");
   const hostedWorkerAuth = tryReadText("lib/auth/hosted-worker.ts");
   const cart = tryReadText("lib/agent/cart.ts");
@@ -388,7 +392,9 @@ function assertArchitectureContracts() {
     !config ||
     !modulesSearchRoute ||
     !agentNextActionRoute ||
+    !agentPauseRoute ||
     !agentRemediateRoute ||
+    !agentResumeRoute ||
     !purchaseBundleRoute ||
     !responses ||
     !hostedWorkerAuth ||
@@ -511,6 +517,19 @@ function assertArchitectureContracts() {
         sessionStore.includes("const normalized = normalizeSessionState(inMemory)") &&
         sessionGuards.includes("isAgentDecision"),
       message: "搜索主循环必须由服务端 Agent 决策驱动，并持久化搜索、补搜、跳过与结束动作"
+    },
+    {
+      ok:
+        workflowRunner.includes("pauseAgentWorkflow") &&
+        workflowRunner.includes("resumeAgentWorkflow") &&
+        workflowRunner.includes('trigger: "user_resume"') &&
+        agentPauseRoute.includes("body.confirmed !== true") &&
+        agentResumeRoute.includes("body.confirmed !== true") &&
+        dashboardExecution.includes("完成当前模块后暂停") &&
+        dashboardExecution.includes("从当前进度继续") &&
+        hostedConsole.includes("完成当前模块后暂停") &&
+        hostedConsole.includes("从原进度继续"),
+      message: "服务端 Agent 必须支持用户显式暂停和原进度继续，不能要求强杀运行中的外部工具"
     },
     {
       ok: deepseek.includes("validateSceneBriefOutput") && deepseek.includes("validateShoppingPlanOutput"),
