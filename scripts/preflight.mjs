@@ -152,7 +152,7 @@ function assertPackageScripts() {
   }
 
   const scripts = pkg.scripts ?? {};
-  const required = ["dev", "build", "typecheck", "preflight", "release:audit", "check", "db:migrate", "db:check", "test:unit", "test:integration", "test:e2e", "eval:agent", "worker:local", "worker:recovery", "executor:doctor"];
+  const required = ["dev", "build", "typecheck", "preflight", "release:audit", "check", "db:migrate", "db:check", "test:unit", "test:integration", "test:e2e", "eval:agent", "worker:local", "worker:recovery", "executor:configure", "executor:doctor"];
 
   for (const scriptName of required) {
     if (typeof scripts[scriptName] !== "string") {
@@ -177,6 +177,24 @@ function assertGitignore() {
     if (!gitignore.includes(entry)) {
       fail(`.gitignore: 缺少 ${entry}`);
     }
+  }
+}
+
+function assertExecutorConfigurator() {
+  const configurator = tryReadText("scripts/configure-executor.mjs");
+  const utilities = tryReadText("scripts/executor-config-utils.mjs");
+  const settings = tryReadText("components/executor-settings.tsx");
+  if (!configurator || !utilities || !settings) return;
+
+  if (
+    !configurator.includes("hiddenQuestion") ||
+    !configurator.includes("mode: 0o600") ||
+    !configurator.includes("fs.rename") ||
+    !utilities.includes("TAOBAO_EXECUTION_BACKEND") ||
+    !utilities.includes("SCENECART_DEVICE_TOKEN") ||
+    !settings.includes("npm run executor:configure")
+  ) {
+    fail("本地执行器必须提供不回显令牌、原子写入且限制文件权限的安全配置入口");
   }
 }
 
@@ -231,6 +249,8 @@ function assertRequiredFiles() {
     "lib/runtime/monitoring.ts",
     "lib/security/rate-limit.ts",
     "scripts/local-executor.mjs",
+    "scripts/configure-executor.mjs",
+    "scripts/executor-config-utils.mjs",
     "scripts/executor-doctor.mjs",
     "scripts/db-migrate.mjs",
     "scripts/db-check.mjs",
@@ -878,6 +898,7 @@ function run() {
   assertEnvExample();
   assertPackageScripts();
   assertGitignore();
+  assertExecutorConfigurator();
   assertRequiredFiles();
   assertRemovedLegacyFiles();
   assertArchitectureContracts();

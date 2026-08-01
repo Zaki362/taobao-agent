@@ -73,7 +73,8 @@ export function ExecutorSettings() {
   const onlineDevices = activeDevices.filter((device) => deviceStatus(device) === "在线");
   const searchAvailable = readiness?.executor_capabilities.capabilities.module_search.available ?? false;
   const cartAvailable = readiness?.executor_capabilities.capabilities.add_to_cart.available ?? false;
-  const environmentConfig = `SCENECART_API_URL=${apiUrl}\nSCENECART_DEVICE_TOKEN=${token || "你的设备令牌"}`;
+  const environmentConfig = `TAOBAO_EXECUTION_BACKEND=local_executor\nSCENECART_API_URL=${apiUrl}\nSCENECART_DEVICE_TOKEN=${token || "你的设备令牌"}`;
+  const configureCommand = "npm run executor:configure";
   const doctorCommand = "npm run executor:doctor";
   const workerCommand = "npm run worker:local";
 
@@ -188,7 +189,7 @@ export function ExecutorSettings() {
     },
     {
       title: "注册执行设备",
-      detail: "生成仅属于当前账号和这台电脑的一次性设备令牌。",
+      detail: "生成仅属于当前账号和这台电脑的一次性设备令牌，再通过安全配置命令保存到本机。",
       status: activeDevices.length > 0 ? "done" as const : "pending" as const,
       icon: ShieldCheck
     },
@@ -425,18 +426,39 @@ export function ExecutorSettings() {
           <CardHeader>
             <div className="flex flex-wrap items-center justify-between gap-3">
               <CardTitle>保存一次性设备令牌</CardTitle>
-              <Button variant="outline" size="sm" onClick={() => copyCommand(environmentConfig, "environment")}>
-                <Copy className="mr-2 h-4 w-4" />{copied === "environment" ? "已复制" : "复制环境配置"}
+              <Button variant="outline" size="sm" onClick={() => copyCommand(configureCommand, "configure-header")}>
+                <Copy className="mr-2 h-4 w-4" />{copied === "configure-header" ? "已复制" : "复制配置命令"}
               </Button>
             </div>
           </CardHeader>
           <CardContent className="space-y-3">
             <p className="text-sm leading-6 text-muted-foreground">
-              把下面两行加入项目根目录的 <code>.env.local</code>。关闭页面后无法再次查看原始令牌；本地开发服务重启后，已保存的令牌仍然有效。
+              推荐在新的本地终端运行下面的配置命令，再按提示粘贴令牌。输入过程不会回显，也不会把令牌写入 shell history；脚本只更新执行器相关配置，并把 <code>.env.local</code> 权限限制为当前用户可读写。
             </p>
-            <pre className="overflow-x-auto rounded-[18px] bg-foreground p-4 text-xs leading-6 text-white">{environmentConfig}</pre>
+            <div className="rounded-[18px] border border-primary/20 bg-primary/[0.04] p-4">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <p className="text-sm font-semibold text-foreground">推荐：交互式安全配置</p>
+                  <p className="mt-1 text-xs leading-5 text-muted-foreground">在项目目录运行，按 Enter 接受默认 API 与 Qoder 路径。</p>
+                </div>
+                <Button variant="outline" size="sm" onClick={() => copyCommand(configureCommand, "configure")}>
+                  <Copy className="mr-2 h-4 w-4" />{copied === "configure" ? "已复制" : "复制配置命令"}
+                </Button>
+              </div>
+              <pre className="mt-3 overflow-x-auto rounded-[14px] bg-foreground p-3 text-xs leading-6 text-white">{configureCommand}</pre>
+            </div>
+            <details className="rounded-[18px] border border-border/80 bg-white px-4 py-3">
+              <summary className="cursor-pointer text-sm font-medium text-foreground">手动编辑 .env.local</summary>
+              <p className="mt-3 text-xs leading-5 text-muted-foreground">
+                仅在无法运行交互命令时使用。以下内容包含一次性令牌，不要提交到 Git 或发送给模型。
+              </p>
+              <pre className="mt-3 overflow-x-auto rounded-[14px] bg-foreground p-3 text-xs leading-6 text-white">{environmentConfig}</pre>
+              <Button className="mt-3" variant="outline" size="sm" onClick={() => copyCommand(environmentConfig, "environment")}>
+                <Copy className="mr-2 h-4 w-4" />{copied === "environment" ? "已复制" : "复制环境配置"}
+              </Button>
+            </details>
             <div className="rounded-[16px] border border-amber-200 bg-amber-50 px-4 py-3 text-xs leading-5 text-amber-800">
-              不要把令牌提交到 Git、发送给模型或直接拼进终端命令，以免进入命令历史。
+              关闭页面后无法再次查看原始令牌。如果令牌丢失，请撤销旧设备并重新注册；不要尝试从服务端找回明文。
             </div>
             <div className="flex flex-wrap gap-2 pt-1">
               <Button variant="outline" size="sm" onClick={() => copyCommand(doctorCommand, "doctor-after-save")}>

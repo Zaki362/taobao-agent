@@ -132,6 +132,14 @@ test("authenticated new-car workflow reaches recommendations through the durable
   expect(heartbeat.device.capabilities).toEqual(["module_search"]);
   expect(heartbeat.protocol_version).toBe(protocol.version);
 
+  await page.goto("/settings/executor");
+  await expect(page.getByRole("heading", { name: "连接这台电脑上的 Qoder 与淘宝" })).toBeVisible();
+  await page.getByRole("button", { name: "注册当前设备" }).click();
+  await expect(page.getByRole("heading", { name: "保存一次性设备令牌" })).toBeVisible();
+  await expect(page.getByText("npm run executor:configure", { exact: true })).toBeVisible();
+  await expect(page.getByText("输入过程不会回显，也不会把令牌写入 shell history", { exact: false })).toBeVisible();
+  await page.goto("/");
+
   const outdatedHeartbeat = await page.request.post("/api/executor/heartbeat", {
     headers: {
       Authorization: `Bearer ${deviceToken}`,

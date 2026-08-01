@@ -63,6 +63,14 @@ npm run dev
 
 如果已经在 `.env.local` 配置 `SCENECART_DEVICE_TOKEN`，也可以运行 `npm run dev:auto`。它会等待网页服务健康后启动正式的 `worker:local`；未配置令牌时只启动网页并提示前往执行器设置页，不再自动启动旧 Codex hosted worker。
 
+首次连接本地执行器时，在 `/settings/executor` 注册设备并复制一次性令牌，然后在项目目录运行：
+
+```bash
+npm run executor:configure
+```
+
+该命令会隐藏令牌输入、保留 `.env.local` 中的其他配置、强制使用 `local_executor`，并将文件权限设为仅当前用户可读写。令牌不会进入 shell history。配置完成后运行 `npm run executor:doctor`。
+
 打开：
 
 ```text
@@ -265,11 +273,12 @@ QODERCLI_PATH=/Users/你的用户名/.local/bin/qodercli
 然后运行：
 
 ```bash
+npm run executor:configure
 npm run executor:doctor
 npm run worker:local
 ```
 
-`worker:local` 会先完成 Qoder headless 登录、服务端健康、设备令牌与 `module_search` 能力校验，再发送鉴权心跳并开始领取任务。Doctor 会显示令牌当前拥有的商品搜索 / 真实加购能力，避免“进程在线但任务无法匹配”的误导状态。
+推荐先用 `executor:configure` 在交互式终端中粘贴设置页签发的令牌；它不会回显令牌或覆盖 DeepSeek 等无关环境变量。`worker:local` 会先完成 Qoder headless 登录、服务端健康、设备令牌与 `module_search` 能力校验，再发送鉴权心跳并开始领取任务。Doctor 会显示令牌当前拥有的商品搜索 / 真实加购能力，避免“进程在线但任务无法匹配”的误导状态。
 
 ## 当前实现边界
 

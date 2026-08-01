@@ -1524,6 +1524,8 @@ executor 不只负责转发工具调用，也负责把 adapter 输出归一化�
 
 正式主路径已经收敛为 `local_executor + durable job queue + device token`，且该路径也是未配置 backend 时的默认值。安装 Qoder 不会再触发隐式 provider 切换。主页面只在显式 `codex_hosted` 开发模式下读取旧 Worker 状态，production 会拒绝 legacy hosted API；`qoder_cli`、hosted、experimental bridge 和 mock adapter 仍作为显式 opt-in 的迁移、开发与测试代码存在。手动 MCP 调试端点默认关闭并由 readiness/release audit 约束。后续在真实设备验收稳定后，应按版本计划删除不再需要的旧 provider，而不是让它们重新进入正式运行时。
 
+设备注册后签发的明文 Token 只展示一次。开发机通过 `executor:configure` 在交互式终端中隐藏输入，脚本只更新 `TAOBAO_EXECUTION_BACKEND`、`SCENECART_API_URL`、`SCENECART_DEVICE_TOKEN` 与 `QODERCLI_PATH`，保留其他环境变量，使用临时文件原子替换 `.env.local` 并强制 `0600` 权限。服务端始终只持久化 Token 的 SHA-256 摘要，Doctor 与 Worker 再通过 Bearer Token 和协议版本完成设备鉴权。
+
 ### 10.6 下一步理想演进方向
 
 从架构角度看，下一步更理想的演进路径应该是：
