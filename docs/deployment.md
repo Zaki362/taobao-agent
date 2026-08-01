@@ -29,6 +29,7 @@ AUTH_COOKIE_SECURE=true
 AUTH_REQUIRED=true
 RUNTIME_STORE=postgres
 TAOBAO_EXECUTION_BACKEND=local_executor
+SCENECART_ENABLE_MCP_DEBUG=false
 SCENECART_CRON_SECRET=至少32字符的独立随机密钥
 SCENECART_RECOVERY_STALE_MS=180000
 ```
@@ -46,11 +47,13 @@ SCENECART_RECOVERY_STALE_MS=180000
 7. 使用隔离淘宝测试账号完成一次搜索；真实加购仅在明确授权且账号能力稳定时验收。
 8. 检查执行台中的任务积压、在线设备、模型 fallback、失败任务和“运行健康诊断”，不得带着严重告警发布。
 
-`health` 只回答进程和数据库是否存活；`readiness` 才会检查正式产品模式、演示加购回退、数据库持久化、认证、服务端恢复心跳、安全 Cookie、正式 HTTPS Origin、DeepSeek、`local_executor`、旧 Mock 标志和当前账号执行器状态，不能用前者代替发布验收。应用启动后应等待至少一次恢复 Worker/Cron 心跳，再把实例加入正式流量。
+`health` 只回答进程和数据库是否存活；`readiness` 才会检查正式产品模式、演示加购回退、数据库持久化、认证、服务端恢复心跳、安全 Cookie、正式 HTTPS Origin、DeepSeek、`local_executor`、手动 MCP 调试端点、旧 Mock 标志和当前账号执行器状态，不能用前者代替发布验收。应用启动后应等待至少一次恢复 Worker/Cron 心跳，再把实例加入正式流量。
 
 `SCENECART_PRODUCT_MODE=production` 会强制关闭演示购物车回退，即使误设 `ALLOW_DEMO_CART_FALLBACK=true` 也不会把真实加购失败伪装成成功。开发预览仍可保留该回退，但 UI 与购物清单必须明确标记“演示购物车”。
 
 正式模式也会阻断旧的 `qoder_cli`、`codex_hosted` 与 `experimental_local` 直连路径。误配置时 effective backend 会安全收敛为 `local_executor`，但 readiness 仍保持失败，直到部署环境显式配置正确。
+
+安装 Qoder CLI 不会自动把网页后端切换到 `qoder_cli`；所有兼容 provider 都必须在开发环境显式配置。正式环境还必须保持 `SCENECART_ENABLE_MCP_DEBUG=false`，production 即使误配为 `true` 也会隐藏 `/api/mcp/run`，但 release audit 会继续报错直到配置被修正。
 
 正式环境不要配置 `HOSTED_WORKER_TOKEN`，也不要运行 `npm run worker:codex`。production 会直接拒绝 `/api/hosted/tasks*` 旧 Worker 协议；浏览器主流程也不会轮询旧宿主状态。`/hosted` 页面仍是当前会话、任务、模型和执行器的运维控制台，并不代表继续使用 Codex hosted 执行淘宝任务。
 

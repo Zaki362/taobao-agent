@@ -2,7 +2,7 @@ import { getConfiguredExecutionBackend, getExecutionBackend } from "@/lib/mcp/cl
 import { isAuthenticationRequired, useSecureAuthCookie } from "@/lib/auth/request";
 import { query } from "@/lib/runtime/database";
 import { getRuntimeRepository, runtimeStoreMode } from "@/lib/runtime";
-import { allowDemoCartFallback, getProductMode } from "@/lib/runtime/product-mode";
+import { allowDemoCartFallback, getProductMode, isMcpDebugEnabled } from "@/lib/runtime/product-mode";
 import { summarizeExecutorDevices } from "@/lib/runtime/executor-status";
 import {
   summarizeWorkflowRecoveryHeartbeat,
@@ -54,6 +54,7 @@ export async function inspectRuntimeReadiness(userId?: string) {
   const deepSeekConfigured = configured(process.env.DEEPSEEK_API_KEY) && process.env.DEEPSEEK_DISABLED !== "true";
   const productMode = getProductMode();
   const demoCartFallback = allowDemoCartFallback();
+  const mcpDebugConfigured = process.env.SCENECART_ENABLE_MCP_DEBUG === "true";
   const workflowRecoveryConfigured = (process.env.SCENECART_CRON_SECRET?.trim().length ?? 0) >= 32;
   const workflowRecoveryHeartbeat = workflowRecoveryConfigured
     ? await getRuntimeRepository().getServiceHeartbeat(WORKFLOW_RECOVERY_SERVICE).catch(() => null)
@@ -189,6 +190,16 @@ export async function inspectRuntimeReadiness(userId?: string) {
     "从正式环境删除 HOSTED_WORKER_TOKEN，并停止 worker:codex"
   ));
   checks.push(check(
+    "mcp_debug_endpoint",
+    "手动 MCP 调试端点",
+    mcpDebugConfigured ? "fail" : "pass",
+    true,
+    mcpDebugConfigured
+      ? "仍配置 SCENECART_ENABLE_MCP_DEBUG=true；生产运行时虽然会拒绝访问，但发布配置应显式关闭"
+      : "手动 MCP 调试端点默认关闭，购物工具只能通过 Agent 工作流与持久任务执行",
+    "设置 SCENECART_ENABLE_MCP_DEBUG=false"
+  ));
+  checks.push(check(
     "legacy_mock_mode",
     "旧 Mock 配置",
     process.env.TAOBAO_MCP_MODE === "mock" ? "fail" : "pass",
@@ -263,6 +274,7 @@ export async function inspectRuntimeReadiness(userId?: string) {
   return {
     product_mode: productMode,
     demo_cart_fallback: demoCartFallback,
+    mcp_debug_enabled: isMcpDebugEnabled(),
     configured_executor_backend: configuredExecutor,
     effective_executor_backend: executor,
     ready_for_production: readyForProduction,

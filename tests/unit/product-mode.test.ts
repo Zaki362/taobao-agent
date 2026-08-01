@@ -1,14 +1,22 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { allowDemoCartFallback, getProductMode, isFormalProductMode } from "@/lib/runtime/product-mode";
+import {
+  allowDemoCartFallback,
+  getProductMode,
+  isFormalProductMode,
+  isMcpDebugEnabled
+} from "@/lib/runtime/product-mode";
 
 const originalProductMode = process.env.SCENECART_PRODUCT_MODE;
 const originalDemoFallback = process.env.ALLOW_DEMO_CART_FALLBACK;
+const originalMcpDebug = process.env.SCENECART_ENABLE_MCP_DEBUG;
 
 afterEach(() => {
   if (originalProductMode === undefined) delete process.env.SCENECART_PRODUCT_MODE;
   else process.env.SCENECART_PRODUCT_MODE = originalProductMode;
   if (originalDemoFallback === undefined) delete process.env.ALLOW_DEMO_CART_FALLBACK;
   else process.env.ALLOW_DEMO_CART_FALLBACK = originalDemoFallback;
+  if (originalMcpDebug === undefined) delete process.env.SCENECART_ENABLE_MCP_DEBUG;
+  else process.env.SCENECART_ENABLE_MCP_DEBUG = originalMcpDebug;
 });
 
 describe("product runtime mode", () => {
@@ -34,5 +42,21 @@ describe("product runtime mode", () => {
 
     expect(isFormalProductMode()).toBe(true);
     expect(allowDemoCartFallback()).toBe(false);
+  });
+
+  it("keeps manual MCP debugging disabled unless development explicitly opts in", () => {
+    process.env.SCENECART_PRODUCT_MODE = "development";
+    delete process.env.SCENECART_ENABLE_MCP_DEBUG;
+    expect(isMcpDebugEnabled()).toBe(false);
+
+    process.env.SCENECART_ENABLE_MCP_DEBUG = "true";
+    expect(isMcpDebugEnabled()).toBe(true);
+  });
+
+  it("always disables manual MCP debugging in formal product mode", () => {
+    process.env.SCENECART_PRODUCT_MODE = "production";
+    process.env.SCENECART_ENABLE_MCP_DEBUG = "true";
+
+    expect(isMcpDebugEnabled()).toBe(false);
   });
 });

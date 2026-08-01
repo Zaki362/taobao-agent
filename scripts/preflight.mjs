@@ -126,6 +126,7 @@ function assertEnvExample() {
     "QODERCLI_PATH",
     "TAOBAO_NATIVE_BIN",
     "TAOBAO_MCP_BASE_URL",
+    "SCENECART_ENABLE_MCP_DEBUG",
     "APP_ORIGIN"
   ];
 
@@ -648,8 +649,14 @@ function assertArchitectureContracts() {
         mcpClient.includes("getConfiguredExecutionBackend") &&
         mcpClient.includes("isFormalProductMode") &&
         mcpClient.includes('configured !== "local_executor"') &&
-        mcpClient.includes('return "local_executor"'),
-      message: "正式产品模式必须阻断旧执行 backend，并安全收敛到 local_executor 持久任务路径"
+        mcpClient.includes('return "local_executor"') &&
+        !mcpClient.includes("fs.existsSync") &&
+        !mcpClient.includes("DEFAULT_QODERCLI_PATH") &&
+        mcpRunRoute.includes("isMcpDebugEnabled") &&
+        mcpRunRoute.includes("MCP 手动调试端点未启用") &&
+        releaseAudit.includes('"mcp_debug_endpoint"') &&
+        releaseAudit.includes("SCENECART_ENABLE_MCP_DEBUG"),
+      message: "正式产品必须默认使用 local_executor，不能因安装 Qoder 隐式切换 provider，且手动 MCP 端点必须默认关闭"
     },
     {
       ok:

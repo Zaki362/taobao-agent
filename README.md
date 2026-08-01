@@ -99,6 +99,7 @@ SCENECART_PRODUCT_MODE=production
 ALLOW_DEMO_CART_FALLBACK=false
 TAOBAO_EXECUTION_BACKEND=local_executor
 QODERCLI_PATH=
+SCENECART_ENABLE_MCP_DEBUG=false
 RUNTIME_STORE=postgres
 DATABASE_URL=postgresql://...
 DATABASE_SSL=false
@@ -117,7 +118,9 @@ SCENECART_CRON_SECRET=
 - `DEEPSEEK_DISABLED=true`：仅用于自动化测试或离线诊断，显式禁止读取 `.env.local` 中的真实 Key，保证测试不会产生模型调用和费用。
 - `DEEPSEEK_*_TIMEOUT_MS`：可按解析、规划、调整、方案复核、候选复核、Agent 决策和推荐解释分别设置完整响应超时；计时覆盖响应头和正文读取，失败后使用经过校验的确定性方案继续流程。`DEEPSEEK_AGENT_CHAT_TIMEOUT_MS` 与 `DEEPSEEK_AGENT_REASONER_TIMEOUT_MS` 分别约束常规调度和复杂恢复决策，`DEEPSEEK_REQUEST_TIMEOUT_MS` 可作为其他未单独配置任务的统一覆盖值。
 - `TAOBAO_EXECUTION_BACKEND`：正式路径使用 `local_executor`。`qoder_cli`、`codex_hosted`、`experimental_local` 只用于迁移和本地调试。
+- 未配置 `TAOBAO_EXECUTION_BACKEND` 时也默认使用 `local_executor`；安装 Qoder CLI 不会再隐式改变网页后端架构。开发兼容 provider 必须通过环境变量显式启用。
 - 正式产品模式会阻断 `qoder_cli`、`codex_hosted` 和 `experimental_local` 直接执行；即使环境变量误配，实际工具调用也只会进入 `local_executor` 持久任务队列，同时 readiness 会保留并报告原始误配置。
+- `SCENECART_ENABLE_MCP_DEBUG`：默认 `false`。仅开发环境显式设为 `true` 时开放手动 MCP 调试端点；production 始终返回 404，正常购物流程不依赖该接口。
 - `HOSTED_WORKER_TOKEN`：只保留给旧 Codex hosted 开发兼容流程。正式产品模式会以 `410 legacy_hosted_disabled` 拒绝旧任务 API，生产环境必须删除该令牌并停止 `worker:codex`。
 - `RUNTIME_STORE=postgres`：启用 PostgreSQL 用户、Session、任务与事件持久化；`local` 只适合开发和自动化测试。
 - `SCENECART_LOCAL_RUNTIME_PERSIST`：本地开发默认为 `true`，把设备令牌摘要、登录会话和任务队列原子写入被 Git 忽略的 `.data/runtime/local-runtime.json`，完整重启后无需重新注册设备；自动化测试会显式关闭。正式环境仍必须使用 PostgreSQL。
@@ -213,7 +216,7 @@ lib/scenarios/
 - `POST /api/session/search-strategy`：用户确认规划前微调模块搜索任务包，写回当前 session 的主搜索词和备用词
 - `GET /api/session/state`：读取当前 session 完整状态
 - `GET /api/mcp/status`：读取当前工具执行模式状态
-- `POST /api/mcp/run`：调试 MCP 工具；高风险工具必须同时传 `confirm_high_risk=true` 与 `input.confirmed=true`
+- `POST /api/mcp/run`：仅开发调试使用；需要显式设置 `SCENECART_ENABLE_MCP_DEBUG=true`，production 始终隐藏。高风险工具仍必须同时传 `confirm_high_risk=true` 与 `input.confirmed=true`
 - `GET /api/sessions`：执行台读取会话列表
 - `POST /api/auth/register|login|logout`：用户认证与 HttpOnly 会话
 - `POST /api/executor/devices`：注册本地执行设备并签发一次性令牌

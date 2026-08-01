@@ -1,10 +1,12 @@
 # Qoder CLI Execution Provider
 
-当前项目已经支持把 `qodercli` 作为执行 provider。
+当前项目仍保留把 `qodercli` 作为执行 provider 的开发兼容能力。正式产品主路径是 `local_executor + 持久任务队列 + 设备令牌`，不要把本页配置用于生产环境。
 
 ## 适用场景
 
 当你希望由本地后端直接调用一个“外部 AI 宿主”去执行淘宝能力，而不是走 Codex 宿主代理队列时，可以切到 `qoder_cli` 模式。
+
+该模式必须显式配置。系统不会再因为检测到 `~/.local/bin/qodercli` 或 `QODERCLI_PATH` 就自动切换 provider，因此安装 Qoder 不会改变网页应用的执行架构。
 
 目标链路：
 
@@ -39,6 +41,8 @@ QODERCLI_PATH=~/.local/bin/qodercli
 ```bash
 npm run dev
 ```
+
+`SCENECART_PRODUCT_MODE=production` 时该配置会被运行时阻断并安全收敛为 `local_executor`；readiness 仍会报告配置错误。需要手动调试 MCP 路由时，还必须在 development 中显式设置 `SCENECART_ENABLE_MCP_DEBUG=true`。
 
 ## 当前实现方式
 

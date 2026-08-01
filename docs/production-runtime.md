@@ -23,6 +23,8 @@ Qoder/Taobao 凭证和淘宝登录态始终保留在用户本机，服务端不�
 
 正式模式只允许 `local_executor` 执行外部购物工具。旧 Qoder 直连、Codex 宿主和 experimental bridge 即使被误配，也不会在正式运行时直接获得执行权；系统会安全收敛到持久任务队列，并由 readiness 报告配置错误。
 
+`local_executor` 同时也是未配置 backend 时的默认值。安装 Qoder CLI 不会触发自动 provider 切换；手动 `/api/mcp/run` 调试端点默认关闭，production 无论环境变量如何配置都返回 404。
+
 ## 2. 服务端配置
 
 正式环境至少配置：

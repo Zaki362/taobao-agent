@@ -6,11 +6,13 @@ const originalProductMode = process.env.SCENECART_PRODUCT_MODE;
 const originalBackend = process.env.TAOBAO_EXECUTION_BACKEND;
 const originalRecoverySecret = process.env.SCENECART_CRON_SECRET;
 const originalRecoveryStaleMs = process.env.SCENECART_RECOVERY_STALE_MS;
+const originalMcpDebug = process.env.SCENECART_ENABLE_MCP_DEBUG;
 
 beforeEach(() => {
   resetLocalRuntimeForTests();
   delete process.env.SCENECART_CRON_SECRET;
   delete process.env.SCENECART_RECOVERY_STALE_MS;
+  delete process.env.SCENECART_ENABLE_MCP_DEBUG;
 });
 
 afterEach(() => {
@@ -22,6 +24,8 @@ afterEach(() => {
   else process.env.SCENECART_CRON_SECRET = originalRecoverySecret;
   if (originalRecoveryStaleMs === undefined) delete process.env.SCENECART_RECOVERY_STALE_MS;
   else process.env.SCENECART_RECOVERY_STALE_MS = originalRecoveryStaleMs;
+  if (originalMcpDebug === undefined) delete process.env.SCENECART_ENABLE_MCP_DEBUG;
+  else process.env.SCENECART_ENABLE_MCP_DEBUG = originalMcpDebug;
 });
 
 describe("production readiness", () => {
@@ -38,7 +42,18 @@ describe("production readiness", () => {
     expect(checks.get("authentication")?.status).toBe("fail");
     expect(checks.get("workflow_recovery")?.status).toBe("fail");
     expect(checks.get("executor_backend")?.status).toBe("pass");
+    expect(checks.get("mcp_debug_endpoint")?.status).toBe("pass");
     expect(checks.get("executor_online")?.status).toBe("warn");
+  });
+
+  it("fails readiness when the manual MCP debug endpoint is configured", async () => {
+    process.env.SCENECART_ENABLE_MCP_DEBUG = "true";
+
+    const readiness = await inspectRuntimeReadiness();
+    const debugCheck = readiness.checks.find((item) => item.id === "mcp_debug_endpoint");
+
+    expect(debugCheck?.status).toBe("fail");
+    expect(readiness.mcp_debug_enabled).toBe(true);
   });
 
   it("reports a blocked legacy backend without granting it formal execution rights", async () => {

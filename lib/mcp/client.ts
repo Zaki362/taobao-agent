@@ -1,27 +1,22 @@
-import fs from "node:fs";
-import { homedir } from "node:os";
-import { liveMcpAdapter } from "@/lib/mcp/live";
-import { qoderMcpAdapter } from "@/lib/mcp/qoder";
 import { localExecutorMcpAdapter } from "@/lib/mcp/local-executor";
 import { isFormalProductMode } from "@/lib/runtime/product-mode";
 
 export type ExecutorBackend = "codex_hosted" | "experimental_local" | "qoder_cli" | "local_executor";
 
-const DEFAULT_QODERCLI_PATH = `${homedir()}/.local/bin/qodercli`;
-
 export function getConfiguredExecutionBackend(): ExecutorBackend {
-  if (process.env.TAOBAO_EXECUTION_BACKEND === "local_executor") {
-    return "local_executor";
+  const configured = process.env.TAOBAO_EXECUTION_BACKEND;
+  if (
+    configured === "codex_hosted" ||
+    configured === "experimental_local" ||
+    configured === "qoder_cli" ||
+    configured === "local_executor"
+  ) {
+    return configured;
   }
-  if (process.env.TAOBAO_EXECUTION_BACKEND === "qoder_cli") {
-    return "qoder_cli";
-  }
-  if (process.env.QODERCLI_PATH || fs.existsSync(DEFAULT_QODERCLI_PATH)) {
-    return "qoder_cli";
-  }
-  return process.env.TAOBAO_EXECUTION_BACKEND === "experimental_local"
-    ? "experimental_local"
-    : "codex_hosted";
+
+  // Installing Qoder must not silently change the web application's execution
+  // architecture. Compatibility providers are development-only opt-ins.
+  return "local_executor";
 }
 
 export function getExecutionBackend(): ExecutorBackend {
@@ -56,6 +51,7 @@ export async function getMcpClient() {
   }
 
   if (backend === "qoder_cli") {
+    const { qoderMcpAdapter } = await import("@/lib/mcp/qoder");
     const qoderStatus = await qoderMcpAdapter.detect();
     return {
       client: qoderMcpAdapter,
@@ -63,6 +59,7 @@ export async function getMcpClient() {
     };
   }
 
+  const { liveMcpAdapter } = await import("@/lib/mcp/live");
   const liveStatus = await liveMcpAdapter.detect();
   return {
     client: liveMcpAdapter,

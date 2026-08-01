@@ -14,3 +14,7 @@ export function allowDemoCartFallback() {
   }
   return process.env.ALLOW_DEMO_CART_FALLBACK !== "false";
 }
+
+export function isMcpDebugEnabled() {
+  return !isFormalProductMode() && process.env.SCENECART_ENABLE_MCP_DEBUG === "true";
+}

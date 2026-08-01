@@ -1,17 +1,22 @@
 import { NextRequest } from "next/server";
 import { ensureSession } from "@/lib/agent/orchestrator";
-import { apiOk, apiRouteError, badRequest, conflict, notFound, requireString } from "@/lib/api/responses";
+import { ApiRouteError, apiOk, apiRouteError, badRequest, conflict, notFound, requireString } from "@/lib/api/responses";
 import { getExecutionBackend } from "@/lib/mcp/client";
 import { executeMcpTool } from "@/lib/mcp/executor";
 import { getMcpToolDefinition, isMcpToolName, validateMcpToolInput } from "@/lib/mcp/schema";
 import { persistSession } from "@/lib/session/repository";
 import { getRequestIdentity } from "@/lib/auth/request";
+import { isMcpDebugEnabled } from "@/lib/runtime/product-mode";
 
 export async function POST(request: NextRequest) {
   try {
+    if (!isMcpDebugEnabled()) {
+      throw new ApiRouteError("MCP 手动调试端点未启用。", 404, "not_found");
+    }
     const identity = await getRequestIdentity();
-    if (getExecutionBackend() === "codex_hosted") {
-      return conflict("当前为 Codex 宿主执行模式。请通过 hosted task queue 提交与回填执行结果，而不是直接从 Next.js 进程调用 MCP。");
+    const backend = getExecutionBackend();
+    if (backend === "codex_hosted" || backend === "local_executor") {
+      return conflict("当前为持久队列执行模式，不能从 Next.js 请求进程直接调用 MCP 工具。");
     }
 
     const body = await request.json().catch(() => ({}));

@@ -108,6 +108,15 @@ const checks = [
     "删除 HOSTED_WORKER_TOKEN，并停止 worker:codex"
   ),
   check(
+    "mcp_debug_endpoint",
+    "关闭手动 MCP 调试端点",
+    process.env.SCENECART_ENABLE_MCP_DEBUG !== "true",
+    process.env.SCENECART_ENABLE_MCP_DEBUG !== "true"
+      ? "手动 MCP 调试端点未启用"
+      : "仍配置 SCENECART_ENABLE_MCP_DEBUG=true",
+    "设置 SCENECART_ENABLE_MCP_DEBUG=false"
+  ),
+  check(
     "deepseek",
     "DeepSeek 模型",
     configured(process.env.DEEPSEEK_API_KEY) && process.env.DEEPSEEK_DISABLED !== "true",
