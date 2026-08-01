@@ -78,6 +78,8 @@ npm run start
 
 本地开发可以将 `SCENECART_API_URL`、`SCENECART_DEVICE_TOKEN` 和 `QODERCLI_PATH` 写入被 Git 忽略的 `.env.local`。`executor:doctor` 与 `worker:local` 会自动读取该文件；正式设备建议使用系统密钥存储或进程管理器 Secret。
 
+开发模式的 `RUNTIME_STORE=local` 默认会把设备令牌摘要、登录会话、任务队列和事件原子写入 `.data/runtime/local-runtime.json`，因此重启 Next.js 后已签发 Token 仍然有效。文件权限固定为当前用户可读写，且只保存 Token 摘要、不保存原始 Token；可用 `SCENECART_LOCAL_RUNTIME_PERSIST=false` 创建一次性测试运行时。该能力只改善本地开发体验，正式部署仍必须使用 PostgreSQL。
+
 ## 4. 启动本地执行器
 
 在已安装 Qoder CLI、淘宝 skill 和淘宝桌面版的机器执行：

@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import path from "node:path";
 import { getSession, listSessions, saveSession } from "@/lib/session/store";
 import type { SessionState } from "@/lib/session/types";
 import type {
@@ -21,22 +23,118 @@ interface LocalRuntimeState {
   eventSequence: number;
 }
 
+interface PersistedLocalRuntimeState {
+  version: 1;
+  users: RuntimeUser[];
+  auth_sessions: AuthSessionRecord[];
+  devices: ExecutorDevice[];
+  jobs: RuntimeJob[];
+  service_heartbeats: RuntimeServiceHeartbeat[];
+  events: ExecutionEvent[];
+  event_sequence: number;
+  saved_at: string;
+}
+
+const AUTH_SESSION_TOUCH_PERSIST_INTERVAL_MS = 60_000;
+
 declare global {
   // eslint-disable-next-line no-var
   var __sceneCartLocalRuntime: LocalRuntimeState | undefined;
 }
 
+function emptyRuntimeState(): LocalRuntimeState {
+  return {
+    users: new Map(),
+    authSessions: new Map(),
+    devices: new Map(),
+    jobs: new Map(),
+    serviceHeartbeats: new Map(),
+    events: [],
+    eventSequence: 0
+  };
+}
+
+function localPersistenceEnabled() {
+  if (process.env.SCENECART_LOCAL_RUNTIME_PERSIST === "false") return false;
+  if (process.env.SCENECART_LOCAL_RUNTIME_PERSIST === "true") return true;
+  return process.env.NODE_ENV !== "test";
+}
+
+function localRuntimeFile() {
+  return process.env.SCENECART_LOCAL_RUNTIME_PATH || path.join(process.cwd(), ".data", "runtime", "local-runtime.json");
+}
+
+function records<T>(value: unknown): T[] {
+  return Array.isArray(value)
+    ? value.filter((item) => Boolean(item) && typeof item === "object") as T[]
+    : [];
+}
+
+function loadPersistedRuntimeState(): LocalRuntimeState {
+  const empty = emptyRuntimeState();
+  if (!localPersistenceEnabled()) return empty;
+
+  try {
+    const parsed = JSON.parse(fs.readFileSync(localRuntimeFile(), "utf8")) as Partial<PersistedLocalRuntimeState>;
+    const now = Date.now();
+    const users = records<RuntimeUser>(parsed.users);
+    const authSessions = records<AuthSessionRecord>(parsed.auth_sessions)
+      .filter((session) => Date.parse(session.expires_at) > now);
+    const devices = records<ExecutorDevice>(parsed.devices).map((device) => ({
+      ...device,
+      status: device.status === "revoked" ? "revoked" as const : "offline" as const
+    }));
+    const jobs = records<RuntimeJob>(parsed.jobs);
+    const serviceHeartbeats = records<RuntimeServiceHeartbeat>(parsed.service_heartbeats);
+    const events = records<ExecutionEvent>(parsed.events).slice(-5_000);
+    const eventSequence = Math.max(
+      Number.isFinite(parsed.event_sequence) ? Number(parsed.event_sequence) : 0,
+      ...events.map((event) => Number.isFinite(event.id) ? event.id : 0)
+    );
+
+    return {
+      users: new Map(users.filter((user) => typeof user.id === "string").map((user) => [user.id, user])),
+      authSessions: new Map(authSessions.filter((session) => typeof session.token_hash === "string").map((session) => [session.token_hash, session])),
+      devices: new Map(devices.filter((device) => typeof device.id === "string").map((device) => [device.id, device])),
+      jobs: new Map(jobs.filter((job) => typeof job.id === "string").map((job) => [job.id, job])),
+      serviceHeartbeats: new Map(serviceHeartbeats.filter((heartbeat) => typeof heartbeat.service_name === "string").map((heartbeat) => [heartbeat.service_name, heartbeat])),
+      events,
+      eventSequence
+    };
+  } catch (error) {
+    if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
+      return empty;
+    }
+    console.warn("[local-runtime] persisted state is unreadable; starting with an empty development runtime");
+    return empty;
+  }
+}
+
+function persistRuntimeState(state: LocalRuntimeState) {
+  if (!localPersistenceEnabled()) return;
+  const file = localRuntimeFile();
+  const directory = path.dirname(file);
+  const temporary = `${file}.${process.pid}.tmp`;
+  const payload: PersistedLocalRuntimeState = {
+    version: 1,
+    users: [...state.users.values()],
+    auth_sessions: [...state.authSessions.values()],
+    devices: [...state.devices.values()],
+    jobs: [...state.jobs.values()],
+    service_heartbeats: [...state.serviceHeartbeats.values()],
+    events: state.events.slice(-5_000),
+    event_sequence: state.eventSequence,
+    saved_at: new Date().toISOString()
+  };
+  fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+  fs.writeFileSync(temporary, JSON.stringify(payload), { encoding: "utf8", mode: 0o600 });
+  fs.renameSync(temporary, file);
+  fs.chmodSync(file, 0o600);
+}
+
 function runtimeState() {
   if (!globalThis.__sceneCartLocalRuntime) {
-    globalThis.__sceneCartLocalRuntime = {
-      users: new Map(),
-      authSessions: new Map(),
-      devices: new Map(),
-      jobs: new Map(),
-      serviceHeartbeats: new Map(),
-      events: [],
-      eventSequence: 0
-    };
+    globalThis.__sceneCartLocalRuntime = loadPersistedRuntimeState();
   }
   // Preserve compatibility with an already-created dev/HMR singleton after schema additions.
   globalThis.__sceneCartLocalRuntime.serviceHeartbeats ??= new Map();
@@ -108,6 +206,7 @@ export const localRuntimeRepository: RuntimeRepository = {
       throw new Error("email already registered");
     }
     state.users.set(user.id, copy(user));
+    persistRuntimeState(state);
     return copy(user);
   },
 
@@ -122,31 +221,43 @@ export const localRuntimeRepository: RuntimeRepository = {
   },
 
   async createAuthSession(session) {
-    runtimeState().authSessions.set(session.token_hash, copy(session));
+    const state = runtimeState();
+    state.authSessions.set(session.token_hash, copy(session));
+    persistRuntimeState(state);
   },
 
   async findAuthSession(tokenHash) {
     const found = runtimeState().authSessions.get(tokenHash);
     if (!found || new Date(found.expires_at).getTime() <= Date.now()) {
-      runtimeState().authSessions.delete(tokenHash);
+      const state = runtimeState();
+      if (state.authSessions.delete(tokenHash)) persistRuntimeState(state);
       return null;
     }
     return copy(found);
   },
 
   async deleteAuthSession(tokenHash) {
-    runtimeState().authSessions.delete(tokenHash);
+    const state = runtimeState();
+    if (state.authSessions.delete(tokenHash)) persistRuntimeState(state);
   },
 
   async touchAuthSession(tokenHash) {
-    const found = runtimeState().authSessions.get(tokenHash);
+    const state = runtimeState();
+    const found = state.authSessions.get(tokenHash);
     if (found) {
-      found.last_seen_at = new Date().toISOString();
+      const now = Date.now();
+      const previousLastSeenAt = Date.parse(found.last_seen_at);
+      found.last_seen_at = new Date(now).toISOString();
+      if (!Number.isFinite(previousLastSeenAt) || now - previousLastSeenAt >= AUTH_SESSION_TOUCH_PERSIST_INTERVAL_MS) {
+        persistRuntimeState(state);
+      }
     }
   },
 
   async createDevice(device) {
-    runtimeState().devices.set(device.id, copy(device));
+    const state = runtimeState();
+    state.devices.set(device.id, copy(device));
+    persistRuntimeState(state);
     return copy(device);
   },
 
@@ -158,7 +269,8 @@ export const localRuntimeRepository: RuntimeRepository = {
   },
 
   async heartbeatDevice(deviceId) {
-    const found = runtimeState().devices.get(deviceId);
+    const state = runtimeState();
+    const found = state.devices.get(deviceId);
     if (!found || found.status === "revoked") return null;
     const now = new Date().toISOString();
     found.status = "online";
@@ -174,18 +286,22 @@ export const localRuntimeRepository: RuntimeRepository = {
   },
 
   async updateDeviceCapabilities(deviceId, userId, capabilities) {
-    const found = runtimeState().devices.get(deviceId);
+    const state = runtimeState();
+    const found = state.devices.get(deviceId);
     if (!found || found.user_id !== userId || found.status === "revoked") return null;
     found.capabilities = [...capabilities];
     found.updated_at = new Date().toISOString();
+    persistRuntimeState(state);
     return copy(found);
   },
 
   async revokeDevice(deviceId, userId) {
-    const found = runtimeState().devices.get(deviceId);
+    const state = runtimeState();
+    const found = state.devices.get(deviceId);
     if (!found || found.user_id !== userId) return false;
     found.status = "revoked";
     found.updated_at = new Date().toISOString();
+    persistRuntimeState(state);
     return true;
   },
 
@@ -208,6 +324,7 @@ export const localRuntimeRepository: RuntimeRepository = {
         existing.lease_owner_id = undefined;
         existing.lease_expires_at = undefined;
       }
+      persistRuntimeState(state);
       return copy(existing);
     }
     const now = new Date().toISOString();
@@ -222,6 +339,7 @@ export const localRuntimeRepository: RuntimeRepository = {
       updated_at: now
     };
     state.jobs.set(job.id, job);
+    persistRuntimeState(state);
     return copy(job);
   },
 
@@ -239,8 +357,9 @@ export const localRuntimeRepository: RuntimeRepository = {
 
   async claimJob(device, leaseMs) {
     await this.recoverExpiredJobs();
+    const state = runtimeState();
     const now = Date.now();
-    const job = [...runtimeState().jobs.values()]
+    const job = [...state.jobs.values()]
       .filter(
         (item) =>
           item.status === "pending" &&
@@ -255,11 +374,13 @@ export const localRuntimeRepository: RuntimeRepository = {
     job.lease_expires_at = new Date(now + leaseMs).toISOString();
     job.attempts += 1;
     job.updated_at = new Date(now).toISOString();
+    persistRuntimeState(state);
     return copy(job);
   },
 
   async renewJobLease(jobId, deviceId, leaseMs) {
-    const job = runtimeState().jobs.get(jobId);
+    const state = runtimeState();
+    const job = state.jobs.get(jobId);
     if (!job || job.lease_owner_id !== deviceId || (job.status !== "leased" && job.status !== "running")) {
       return null;
     }
@@ -267,11 +388,13 @@ export const localRuntimeRepository: RuntimeRepository = {
     job.status = "running";
     job.lease_expires_at = new Date(now + Math.max(leaseMs, 5_000)).toISOString();
     job.updated_at = new Date(now).toISOString();
+    persistRuntimeState(state);
     return copy(job);
   },
 
   async completeJob(jobId, deviceId, result) {
-    const job = runtimeState().jobs.get(jobId);
+    const state = runtimeState();
+    const job = state.jobs.get(jobId);
     if (!job) throw new Error("job not found");
     if (job.status === "completed") return { job: copy(job), alreadyCompleted: true };
     if (job.lease_owner_id !== deviceId) throw new Error("job lease owner mismatch");
@@ -281,11 +404,13 @@ export const localRuntimeRepository: RuntimeRepository = {
     job.completed_at = now;
     job.updated_at = now;
     job.lease_expires_at = undefined;
+    persistRuntimeState(state);
     return { job: copy(job), alreadyCompleted: false };
   },
 
   async failJob(jobId, deviceId, errorMessage, retryDelayMs = 2_000, terminal = false) {
-    const job = runtimeState().jobs.get(jobId);
+    const state = runtimeState();
+    const job = state.jobs.get(jobId);
     if (!job) throw new Error("job not found");
     if (job.status === "completed") return copy(job);
     if (job.lease_owner_id !== deviceId) throw new Error("job lease owner mismatch");
@@ -302,11 +427,13 @@ export const localRuntimeRepository: RuntimeRepository = {
       job.completed_at = new Date(now).toISOString();
       job.lease_owner_id = undefined;
     }
+    persistRuntimeState(state);
     return copy(job);
   },
 
   async cancelJob(jobId, userId) {
-    const job = runtimeState().jobs.get(jobId);
+    const state = runtimeState();
+    const job = state.jobs.get(jobId);
     if (!job || job.status !== "pending") return null;
     if (userId && job.user_id && job.user_id !== userId) return null;
     const now = new Date().toISOString();
@@ -314,13 +441,15 @@ export const localRuntimeRepository: RuntimeRepository = {
     job.error_message = "用户在执行器领取前取消任务";
     job.completed_at = now;
     job.updated_at = now;
+    persistRuntimeState(state);
     return copy(job);
   },
 
   async recoverExpiredJobs() {
     let recovered = 0;
     const now = Date.now();
-    for (const job of runtimeState().jobs.values()) {
+    const state = runtimeState();
+    for (const job of state.jobs.values()) {
       if (
         (job.status === "leased" || job.status === "running") &&
         job.lease_expires_at &&
@@ -335,11 +464,14 @@ export const localRuntimeRepository: RuntimeRepository = {
         recovered += 1;
       }
     }
+    if (recovered > 0) persistRuntimeState(state);
     return recovered;
   },
 
   async recordServiceHeartbeat(heartbeat) {
-    runtimeState().serviceHeartbeats.set(heartbeat.service_name, copy(heartbeat));
+    const state = runtimeState();
+    state.serviceHeartbeats.set(heartbeat.service_name, copy(heartbeat));
+    persistRuntimeState(state);
     return copy(heartbeat);
   },
 
@@ -358,6 +490,7 @@ export const localRuntimeRepository: RuntimeRepository = {
     };
     state.events.push(event);
     if (state.events.length > 5_000) state.events.splice(0, state.events.length - 5_000);
+    persistRuntimeState(state);
     return copy(event);
   },
 

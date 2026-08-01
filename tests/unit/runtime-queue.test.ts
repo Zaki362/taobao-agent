@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { localRuntimeRepository, resetLocalRuntimeForTests } from "@/lib/runtime/local-repository";
-import { applyCompletedRuntimeJob, applyFailedRuntimeJob, enqueueModuleSearchJob, registerExecutorDevice } from "@/lib/runtime/jobs";
+import { applyCompletedRuntimeJob, applyFailedRuntimeJob, authenticateExecutorToken, enqueueModuleSearchJob, registerExecutorDevice } from "@/lib/runtime/jobs";
 import { decideNextAgentAction } from "@/lib/agent/decision-engine";
 import { createSessionFixture } from "@/tests/fixtures/session";
 import type { ExecutorDevice } from "@/lib/runtime/types";
@@ -74,6 +74,53 @@ describe("durable job queue contract", () => {
       "least-privilege-user",
       ["module_search", "add_to_cart"]
     ))?.capabilities).toEqual(["module_search", "add_to_cart"]);
+  });
+
+  it("restores local device tokens and queued jobs after a process-style reset", async () => {
+    const runtimeFile = path.join(
+      process.cwd(),
+      ".data",
+      "tests",
+      `local-runtime-${Date.now()}-${Math.random().toString(36).slice(2)}.json`
+    );
+    const previousPersist = process.env.SCENECART_LOCAL_RUNTIME_PERSIST;
+    const previousPath = process.env.SCENECART_LOCAL_RUNTIME_PATH;
+    process.env.SCENECART_LOCAL_RUNTIME_PERSIST = "true";
+    process.env.SCENECART_LOCAL_RUNTIME_PATH = runtimeFile;
+
+    try {
+      resetLocalRuntimeForTests();
+      const registered = await registerExecutorDevice("durable-user", "durable device");
+      await localRuntimeRepository.createJob({
+        id: "durable-job",
+        user_id: "durable-user",
+        session_id: "durable-session",
+        job_type: "module_search",
+        idempotency_key: "durable-job-key",
+        payload: { keyword: "新能源车 应急用品" }
+      });
+      const persisted = await fs.readFile(runtimeFile, "utf8");
+      expect(persisted).not.toContain(registered.token);
+
+      resetLocalRuntimeForTests();
+
+      expect(await authenticateExecutorToken(registered.token)).toMatchObject({
+        id: registered.device.id,
+        status: "offline",
+        capabilities: ["module_search"]
+      });
+      expect(await localRuntimeRepository.getJob("durable-job")).toMatchObject({
+        status: "pending",
+        idempotency_key: "durable-job-key"
+      });
+    } finally {
+      resetLocalRuntimeForTests();
+      if (previousPersist === undefined) delete process.env.SCENECART_LOCAL_RUNTIME_PERSIST;
+      else process.env.SCENECART_LOCAL_RUNTIME_PERSIST = previousPersist;
+      if (previousPath === undefined) delete process.env.SCENECART_LOCAL_RUNTIME_PATH;
+      else process.env.SCENECART_LOCAL_RUNTIME_PATH = previousPath;
+      await fs.unlink(runtimeFile).catch(() => undefined);
+    }
   });
 
   it("returns an expired lease to the pending queue", async () => {

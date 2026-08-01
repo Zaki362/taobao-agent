@@ -119,6 +119,7 @@ SCENECART_CRON_SECRET=
 - `TAOBAO_EXECUTION_BACKEND`：正式路径使用 `local_executor`。`qoder_cli`、`codex_hosted`、`experimental_local` 只用于迁移和本地调试。
 - 正式产品模式会阻断 `qoder_cli`、`codex_hosted` 和 `experimental_local` 直接执行；即使环境变量误配，实际工具调用也只会进入 `local_executor` 持久任务队列，同时 readiness 会保留并报告原始误配置。
 - `RUNTIME_STORE=postgres`：启用 PostgreSQL 用户、Session、任务与事件持久化；`local` 只适合开发和自动化测试。
+- `SCENECART_LOCAL_RUNTIME_PERSIST`：本地开发默认为 `true`，把设备令牌摘要、登录会话和任务队列原子写入被 Git 忽略的 `.data/runtime/local-runtime.json`，完整重启后无需重新注册设备；自动化测试会显式关闭。正式环境仍必须使用 PostgreSQL。
 - `DATABASE_URL`：PostgreSQL 连接串。配置后先运行 `npm run db:migrate`。
 - `AUTH_REQUIRED=true`：正式部署必须开启，确保 Session、设备与任务按用户隔离。
 - `APP_ORIGIN`：正式产品允许发起写请求的网页 Origin；多个地址使用逗号分隔。
