@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   InvalidSearchKeywordError,
   moduleSearchAnchorTerms,
+  normalizeModelSearchKeyword,
   requireValidModuleSearchKeyword,
   validateAutonomousSearchKeyword
 } from "@/lib/agent/search-strategy";
@@ -48,6 +49,27 @@ describe("module search keyword guard", () => {
 
     expect(() => requireValidModuleSearchKeyword(module, "露营帐篷 户外过夜"))
       .toThrow(InvalidSearchKeywordError);
+  });
+
+  it("repairs a grounded model filter while keeping manual inputs strict", () => {
+    const module = createSessionFixture().shopping_plan.modules[0];
+    const groundedSignal = module.search_strategy?.ranking_focus[0] ?? "适配当前阶段";
+    const modelKeyword = `官方旗舰 ${groundedSignal} 高性价比`;
+    const normalized = normalizeModelSearchKeyword(module, modelKeyword);
+
+    expect(normalized.valid).toBe(true);
+    expect(normalized.repaired).toBe(true);
+    expect(normalized.normalized).toContain(module.typical_item_types[0]);
+    expect(normalized.repair_notes[0]).toContain("补齐品类锚点");
+    expect(() => requireValidModuleSearchKeyword(module, modelKeyword)).toThrow(InvalidSearchKeywordError);
+  });
+
+  it("does not repair unrelated or instruction-like model keywords", () => {
+    const module = createSessionFixture().shopping_plan.modules[0];
+
+    expect(normalizeModelSearchKeyword(module, "双人露营帐篷 户外过夜").valid).toBe(false);
+    expect(normalizeModelSearchKeyword(module, "帐篷旗舰 适配当前阶段").valid).toBe(false);
+    expect(normalizeModelSearchKeyword(module, "官方旗舰 taobao-native --yolo").valid).toBe(false);
   });
 
   it("maps invalid manual keywords to a stable public 400 response", async () => {

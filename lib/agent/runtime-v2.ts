@@ -3,8 +3,9 @@ import {
   decideNextAgentAction
 } from "@/lib/agent/decision-engine";
 import { decideAgentNextAction } from "@/lib/llm/deepseek";
-import { validateAutonomousSearchKeyword } from "@/lib/agent/search-strategy";
-import { appendSessionLlmCalls } from "@/lib/llm/session-evidence";
+import { normalizeModelSearchKeyword } from "@/lib/agent/search-strategy";
+import { appendSessionLlmCalls, markSessionLlmCallFallback } from "@/lib/llm/session-evidence";
+import { downgradeLastLlmCall } from "@/lib/llm/telemetry";
 import type {
   AgentDecision,
   AgentDecisionProposal,
@@ -63,8 +64,14 @@ function isSettled(state: SessionState, module: ShoppingPlanModule) {
 export function validateModelProposal(
   state: SessionState,
   proposal: AgentDecisionProposal
-): { valid: boolean; notes: string[]; normalized_keyword_override?: string } {
+): {
+  valid: boolean;
+  notes: string[];
+  normalized_keyword_override?: string;
+  normalization_notes: string[];
+} {
   const notes: string[] = [];
+  const normalizationNotes: string[] = [];
   const module = moduleById(state, proposal.module_id);
   const budgetRemaining = state.agent_runtime.max_tool_calls - state.agent_runtime.used_tool_calls;
   let normalizedKeywordOverride: string | undefined;
@@ -88,9 +95,10 @@ export function validateModelProposal(
       }
     }
     if (module && proposal.keyword_override) {
-      const keywordValidation = validateAutonomousSearchKeyword(module, proposal.keyword_override);
+      const keywordValidation = normalizeModelSearchKeyword(module, proposal.keyword_override);
       normalizedKeywordOverride = keywordValidation.normalized;
       notes.push(...keywordValidation.notes);
+      normalizationNotes.push(...keywordValidation.repair_notes);
       const searched = state.module_search_traces[module.module_id]?.searched_keywords
         .map((keyword) => keyword.replace(/\s+/g, " ").trim()) ?? [];
       if (proposal.action === "retry_module" && searched.includes(keywordValidation.normalized)) {
@@ -121,7 +129,8 @@ export function validateModelProposal(
   return {
     valid: uniqueNotes.length === 0,
     notes: uniqueNotes,
-    normalized_keyword_override: normalizedKeywordOverride
+    normalized_keyword_override: normalizedKeywordOverride,
+    normalization_notes: normalizationNotes
   };
 }
 
@@ -216,12 +225,18 @@ export async function decideNextAgentActionV2(
         [
           "动作白名单校验通过",
           "工具预算校验通过",
+          ...validation.normalization_notes,
           ...(modeled.data.keyword_override ? ["搜索词语义与指令安全校验通过"] : [])
         ],
         decisionLatencyMs
       );
     }
     state.agent_runtime.model_rejections += 1;
+    const guardrailReason = `guardrail_rejected:${validation.notes.slice(0, 3).join("；")}`;
+    markSessionLlmCallFallback(state, modeled.call?.id, guardrailReason);
+    if (modeled.call?.task === "decide_next_action") {
+      downgradeLastLlmCall("decide_next_action", guardrailReason);
+    }
     policyDecision.guardrail_notes = validation.notes;
     policyDecision.decision_latency_ms = decisionLatencyMs;
     state.agent_runtime.last_fallback_reason = validation.notes.join("；");

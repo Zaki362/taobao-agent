@@ -596,7 +596,9 @@ function assertArchitectureContracts() {
         decisionEngine.includes('action: "complete_workflow"') &&
         searchStrategy.includes("validateAutonomousSearchKeyword") &&
         searchStrategy.includes("moduleSearchAnchorTerms") &&
-        agentRuntimeV2.includes("validateAutonomousSearchKeyword") &&
+        searchStrategy.includes("normalizeModelSearchKeyword") &&
+        agentRuntimeV2.includes("normalizeModelSearchKeyword") &&
+        agentRuntimeV2.includes("markSessionLlmCallFallback") &&
         agentRuntimeV2.includes("补搜前必须已有首轮搜索记录") &&
         matcher.includes("requireValidModuleSearchKeyword") &&
         decisionEngine.includes("validateAutonomousSearchKeyword") &&

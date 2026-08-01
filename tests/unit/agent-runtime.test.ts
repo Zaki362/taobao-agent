@@ -224,6 +224,33 @@ describe("Agent Runtime 2.0", () => {
     expect(decision.guardrail_notes).toContain("搜索词语义与指令安全校验通过");
   });
 
+  it("repairs a grounded modifier-only model search proposal", async () => {
+    const state = createSessionFixture();
+    const module = state.shopping_plan.modules[0];
+    const groundedSignal = module.search_strategy?.ranking_focus[0] ?? "适配当前阶段";
+    state.shopping_plan.agent_directives.autonomy_level = "探索执行";
+
+    const decision = await decideNextAgentActionV2(state, async () => ({
+      mode: "connected",
+      data: {
+        action: "search_module",
+        confidence: "high",
+        module_id: module.module_id,
+        keyword_override: `官方旗舰 ${groundedSignal} 高性价比`,
+        reason: "保留模型给出的店铺和功能筛选方向",
+        evidence: ["当前模块尚未搜索"],
+        expected_gain: "形成更可信的首轮候选",
+        tool_cost: 1
+      }
+    }));
+
+    expect(decision.source).toBe("deepseek_runtime");
+    expect(decision.keyword_override).toContain(module.typical_item_types[0]);
+    expect(decision.guardrail_notes).toContain(
+      `模型筛选意图已由后端补齐品类锚点「${module.typical_item_types[0]}」`
+    );
+  });
+
   it("accepts a valid model proposal in exploration mode", async () => {
     const state = createSessionFixture();
     state.shopping_plan.agent_directives.autonomy_level = "探索执行";
@@ -296,12 +323,27 @@ describe("Agent Runtime 2.0", () => {
         evidence: [],
         expected_gain: "未知",
         tool_cost: 1
+      },
+      call: {
+        id: "runtime-rejected-call",
+        task: "decide_next_action",
+        model: "deepseek-chat",
+        mode: "connected",
+        duration_ms: 40,
+        created_at: new Date().toISOString()
       }
     }));
     expect(decision.source).not.toBe("deepseek_runtime");
     expect(decision.guardrail_notes).toContain("模型置信度过低，使用规则兜底");
     expect(state.agent_runtime.model_rejections).toBe(1);
     expect(state.agent_runtime.last_fallback_reason).toContain("模型置信度过低");
+    expect(state.llm_calls).toEqual([
+      expect.objectContaining({
+        id: "runtime-rejected-call",
+        mode: "fallback",
+        reason: expect.stringContaining("guardrail_rejected")
+      })
+    ]);
   });
 
   it("records structured model fallback without interrupting the workflow", async () => {

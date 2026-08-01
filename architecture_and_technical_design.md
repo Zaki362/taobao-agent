@@ -430,7 +430,7 @@ DeepSeek 在系统中不做“自由 Agent”，而做“受约束的结构化�
 - [lib/llm/prompts.ts](./lib/llm/prompts.ts)
 - [lib/llm/mock.ts](./lib/llm/mock.ts)
 
-模型运行证据分成两层：`telemetry.ts` 提供当前服务进程级成功率、P95 延迟和最近 fallback 原因；`session-evidence.ts` 把当前购物链路内的能力调用写入 `SessionState.llm_calls`。后者只保存 `task / model / mode / duration_ms / reason / created_at`，不保存 Prompt、Scene Brief 原文、候选商品摘要或模型原始输出。规划、规划复核、方案调整、候选池复盘、Runtime 下一动作和购买组合均会追加凭证，执行台因此可以回答“这次购物的哪些步骤真实使用了 DeepSeek，哪些步骤使用了规则 fallback”，而不是只展示一个静态模型标签。
+模型运行证据分成两层：`telemetry.ts` 提供当前服务进程级成功率、P95 延迟和最近 fallback 原因；`session-evidence.ts` 把当前购物链路内的能力调用写入 `SessionState.llm_calls`。后者只保存 `task / model / mode / duration_ms / reason / created_at`，不保存 Prompt、Scene Brief 原文、候选商品摘要或模型原始输出。规划、规划复核、方案调整、候选池复盘、Runtime 下一动作和购买组合均会追加凭证；如果模型结构化提案随后被业务 Guardrail 拒绝，系统会按 call id 把该次会话凭证精确降级为 fallback，并记录泛化后的拒绝原因。执行台因此可以回答“这次购物的哪些步骤真实采用了 DeepSeek，哪些步骤使用了规则 fallback”，而不是只展示一个静态模型标签。
 
 ---
 
@@ -834,7 +834,7 @@ DeepSeek 目前承担六类结构化任务：
 
 每次动作都会写入 session 的 `agent_decisions`，保存来源、置信度、理由和证据。规划顺序与候选复盘可以来自 DeepSeek，后端负责动作白名单、重复调用抑制、失败跳过和高风险确认，因此模型获得了真实的执行选择空间，但不能越过交易和隐私边界。
 
-模型自主搜索词采用“语义包络”而不是固定词表。`search-strategy.ts` 从模块名、典型品类、包含词和验收信号生成 `allowed_category_anchors`；DeepSeek 可以在保留至少一个完整品类锚点的前提下自由增加品牌、功能、价格带与店铺方向。`runtime-v2.ts` 在决策阶段统一压缩空白、限制长度，并拒绝 URL、Qoder/淘宝工具名、命令行参数、脚本控制符和提示词控制语句。`product-matcher.ts` 在实际任务入队前再次应用同一校验，覆盖规划主词、备用词、候选复盘建议和直接 override；用户在规划页手动保存的搜索词也由 orchestrator 校验。旧会话中的异常规划词会回退到模块默认搜索意图，模型异常建议会被忽略，新提交的异常手动词则返回稳定的 `400 invalid_search_keyword`。无首轮轨迹的 `retry_module`、重复关键词和跨模块关键词都会回退到确定性策略。这避免了“纯模板搜索”和“模型任意把字符串送入工具”两个极端。
+模型自主搜索词采用“语义包络”而不是固定词表。`search-strategy.ts` 从模块名、典型品类、包含词和验收信号生成 `allowed_category_anchors`；DeepSeek 可以在保留至少一个完整品类锚点的前提下自由增加品牌、功能、价格带与店铺方向。若模型遗漏品类词，但短词组中至少一个筛选词能在当前模块的推荐/搜索策略中找到依据，且其余内容都属于整词匹配的常见商品筛选修饰语或价格表达，`normalizeModelSearchKeyword` 会补齐该模块的首个典型品类并留下修复说明；无模块依据、跨品类或包含不安全控制内容的提案不会被修复。`runtime-v2.ts` 在决策阶段统一压缩空白、限制长度，并拒绝 URL、Qoder/淘宝工具名、命令行参数、脚本控制符和提示词控制语句。`product-matcher.ts` 在实际任务入队前仍再次应用严格校验，覆盖规划主词、备用词、候选复盘建议和直接 override；用户在规划页手动保存的搜索词也保持严格校验，不享受模型修复。旧会话中的异常规划词会回退到模块默认搜索意图，模型异常建议会被忽略，新提交的异常手动词则返回稳定的 `400 invalid_search_keyword`。无首轮轨迹的 `retry_module`、重复关键词和跨模块关键词都会回退到确定性策略。这避免了“纯模板搜索”和“模型任意把字符串送入工具”两个极端。
 
 模块候选回填后，`lib/agent/market-feedback.ts` 会增加一层跨模块市场反馈。它只使用商品价格摘要，计算 `module_signals`、预算压力、预算余量和最多 15% 的总额守恒调拨建议。`decide_next_action` 会读取这些聚合信号，在平衡/探索档位中决定是否以未尝试过的性价比关键词补搜。预算建议默认只读；用户在推荐页显式确认后，`/api/session/budget-reallocation` 才会按服务器当前建议执行一次调配。客户端不能提交金额，后端再次校验供给/承压信号、单次上限、活跃任务和预算总额，只失效调出与调入模块的候选，并回到规划确认页等待用户重新开始搜索。这让 Agent 可以基于真实市场反馈修正方案，但不能静默改变用户约束。
 

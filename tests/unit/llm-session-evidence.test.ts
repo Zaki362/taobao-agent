@@ -1,6 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { parseScene } from "@/lib/llm/deepseek";
-import { appendSessionLlmCalls, sessionLlmSummary } from "@/lib/llm/session-evidence";
+import {
+  appendSessionLlmCalls,
+  markSessionLlmCallFallback,
+  sessionLlmSummary
+} from "@/lib/llm/session-evidence";
 import { normalizeSessionState } from "@/lib/session/store";
 import type { SessionLlmCall } from "@/lib/session/types";
 import { createSessionFixture } from "@/tests/fixtures/session";
@@ -67,5 +71,17 @@ describe("session LLM evidence", () => {
     const normalized = normalizeSessionState(state);
 
     expect(normalized.llm_calls).toEqual([expect.objectContaining({ id: "llm-call-1" })]);
+  });
+
+  it("marks a connected proposal as fallback when a later guardrail rejects it", () => {
+    const state = createSessionFixture();
+    appendSessionLlmCalls(state, call());
+
+    expect(markSessionLlmCallFallback(state, "llm-call-1", "guardrail_rejected:low_confidence")).toBe(true);
+    expect(state.llm_calls[0]).toMatchObject({
+      mode: "fallback",
+      reason: "guardrail_rejected:low_confidence"
+    });
+    expect(state.deepseek_status).toBe("mock");
   });
 });

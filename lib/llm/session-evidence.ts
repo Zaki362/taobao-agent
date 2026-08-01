@@ -22,6 +22,28 @@ export function appendSessionLlmCalls(
   return state.llm_calls;
 }
 
+export function markSessionLlmCallFallback(
+  state: Pick<SessionState, "llm_calls" | "deepseek_status">,
+  callId: string | undefined,
+  reason: string
+) {
+  if (!callId) return false;
+  let updated = false;
+  state.llm_calls = state.llm_calls.map((call) => {
+    if (call.id !== callId || call.mode === "fallback") return call;
+    updated = true;
+    return {
+      ...call,
+      mode: "fallback" as const,
+      reason
+    };
+  });
+  if (updated && state.llm_calls.every((call) => call.mode === "fallback")) {
+    state.deepseek_status = "mock";
+  }
+  return updated;
+}
+
 export function sessionLlmSummary(calls: SessionLlmCall[]) {
   return {
     calls: calls.length,

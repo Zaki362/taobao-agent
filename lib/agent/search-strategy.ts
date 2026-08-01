@@ -25,6 +25,11 @@ export interface AutonomousSearchKeywordValidation {
   notes: string[];
 }
 
+export interface ModelSearchKeywordNormalization extends AutonomousSearchKeywordValidation {
+  repaired: boolean;
+  repair_notes: string[];
+}
+
 export class InvalidSearchKeywordError extends Error {
   constructor(
     message: string,
@@ -43,6 +48,64 @@ const unsafeKeywordPatterns = [
   { pattern: /(?:执行|运行).{0,6}(?:命令|脚本|工具)|(?:system|assistant|tool)\s*[:=]/i, note: "自主搜索词不能包含执行指令" },
   { pattern: /`|\$\(|&&|\|\||[{}]/, note: "自主搜索词包含不安全的控制字符" }
 ];
+
+const commonCommerceModifiers = [
+  "官方",
+  "官方旗舰",
+  "官方旗舰店",
+  "旗舰",
+  "旗舰店",
+  "品牌",
+  "品牌旗舰",
+  "品牌旗舰店",
+  "高性价比",
+  "性价比",
+  "入门",
+  "升级",
+  "新款",
+  "基础",
+  "实用",
+  "耐用",
+  "便携",
+  "轻量",
+  "通用",
+  "专用",
+  "免安装",
+  "免打孔",
+  "包安装"
+];
+
+function keywordTokens(value: string) {
+  return compactKeyword(value)
+    .split(/[\s、,，/]+/)
+    .map((term) => term.trim())
+    .filter(Boolean);
+}
+
+function moduleStrategyText(module: ShoppingPlanModule) {
+  return [
+    module.description,
+    module.rationale,
+    module.recommendation_strategy,
+    module.search_keyword,
+    module.search_strategy?.primary_keyword,
+    ...(module.search_strategy?.alternate_keywords ?? []),
+    ...(module.search_strategy?.include_terms ?? []),
+    ...(module.search_strategy?.ranking_focus ?? []),
+    ...(module.search_strategy?.must_have_signals ?? []),
+    ...(module.search_strategy?.quality_checks ?? [])
+  ]
+    .filter(Boolean)
+    .join(" ");
+}
+
+function isCommonCommerceModifier(term: string) {
+  return commonCommerceModifiers.includes(term);
+}
+
+function isPriceModifier(term: string) {
+  return /^(?:\d{1,5}(?:-\d{1,5})?|\d{1,5}元(?:以内|以下|左右)?)$/.test(term);
+}
 
 export function validateAutonomousSearchKeyword(
   module: ShoppingPlanModule,
@@ -78,6 +141,49 @@ export function validateAutonomousSearchKeyword(
     normalized,
     matched_anchors: matchedAnchors,
     notes: [...new Set(notes)]
+  };
+}
+
+// Model proposals may omit the category while still providing useful feature or
+// price filters. Repair only when every term is already grounded in the module
+// strategy (plus a small commerce modifier allowlist); manual/tool inputs remain strict.
+export function normalizeModelSearchKeyword(
+  module: ShoppingPlanModule,
+  value: string
+): ModelSearchKeywordNormalization {
+  const validation = validateAutonomousSearchKeyword(module, value);
+  if (validation.valid) {
+    return { ...validation, repaired: false, repair_notes: [] };
+  }
+
+  const missingAnchorNote = `自主搜索词必须保留「${module.module_name}」的至少一个品类锚点`;
+  if (validation.notes.length !== 1 || validation.notes[0] !== missingAnchorNote) {
+    return { ...validation, repaired: false, repair_notes: [] };
+  }
+
+  const strategyText = moduleStrategyText(module);
+  const terms = keywordTokens(validation.normalized);
+  const groundedTerms = terms.filter((term) => strategyText.includes(term));
+  const allTermsGrounded = terms.length > 0 && terms.every(
+    (term) => strategyText.includes(term) || isCommonCommerceModifier(term) || isPriceModifier(term)
+  );
+  if (!allTermsGrounded || groundedTerms.length === 0) {
+    return { ...validation, repaired: false, repair_notes: [] };
+  }
+
+  const anchor = module.typical_item_types.find((term) => compactKeyword(term).length >= 2) ?? module.module_name;
+  const repairedValidation = validateAutonomousSearchKeyword(
+    module,
+    compactKeyword(`${anchor} ${validation.normalized}`)
+  );
+  if (!repairedValidation.valid) {
+    return { ...validation, repaired: false, repair_notes: [] };
+  }
+
+  return {
+    ...repairedValidation,
+    repaired: true,
+    repair_notes: [`模型筛选意图已由后端补齐品类锚点「${anchor}」`]
   };
 }
 
