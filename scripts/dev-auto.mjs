@@ -1,11 +1,15 @@
 import { spawn } from "node:child_process";
 import process from "node:process";
 import nextEnv from "@next/env";
+import { resolveDevServer } from "./dev-server.mjs";
 
 const processes = [];
 const { combinedEnv } = nextEnv.loadEnvConfig(process.cwd());
 const runtimeEnv = { ...process.env, ...combinedEnv };
-const apiBaseUrl = (runtimeEnv.SCENECART_API_URL || "http://127.0.0.1:3000").replace(/\/$/, "");
+const devServer = await resolveDevServer({ env: runtimeEnv });
+const apiBaseUrl = devServer.url;
+runtimeEnv.SCENECART_API_URL = apiBaseUrl;
+runtimeEnv.SCENECART_DEV_PORT = String(devServer.port);
 
 function spawnCommand(command, args, name) {
   const child = spawn(command, args, {
@@ -52,8 +56,9 @@ async function waitForApi(timeoutMs = 30_000) {
 }
 
 console.log("[dev:auto] starting SceneCart AI with the local executor architecture...");
+console.log(`[dev:auto] web and local executor will use ${apiBaseUrl}`);
 
-spawnCommand("npm", ["run", "dev"], "next-dev");
+spawnCommand("npm", ["run", "dev", "--", "--port", String(devServer.port)], "next-dev");
 
 if (!runtimeEnv.SCENECART_DEVICE_TOKEN) {
   console.log("[dev:auto] SCENECART_DEVICE_TOKEN is not configured; the web app will start without a worker.");

@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev",
+    "dev": "node scripts/dev-server.mjs",
     "dev:auto": "node scripts/dev-auto.mjs",
     "build": "next build",
     "start": "next start",

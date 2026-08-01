@@ -71,6 +71,8 @@ npm run start
 
 ## 3. 注册本地设备
 
+本地启动使用 `npm run dev`。启动器会同时检查 `127.0.0.1` 和 Next.js 默认 IPv6 监听地址；3000 被占用时自动选择后续可用端口，并打印准确 URL。注册设备和运行 `executor:configure` 时必须使用这个实际 URL。若需要稳定地址，可在 `.env.local` 设置 `SCENECART_DEV_PORT=3001` 与匹配的 `SCENECART_API_URL=http://127.0.0.1:3001`。显式配置的端口被占用时启动器会直接报错，不会静默把网页和 Worker 分流到不同端口。
+
 1. 在 SceneCart AI 注册并登录。
 2. 打开 `/settings/executor`。
 3. 输入设备名并注册。

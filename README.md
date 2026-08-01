@@ -64,7 +64,9 @@ npm install
 npm run dev
 ```
 
-如果已经在 `.env.local` 配置 `SCENECART_DEVICE_TOKEN`，也可以运行 `npm run dev:auto`。它会等待网页服务健康后启动正式的 `worker:local`；未配置令牌时只启动网页并提示前往执行器设置页，不再自动启动旧 Codex hosted worker。
+启动器会同时检查 IPv4 loopback 和 Next.js 的 IPv6 默认监听地址。若 3000 被其他应用占用，会自动选择下一个真正可用的端口，并在终端打印准确的首页与执行器设置地址；不要继续使用旧的固定书签。需要固定端口时设置 `SCENECART_DEV_PORT`，或运行 `npm run dev -- --port 3001`。
+
+如果已经在 `.env.local` 配置 `SCENECART_DEVICE_TOKEN`，也可以运行 `npm run dev:auto`。它会用同一个已确认可用的地址启动网页和正式 `worker:local`；未配置令牌时只启动网页并提示前往执行器设置页，不再自动启动旧 Codex hosted worker。
 
 首次连接本地执行器时，在 `/settings/executor` 注册设备并复制一次性令牌，然后在项目目录运行：
 
@@ -74,7 +76,7 @@ npm run executor:configure
 
 该命令会隐藏令牌输入、保留 `.env.local` 中的其他配置、强制使用 `local_executor`，并将文件权限设为仅当前用户可读写。令牌不会进入 shell history。配置完成后运行 `npm run executor:doctor`。
 
-打开：
+打开终端实际打印的地址，例如：
 
 ```text
 http://localhost:3000

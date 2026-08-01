@@ -128,6 +128,7 @@ function assertEnvExample() {
     "TAOBAO_NATIVE_BIN",
     "TAOBAO_MCP_BASE_URL",
     "SCENECART_ENABLE_MCP_DEBUG",
+    "SCENECART_DEV_PORT",
     "APP_ORIGIN"
   ];
 
@@ -199,6 +200,32 @@ function assertExecutorConfigurator() {
   }
 }
 
+function assertDevelopmentLauncher() {
+  const launcher = tryReadText("scripts/dev-server.mjs");
+  const autoLauncher = tryReadText("scripts/dev-auto.mjs");
+  const pkgText = tryReadText("package.json");
+  if (!launcher || !autoLauncher || !pkgText) return;
+
+  let pkg;
+  try {
+    pkg = JSON.parse(pkgText);
+  } catch {
+    return;
+  }
+
+  if (
+    !String(pkg.scripts?.dev ?? "").includes("scripts/dev-server.mjs") ||
+    !launcher.includes("resolveDevServer") ||
+    !launcher.includes('probeAddress(port, "127.0.0.1")') ||
+    !launcher.includes('probeAddress(port, "::", true)') ||
+    !launcher.includes("SCENECART_DEV_PORT") ||
+    !autoLauncher.includes('from "./dev-server.mjs"') ||
+    !autoLauncher.includes("runtimeEnv.SCENECART_API_URL = apiBaseUrl")
+  ) {
+    fail("开发启动器必须检测双栈端口冲突，并让网页与本地执行器共享同一个实际 API 地址");
+  }
+}
+
 function assertRequiredFiles() {
   const requiredFiles = [
     "app/api/scene/parse/route.ts",
@@ -255,6 +282,7 @@ function assertRequiredFiles() {
     "lib/runtime/monitoring.ts",
     "lib/security/rate-limit.ts",
     "scripts/local-executor.mjs",
+    "scripts/dev-server.mjs",
     "scripts/configure-executor.mjs",
     "scripts/executor-config-utils.mjs",
     "scripts/executor-doctor.mjs",
@@ -1004,6 +1032,7 @@ function run() {
   assertPackageScripts();
   assertGitignore();
   assertExecutorConfigurator();
+  assertDevelopmentLauncher();
   assertRequiredFiles();
   assertRemovedLegacyFiles();
   assertArchitectureContracts();
