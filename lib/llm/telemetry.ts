@@ -4,7 +4,8 @@ export type LlmTaskName =
   | "refine_plan"
   | "review_candidates"
   | "review_plan"
-  | "decide_next_action";
+  | "decide_next_action"
+  | "explain_product_fit";
 
 interface LlmTaskTelemetry {
   calls: number;

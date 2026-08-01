@@ -1,5 +1,5 @@
 import { NextRequest } from "next/server";
-import { createSessionFromScene, initializeSession, parseOnly } from "@/lib/agent/orchestrator";
+import { createSessionFromScene, initializeSession } from "@/lib/agent/orchestrator";
 import { apiOk, apiRouteError } from "@/lib/api/responses";
 import { SceneBrief } from "@/lib/session/types";
 import { mockParseScene } from "@/lib/llm/mock";
@@ -79,14 +79,15 @@ export async function POST(request: NextRequest) {
         ? `${sceneBriefInput.vehicle_type ?? ""} ${sceneBriefInput.user_stage ?? ""} 预算 ${sceneBriefInput.budget ?? ""} ${sceneBriefInput.priority_style ?? ""} ${sceneBriefInput.optional_notes ?? ""}`
         : undefined);
 
-    const fallbackScene = mockParseScene(rawInput ?? "", scenarioId);
-    const normalizedSceneBrief = sceneBriefInput
-      ? normalizeSceneBriefInput(sceneBriefInput, fallbackScene)
-      : normalizeSceneBriefInput(undefined, (await parseOnly(rawInput ?? "", scenarioId)).data);
     const parseDeepSeekMode = asDeepSeekMode(body.parse_deepseek_mode);
 
     const state = sceneBriefInput
-      ? await createSessionFromScene(rawInput ?? "", normalizedSceneBrief, parseDeepSeekMode, identity.userId)
+      ? await createSessionFromScene(
+          rawInput ?? "",
+          normalizeSceneBriefInput(sceneBriefInput, mockParseScene(rawInput ?? "", scenarioId)),
+          parseDeepSeekMode,
+          identity.userId
+        )
       : await initializeSession(rawInput, scenarioId, identity.userId);
 
     return apiOk({

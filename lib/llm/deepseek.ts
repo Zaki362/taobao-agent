@@ -41,12 +41,28 @@ import {
 import { downgradeLastLlmCall, recordLlmCall, type LlmTaskName } from "@/lib/llm/telemetry";
 
 const DEEPSEEK_BASE_URL = "https://api.deepseek.com/chat/completions";
-const REQUEST_TIMEOUT_MS = 20_000;
-const REVIEW_TIMEOUT_MS = 8_000;
-const PLAN_REVIEW_TIMEOUT_MS = 6_000;
-const AGENT_DECISION_TIMEOUT_MS = 8_000;
+const DEFAULT_TIMEOUT_MS: Record<LlmTaskName, number> = {
+  parse_scene: 15_000,
+  personalize_template: 20_000,
+  refine_plan: 18_000,
+  review_candidates: 8_000,
+  review_plan: 6_000,
+  decide_next_action: 8_000,
+  explain_product_fit: 6_000
+};
+const TIMEOUT_ENV_KEYS: Record<LlmTaskName, string> = {
+  parse_scene: "DEEPSEEK_PARSE_TIMEOUT_MS",
+  personalize_template: "DEEPSEEK_PLAN_TIMEOUT_MS",
+  refine_plan: "DEEPSEEK_REFINE_TIMEOUT_MS",
+  review_candidates: "DEEPSEEK_CANDIDATE_REVIEW_TIMEOUT_MS",
+  review_plan: "DEEPSEEK_PLAN_REVIEW_TIMEOUT_MS",
+  decide_next_action: "DEEPSEEK_AGENT_DECISION_TIMEOUT_MS",
+  explain_product_fit: "DEEPSEEK_EXPLAIN_TIMEOUT_MS"
+};
+const MIN_TIMEOUT_MS = 250;
+const MAX_TIMEOUT_MS = 60_000;
 
-type StructuredTask = LlmTaskName;
+type StructuredTask = Exclude<LlmTaskName, "explain_product_fit">;
 type LlmMode = "connected" | "mock";
 
 function getStructuredModel(task: StructuredTask) {
@@ -61,6 +77,15 @@ function getStructuredModel(task: StructuredTask) {
 
 function getTextModel() {
   return process.env.DEEPSEEK_CHAT_MODEL ?? "deepseek-chat";
+}
+
+export function getDeepSeekTimeoutMs(task: LlmTaskName) {
+  const configured = process.env[TIMEOUT_ENV_KEYS[task]] ?? process.env.DEEPSEEK_REQUEST_TIMEOUT_MS;
+  const parsed = Number(configured);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return DEFAULT_TIMEOUT_MS[task];
+  }
+  return Math.max(MIN_TIMEOUT_MS, Math.min(Math.round(parsed), MAX_TIMEOUT_MS));
 }
 
 function sanitizeScene(scene: SceneBrief): SceneBrief {
@@ -452,14 +477,32 @@ export function normalizeShoppingPlan(
   };
 }
 
-async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs = REQUEST_TIMEOUT_MS) {
+class DeepSeekTimeoutError extends Error {
+  constructor(timeoutMs: number) {
+    super(`DeepSeek request exceeded ${timeoutMs}ms`);
+    this.name = "DeepSeekTimeoutError";
+  }
+}
+
+async function fetchTextWithTimeout(url: string, init: RequestInit, timeoutMs: number) {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  let timedOut = false;
+  const timer = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, timeoutMs);
   try {
-    return await fetch(url, {
+    const response = await fetch(url, {
       ...init,
       signal: controller.signal
     });
+    const text = await response.text();
+    return { response, text };
+  } catch (error) {
+    if (timedOut) {
+      throw new DeepSeekTimeoutError(timeoutMs);
+    }
+    throw error;
   } finally {
     clearTimeout(timer);
   }
@@ -469,7 +512,7 @@ async function deepseekJson<T>(
   task: StructuredTask,
   prompt: string,
   fallback: T,
-  timeoutMs = REQUEST_TIMEOUT_MS
+  timeoutMs = getDeepSeekTimeoutMs(task)
 ): Promise<{ data: T; mode: LlmMode }> {
   const apiKey = process.env.DEEPSEEK_API_KEY;
   const startedAt = Date.now();
@@ -486,7 +529,7 @@ async function deepseekJson<T>(
   }
 
   try {
-    const response = await fetchWithTimeout(DEEPSEEK_BASE_URL, {
+    const { response, text } = await fetchTextWithTimeout(DEEPSEEK_BASE_URL, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -516,14 +559,14 @@ async function deepseekJson<T>(
       return finish(fallback, "mock", `http_${response.status}`);
     }
 
-    const payload = await response.json();
+    const payload = JSON.parse(text);
     const content = payload.choices?.[0]?.message?.content;
     if (!content) {
       return finish(fallback, "mock", "empty_content");
     }
     return finish(JSON.parse(content) as T, "connected");
   } catch (error) {
-    const reason = error instanceof Error && error.name === "AbortError"
+    const reason = error instanceof DeepSeekTimeoutError
       ? "timeout"
       : error instanceof SyntaxError
         ? "invalid_json"
@@ -603,8 +646,7 @@ export async function reviewShoppingPlan(
   const result = await deepseekJson<Partial<PlanQualityReview>>(
     "review_plan",
     reviewShoppingPlanPrompt(safeScene, plan),
-    fallback,
-    PLAN_REVIEW_TIMEOUT_MS
+    fallback
   );
   const validation = result.mode === "connected" ? validatePlanQualityReviewOutput(result.data) : true;
   if (result.mode === "connected" && !validation) {
@@ -618,19 +660,35 @@ export async function reviewShoppingPlan(
 
 export async function explainProductFit(moduleName: string, title: string, recommendationType: RecommendationType) {
   const apiKey = process.env.DEEPSEEK_API_KEY;
+  const fallback = mockExplainProductFit(moduleName, { title, recommendation_type: recommendationType });
+  const startedAt = Date.now();
+  const model = getTextModel();
+  const finish = (value: string, mode: LlmMode, reason?: string) => {
+    recordLlmCall({
+      task: "explain_product_fit",
+      model,
+      mode,
+      durationMs: Date.now() - startedAt,
+      reason
+    });
+    return value;
+  };
+  if (process.env.DEEPSEEK_DISABLED === "true") {
+    return finish(fallback, "mock", "explicitly_disabled");
+  }
   if (!apiKey) {
-    return mockExplainProductFit(moduleName, { title, recommendation_type: recommendationType });
+    return finish(fallback, "mock", "api_key_missing");
   }
 
   try {
-    const response = await fetchWithTimeout(DEEPSEEK_BASE_URL, {
+    const { response, text } = await fetchTextWithTimeout(DEEPSEEK_BASE_URL, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         Authorization: `Bearer ${apiKey}`
       },
       body: JSON.stringify({
-        model: getTextModel(),
+        model,
         temperature: 0.5,
         messages: [
           {
@@ -644,17 +702,23 @@ export async function explainProductFit(moduleName: string, title: string, recom
         ]
       }),
       cache: "no-store"
-    });
+    }, getDeepSeekTimeoutMs("explain_product_fit"));
     if (!response.ok) {
-      throw new Error("deepseek explain failed");
+      return finish(fallback, "mock", `http_${response.status}`);
     }
-    const payload = await response.json();
+    const payload = JSON.parse(text);
     const content = payload.choices?.[0]?.message?.content;
-    return validateProductFitOutput(content)
-      ? content.trim()
-      : mockExplainProductFit(moduleName, { title, recommendation_type: recommendationType });
-  } catch {
-    return mockExplainProductFit(moduleName, { title, recommendation_type: recommendationType });
+    if (!validateProductFitOutput(content)) {
+      return finish(fallback, "mock", content ? "schema_validation_failed" : "empty_content");
+    }
+    return finish(content.trim(), "connected");
+  } catch (error) {
+    const reason = error instanceof DeepSeekTimeoutError
+      ? "timeout"
+      : error instanceof SyntaxError
+        ? "invalid_json"
+        : "request_failed";
+    return finish(fallback, "mock", reason);
   }
 }
 
@@ -682,8 +746,7 @@ export async function reviewCandidatePool({
       candidates,
       fallbackReview
     }),
-    fallbackReview,
-    REVIEW_TIMEOUT_MS
+    fallbackReview
   );
   const validation = result.mode === "connected" ? validateCandidateReviewOutput(result.data) : true;
   if (result.mode === "connected" && !validation) {
@@ -702,8 +765,7 @@ export async function decideAgentNextAction(
   const result = await deepseekJson<AgentDecisionProposal>(
     "decide_next_action",
     decideNextActionPrompt(state, fallback),
-    fallback,
-    AGENT_DECISION_TIMEOUT_MS
+    fallback
   );
   if (result.mode !== "connected" || !validateAgentDecisionOutput(result.data)) {
     if (result.mode === "connected") {

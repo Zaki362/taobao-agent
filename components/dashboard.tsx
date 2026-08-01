@@ -456,7 +456,8 @@ export function Dashboard() {
         deepseek_mode: SessionState["deepseek_status"];
       }>("/api/scene/parse", {
         method: "POST",
-        body: JSON.stringify({ raw_input: sceneInput })
+        body: JSON.stringify({ raw_input: sceneInput }),
+        timeoutMs: 30_000
       });
       if (
         !parsed.scene_brief ||
@@ -493,7 +494,8 @@ export function Dashboard() {
           raw_input: buildSceneInputFromBrief(parsedScene),
           scene_brief: parsedScene,
           parse_deepseek_mode: parseDeepSeekMode
-        })
+        }),
+        timeoutMs: 45_000
       });
       const hydrated = await hydrateSession(planned.session_id);
       await refreshHostedInstruction(planned.session_id);
@@ -745,7 +747,8 @@ export function Dashboard() {
         body: JSON.stringify({
           session_id: session.session_id,
           quick_action: action
-        })
+        }),
+        timeoutMs: 70_000
       });
       const hydrated = await hydrateSession(result.session_id);
       await refreshHostedInstruction(result.session_id);

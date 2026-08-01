@@ -115,6 +115,7 @@ SCENECART_CRON_SECRET=
 - `SCENECART_PRODUCT_MODE`：本地开发使用 `development`；正式部署必须设为 `production`，此时系统强制禁止演示加购伪成功。
 - `ALLOW_DEMO_CART_FALLBACK`：只对开发预览模式生效。设为 `false` 可在本地提前验证正式加购失败行为。
 - `DEEPSEEK_DISABLED=true`：仅用于自动化测试或离线诊断，显式禁止读取 `.env.local` 中的真实 Key，保证测试不会产生模型调用和费用。
+- `DEEPSEEK_*_TIMEOUT_MS`：可按解析、规划、调整、方案复核、候选复核、Agent 决策和推荐解释分别设置完整响应超时；计时覆盖响应头和正文读取，失败后使用经过校验的确定性方案继续流程。`DEEPSEEK_REQUEST_TIMEOUT_MS` 可作为未单独配置任务的统一覆盖值。
 - `TAOBAO_EXECUTION_BACKEND`：正式路径使用 `local_executor`。`qoder_cli`、`codex_hosted`、`experimental_local` 只用于迁移和本地调试。
 - 正式产品模式会阻断 `qoder_cli`、`codex_hosted` 和 `experimental_local` 直接执行；即使环境变量误配，实际工具调用也只会进入 `local_executor` 持久任务队列，同时 readiness 会保留并报告原始误配置。
 - `RUNTIME_STORE=postgres`：启用 PostgreSQL 用户、Session、任务与事件持久化；`local` 只适合开发和自动化测试。
