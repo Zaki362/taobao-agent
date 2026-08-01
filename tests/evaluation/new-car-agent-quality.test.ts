@@ -78,7 +78,7 @@ describe(`new-car Agent quality gate (${liveEvaluation ? "live DeepSeek" : "dete
     }
   });
 
-  it.runIf(liveEvaluation)("uses DeepSeek reasoner for a guarded runtime decision", async () => {
+  it.runIf(liveEvaluation)("uses DeepSeek chat for a routine guarded runtime decision", async () => {
     const state = createSessionFixture();
     state.shopping_plan.agent_directives.autonomy_level = "探索执行";
     const decision = await decideNextAgentActionV2(state);
@@ -89,6 +89,66 @@ describe(`new-car Agent quality gate (${liveEvaluation ? "live DeepSeek" : "dete
     expect(state.shopping_plan.modules.some((module) => module.module_id === decision.module_id)).toBe(true);
     expect(state.agent_runtime.model_decisions).toBe(1);
     expect(state.agent_runtime.model_rejections).toBe(0);
+    expect(telemetry.tasks.find((task) => task.task === "decide_next_action")?.model).toBe("deepseek-chat");
+  });
+
+  it.runIf(liveEvaluation)("uses DeepSeek reasoner when candidate evidence requires recovery", async () => {
+    const state = createSessionFixture();
+    const module = state.shopping_plan.modules[0];
+    const primaryKeyword = module.search_strategy?.primary_keyword ?? module.search_keyword ?? module.module_name;
+    state.shopping_plan.agent_directives.autonomy_level = "探索执行";
+    state.shopping_plan.agent_directives.search_depth = "标准搜索";
+    state.module_candidates[module.module_id] = [{
+      product_id: "recovery-candidate",
+      title: `${module.module_name} 候选`,
+      price: module.budget_allocation,
+      source: "evaluation",
+      shop_name: "评测店铺",
+      image_url: "https://example.com/product.jpg",
+      detail_url: "https://item.taobao.com/item.htm?id=recovery-candidate",
+      shop_badges: ["旗舰店"],
+      highlights: ["基础功能"],
+      risk_notes: ["候选数量不足"],
+      fit_reason: "符合模块基础意图",
+      recommendation_type: "稳妥推荐",
+      module_id: module.module_id
+    }];
+    state.module_reviews[module.module_id] = {
+      module_id: module.module_id,
+      status: "thin",
+      source: "deepseek",
+      summary: "当前只有一条候选，覆盖不足。",
+      strengths: ["模块相关"],
+      caveats: ["缺少价格档位"],
+      next_action: "使用更具体的功能词补搜。",
+      suggested_keyword: `${primaryKeyword} 夜视 停车监控`,
+      generated_at: new Date().toISOString()
+    };
+    state.module_search_traces[module.module_id] = {
+      module_id: module.module_id,
+      module_name: module.module_name,
+      status: "thin",
+      primary_keyword: primaryKeyword,
+      searched_keywords: [primaryKeyword],
+      attempts: [],
+      result_count: 1,
+      candidate_count: 1,
+      review_status: "thin",
+      review_summary: "当前只有一条候选，覆盖不足。",
+      ai_decision_summary: "候选池需要恢复搜索。",
+      next_action: "补搜",
+      generated_at: new Date().toISOString(),
+      updated_at: new Date().toISOString()
+    };
+
+    const decision = await decideNextAgentActionV2(state);
+    const telemetry = getLlmTelemetrySnapshot();
+
+    expect(decision.source, `Runtime 恢复决策降级：${JSON.stringify(telemetry.tasks)}`).toBe("deepseek_runtime");
+    expect(decision.action).toBe("retry_module");
+    expect(decision.module_id).toBe(module.module_id);
+    expect(decision.keyword_override).not.toBe(primaryKeyword);
+    expect(telemetry.tasks.find((task) => task.task === "decide_next_action")?.model).toBe("deepseek-reasoner");
   });
 
   it.runIf(liveEvaluation)("adds a bounded adaptive module for an explicit child travel need", async () => {

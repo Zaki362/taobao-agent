@@ -2,9 +2,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   explainProductFit,
   getDeepSeekTimeoutMs,
-  parseScene
+  parseScene,
+  selectAgentDecisionModelTier
 } from "@/lib/llm/deepseek";
 import { mockParseScene } from "@/lib/llm/mock";
+import type { AgentDecisionProposal } from "@/lib/session/types";
+import { createSessionFixture } from "@/tests/fixtures/session";
 import {
   getLlmTelemetrySnapshot,
   resetLlmTelemetryForTests
@@ -14,7 +17,9 @@ const MANAGED_ENV_KEYS = [
   "DEEPSEEK_API_KEY",
   "DEEPSEEK_DISABLED",
   "DEEPSEEK_REQUEST_TIMEOUT_MS",
-  "DEEPSEEK_PARSE_TIMEOUT_MS"
+  "DEEPSEEK_PARSE_TIMEOUT_MS",
+  "DEEPSEEK_AGENT_CHAT_TIMEOUT_MS",
+  "DEEPSEEK_AGENT_REASONER_TIMEOUT_MS"
 ] as const;
 
 const originalEnv = Object.fromEntries(
@@ -40,6 +45,8 @@ describe("DeepSeek client reliability", () => {
     process.env.DEEPSEEK_DISABLED = "false";
     delete process.env.DEEPSEEK_REQUEST_TIMEOUT_MS;
     delete process.env.DEEPSEEK_PARSE_TIMEOUT_MS;
+    delete process.env.DEEPSEEK_AGENT_CHAT_TIMEOUT_MS;
+    delete process.env.DEEPSEEK_AGENT_REASONER_TIMEOUT_MS;
     resetLlmTelemetryForTests();
   });
 
@@ -64,6 +71,40 @@ describe("DeepSeek client reliability", () => {
 
     process.env.DEEPSEEK_PARSE_TIMEOUT_MS = "999999";
     expect(getDeepSeekTimeoutMs("parse_scene")).toBe(60_000);
+  });
+
+  it("uses chat for routine scheduling and reserves reasoner for recovery decisions", () => {
+    const state = createSessionFixture();
+    const module = state.shopping_plan.modules[0];
+    const proposal: AgentDecisionProposal = {
+      action: "search_module",
+      confidence: "high",
+      module_id: module.module_id,
+      reason: "先完成首个高优先级模块。",
+      evidence: ["尚未形成候选池"],
+      expected_gain: "形成候选池",
+      tool_cost: 1
+    };
+
+    expect(selectAgentDecisionModelTier(state, proposal)).toBe("chat");
+
+    state.module_search_traces[module.module_id] = {
+      module_id: module.module_id,
+      module_name: module.module_name,
+      status: "thin",
+      primary_keyword: module.search_keyword ?? module.module_name,
+      searched_keywords: [module.search_keyword ?? module.module_name],
+      attempts: [],
+      result_count: 1,
+      candidate_count: 1,
+      ai_decision_summary: "候选池偏薄",
+      next_action: "建议补搜",
+      generated_at: new Date().toISOString(),
+      updated_at: new Date().toISOString()
+    };
+
+    expect(selectAgentDecisionModelTier(state, proposal)).toBe("reasoner");
+    expect(selectAgentDecisionModelTier(state, { ...proposal, action: "retry_module" })).toBe("reasoner");
   });
 
   it("returns a connected result for valid strict JSON", async () => {

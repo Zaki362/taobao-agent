@@ -43,12 +43,21 @@ import { downgradeLastLlmCall, recordLlmCall, type LlmTaskName } from "@/lib/llm
 const DEEPSEEK_BASE_URL = "https://api.deepseek.com/chat/completions";
 const DEFAULT_TIMEOUT_MS: Record<LlmTaskName, number> = {
   parse_scene: 15_000,
-  personalize_template: 20_000,
+  personalize_template: 26_000,
   refine_plan: 18_000,
   review_candidates: 8_000,
-  review_plan: 6_000,
+  review_plan: 10_000,
   decide_next_action: 8_000,
   explain_product_fit: 6_000
+};
+const DEFAULT_MAX_OUTPUT_TOKENS: Record<LlmTaskName, number> = {
+  parse_scene: 700,
+  personalize_template: 3_200,
+  refine_plan: 700,
+  review_candidates: 900,
+  review_plan: 900,
+  decide_next_action: 900,
+  explain_product_fit: 180
 };
 const TIMEOUT_ENV_KEYS: Record<LlmTaskName, string> = {
   parse_scene: "DEEPSEEK_PARSE_TIMEOUT_MS",
@@ -64,10 +73,17 @@ const MAX_TIMEOUT_MS = 60_000;
 
 type StructuredTask = Exclude<LlmTaskName, "explain_product_fit">;
 type LlmMode = "connected" | "mock";
+type StructuredModelTier = "chat" | "reasoner";
 
-function getStructuredModel(task: StructuredTask) {
-  if (task === "decide_next_action") {
+function getStructuredModel(task: StructuredTask, tier?: StructuredModelTier) {
+  if (tier === "reasoner") {
     return process.env.DEEPSEEK_REASONER_MODEL ?? "deepseek-reasoner";
+  }
+  if (tier === "chat") {
+    return process.env.DEEPSEEK_CHAT_MODEL ?? "deepseek-chat";
+  }
+  if (task === "decide_next_action") {
+    return process.env.DEEPSEEK_CHAT_MODEL ?? "deepseek-chat";
   }
   if (task === "parse_scene" || task === "personalize_template" || task === "review_candidates" || task === "review_plan") {
     return process.env.DEEPSEEK_CHAT_MODEL ?? "deepseek-chat";
@@ -86,6 +102,34 @@ export function getDeepSeekTimeoutMs(task: LlmTaskName) {
     return DEFAULT_TIMEOUT_MS[task];
   }
   return Math.max(MIN_TIMEOUT_MS, Math.min(Math.round(parsed), MAX_TIMEOUT_MS));
+}
+
+function boundedTimeout(value: string | undefined, fallback: number) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
+  return Math.max(MIN_TIMEOUT_MS, Math.min(Math.round(parsed), MAX_TIMEOUT_MS));
+}
+
+export function selectAgentDecisionModelTier(
+  state: SessionState,
+  fallback: AgentDecisionProposal
+): StructuredModelTier {
+  const hasComplexMarketPressure =
+    state.market_feedback.pressure_modules.length > 0 ||
+    state.market_feedback.reallocation_suggestions.length > 0;
+  const hasRecoveryEvidence = Object.values(state.module_search_traces).some(
+    (trace) => trace.status === "failed" || trace.status === "thin" || trace.status === "recovered"
+  );
+  const complexAction = fallback.action === "retry_module" || fallback.action === "skip_module";
+
+  return complexAction || hasComplexMarketPressure || hasRecoveryEvidence ? "reasoner" : "chat";
+}
+
+function agentDecisionTimeoutMs(tier: StructuredModelTier) {
+  if (tier === "reasoner") {
+    return boundedTimeout(process.env.DEEPSEEK_AGENT_REASONER_TIMEOUT_MS, 15_000);
+  }
+  return boundedTimeout(process.env.DEEPSEEK_AGENT_CHAT_TIMEOUT_MS, getDeepSeekTimeoutMs("decide_next_action"));
 }
 
 function sanitizeScene(scene: SceneBrief): SceneBrief {
@@ -512,11 +556,17 @@ async function deepseekJson<T>(
   task: StructuredTask,
   prompt: string,
   fallback: T,
-  timeoutMs = getDeepSeekTimeoutMs(task)
+  options: {
+    timeoutMs?: number;
+    modelTier?: StructuredModelTier;
+    maxOutputTokens?: number;
+  } = {}
 ): Promise<{ data: T; mode: LlmMode }> {
   const apiKey = process.env.DEEPSEEK_API_KEY;
   const startedAt = Date.now();
-  const model = getStructuredModel(task);
+  const model = getStructuredModel(task, options.modelTier);
+  const timeoutMs = options.timeoutMs ?? getDeepSeekTimeoutMs(task);
+  const maxOutputTokens = options.maxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS[task];
   const finish = (data: T, mode: LlmMode, reason?: string) => {
     recordLlmCall({ task, model, mode, durationMs: Date.now() - startedAt, reason });
     return { data, mode };
@@ -537,7 +587,10 @@ async function deepseekJson<T>(
       },
       body: JSON.stringify({
         model,
-        temperature: task === "parse_scene" || task === "review_candidates" ? 0.2 : 0.3,
+        ...(model.includes("reasoner")
+          ? {}
+          : { temperature: task === "parse_scene" || task === "review_candidates" ? 0.2 : 0.3 }),
+        max_tokens: maxOutputTokens,
         messages: [
           {
             role: "system",
@@ -602,8 +655,11 @@ export async function personalizeTemplate(
     personalizeTemplatePrompt(safeScene, safeTemplate),
     fallback
   );
+  const normalizedCandidate = result.mode === "connected"
+    ? normalizeShoppingPlan(result.data, fallback, template)
+    : fallback;
   const validation = result.mode === "connected"
-    ? validateShoppingPlanOutput(result.data, template, {
+    ? validateShoppingPlanOutput(normalizedCandidate, template, {
         maxAdaptiveModules: adaptivePolicy?.max_modules ?? 0,
         adaptiveIdPrefix: adaptivePolicy?.id_prefix,
         prohibitedTerms: adaptivePolicy?.prohibited_terms
@@ -612,7 +668,7 @@ export async function personalizeTemplate(
   if (result.mode === "connected" && !validation.valid) {
     downgradeLastLlmCall("personalize_template", `schema_validation_failed:${validation.reason ?? "unknown"}`);
   }
-  const data = validation.valid ? normalizeShoppingPlan(result.data, fallback, template) : fallback;
+  const data = validation.valid ? normalizedCandidate : fallback;
   return {
     data,
     mode: validation.valid ? result.mode : "mock"
@@ -762,10 +818,16 @@ export async function decideAgentNextAction(
   state: SessionState,
   fallback: AgentDecisionProposal
 ): Promise<{ data: AgentDecisionProposal; mode: LlmMode }> {
+  const modelTier = selectAgentDecisionModelTier(state, fallback);
   const result = await deepseekJson<AgentDecisionProposal>(
     "decide_next_action",
     decideNextActionPrompt(state, fallback),
-    fallback
+    fallback,
+    {
+      modelTier,
+      timeoutMs: agentDecisionTimeoutMs(modelTier),
+      maxOutputTokens: modelTier === "reasoner" ? 2_200 : DEFAULT_MAX_OUTPUT_TOKENS.decide_next_action
+    }
   );
   if (result.mode !== "connected" || !validateAgentDecisionOutput(result.data)) {
     if (result.mode === "connected") {

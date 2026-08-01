@@ -89,7 +89,7 @@ describe("runtime monitoring", () => {
       calls: 1,
       connected: 1,
       fallback: 0,
-      tasks: [{ task: "personalize_template", calls: 1, p95_duration_ms: 19_000 }]
+      tasks: [{ task: "personalize_template", calls: 1, p95_duration_ms: 24_000 }]
     };
     expect(evaluateRuntimeHealth(smallSample).status).toBe("healthy");
 
@@ -101,7 +101,7 @@ describe("runtime monitoring", () => {
       tasks: [{
         task: "personalize_template",
         calls: 4,
-        p95_duration_ms: 19_000,
+        p95_duration_ms: 24_000,
         last_reason: "timeout"
       }]
     };

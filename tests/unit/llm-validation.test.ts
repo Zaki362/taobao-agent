@@ -73,6 +73,47 @@ describe("DeepSeek shopping plan validation", () => {
     expect(validateShoppingPlanOutput(plan, NEW_CAR_SETUP_TEMPLATE)).toEqual({ valid: true });
   });
 
+  it("accepts a compact model strategy delta and fills mechanical fields from the template plan", () => {
+    const fallback = mockPersonalizeTemplate(
+      mockParseScene("新能源车预算 1500，实用优先"),
+      NEW_CAR_SETUP_TEMPLATE
+    );
+    const compactPlan = {
+      overall_rationale: "优先补齐高频实用品。",
+      personalization_summary: "已按预算调整模块。",
+      execution_strategy: {
+        module_sequence: fallback.modules.map((module) => module.module_id),
+        budget_guardrails: ["总额不超过预算"],
+        tradeoffs: ["装饰后置"],
+        search_notes: ["按模块分别检索"],
+        stop_rules: ["三档候选齐备即停止"]
+      },
+      agent_directives: fallback.agent_directives,
+      modules: fallback.modules.map((module) => ({
+        module_id: module.module_id,
+        priority: module.priority,
+        budget_allocation: module.budget_allocation,
+        rationale: module.rationale,
+        recommendation_strategy: module.recommendation_strategy,
+        search_strategy: {
+          primary_keyword: module.search_strategy?.primary_keyword,
+          alternate_keywords: module.search_strategy?.alternate_keywords.slice(0, 2),
+          ranking_focus: module.search_strategy?.ranking_focus.slice(0, 2),
+          must_have_signals: module.search_strategy?.must_have_signals.slice(0, 2),
+          reject_signals: module.search_strategy?.reject_signals.slice(0, 2),
+          reasoning: module.search_strategy?.reasoning
+        }
+      }))
+    };
+
+    expect(validateShoppingPlanOutput(compactPlan, NEW_CAR_SETUP_TEMPLATE)).toEqual({ valid: true });
+    const normalized = normalizeShoppingPlan(compactPlan, fallback, NEW_CAR_SETUP_TEMPLATE);
+    expect(normalized.modules[0].module_name).toBe(fallback.modules[0].module_name);
+    expect(normalized.modules[0].search_strategy?.include_terms.length).toBeGreaterThan(0);
+    expect(normalized.modules[0].search_strategy?.quality_checks.length).toBeGreaterThan(0);
+    expect(normalized.modules[0].search_strategy?.failure_recovery).toBeTruthy();
+  });
+
   it("still rejects modules outside the scenario template", () => {
     const plan = modelPlan();
     const modules = plan.modules as Array<Record<string, unknown>>;
@@ -224,5 +265,23 @@ describe("DeepSeek shopping plan validation", () => {
     expect(adaptive).toHaveLength(1);
     expect(adaptive[0].module_id).toBe("adaptive-child-safety");
     expect(normalized.execution_strategy.module_sequence).toContain("adaptive-child-safety");
+  });
+
+  it("recovers omitted static fields for a known safe adaptive module before validation", () => {
+    const scene = mockParseScene("新能源 SUV，预算 3000，经常带 3 岁孩子长途出行");
+    const fallback = mockPersonalizeTemplate(scene, NEW_CAR_SETUP_TEMPLATE);
+    const modelOutput = structuredClone(fallback) as unknown as Record<string, unknown>;
+    const modules = modelOutput.modules as Array<Record<string, unknown>>;
+    const adaptive = modules.find((module) => module.module_id === "adaptive-child-safety")!;
+    delete adaptive.module_name;
+    delete adaptive.description;
+
+    const normalized = normalizeShoppingPlan(modelOutput, fallback, NEW_CAR_SETUP_TEMPLATE);
+    expect(validateShoppingPlanOutput(normalized, NEW_CAR_SETUP_TEMPLATE, adaptiveOptions())).toEqual({ valid: true });
+    expect(normalized.modules.find((module) => module.module_id === "adaptive-child-safety")).toMatchObject({
+      module_name: "儿童安全出行",
+      optional: true,
+      origin: "ai_adaptive"
+    });
   });
 });

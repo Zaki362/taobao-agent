@@ -30,7 +30,7 @@ export function personalizeTemplatePrompt(scene: SceneBrief, template: PlanningM
     ? [
         `如果用户描述中存在基础模板无法明确覆盖的特殊需求，可以新增最多 ${adaptivePolicy.max_modules} 个自适应模块。没有清晰特殊需求时不要新增。`,
         `自适应 module_id 必须以 ${adaptivePolicy.id_prefix} 开头，只能使用小写字母、数字和连字符；optional 必须为 true。`,
-        "自适应模块必须完整返回 module_name、description、default_priority、default_budget_ratio、typical_item_types，以及普通规划模块要求的全部字段。",
+        "自适应模块必须额外返回 module_name、description、default_priority、default_budget_ratio、typical_item_types；模板模块不要重复这些静态字段。",
         `可考虑的触发方向：${adaptivePolicy.activation_hints.join("；")}`,
         "当用户需求明确命中上述方向，且基础模板的 typical_item_types 没有覆盖对应品类时，应新增自适应模块，不要把独立专项需求硬塞进宽泛模块。",
         `禁止新增涉及以下服务或高风险领域的模块：${adaptivePolicy.prohibited_terms.join("、")}`,
@@ -42,33 +42,37 @@ export function personalizeTemplatePrompt(scene: SceneBrief, template: PlanningM
     "你必须以基础模板为骨架，但可以在模板范围内做更主动的策略判断：裁剪可选模块、重排模块、调整预算、生成更贴合用户语境的搜索关键词。",
     "重要边界：除下述受限自适应模块外，不要新增 template 中不存在的 module_id；不要直接调用工具，不要编造真实商品。",
     ...adaptiveInstructions,
-    "每个保留模块都必须给出：priority、budget_allocation、rationale、recommendation_strategy、search_keyword、search_strategy、status。",
+    "每个保留模块只需给出：module_id、priority、budget_allocation、rationale、recommendation_strategy、search_strategy。模板静态字段、search_keyword 和 status 由后端可靠补齐，不要重复输出。",
     "还必须给出计划级 execution_strategy，用来指导后端 Agent 如何执行这个规划，但它不能直接调用工具。",
-    "execution_strategy 结构必须包含 module_sequence、budget_guardrails、tradeoffs、search_notes、stop_rules。",
+    "execution_strategy 结构必须包含 module_sequence、budget_guardrails、tradeoffs、search_notes、stop_rules；除 module_sequence 外每个列表控制在 1-2 条短句。",
     "module_sequence 必须使用 module_id 数组，表示建议的串行搜索顺序；budget_guardrails 表示预算纪律；tradeoffs 表示本轮放弃或后置的原因；search_notes 表示给工具层的搜索注意事项；stop_rules 表示什么时候不继续扩大搜索。",
     "还必须给出 agent_directives，表示 AI 给后端 Agent 的操作空间与边界。结构必须包含 autonomy_level、search_depth、detail_policy、recovery_policy、rerank_rules、user_confirmation_points、safety_boundaries。",
     "agent_directives.autonomy_level 只能是 保守执行、平衡执行、探索执行 之一；search_depth 只能是 轻量搜索、标准搜索、深度搜索 之一。",
-    "agent_directives.detail_policy 用一句话说明是否需要自动打开详情页；recovery_policy 用一句话说明模块搜索失败时如何继续；rerank_rules 给 2-4 条候选排序规则；user_confirmation_points 给 1-3 条需要用户确认后再执行的动作；safety_boundaries 给 2-4 条工具和隐私边界。",
-    "search_keyword 应该是可直接用于淘宝搜索的短词组，包含场景约束、品类词和关键偏好，避免空泛词。",
-    "不同模块的 search_keyword 必须明显不同，不能把同一组商品词复制到多个模块。",
-    "search_strategy 是 AI 给工具执行层的安全策略包，不直接调用工具。结构必须包含 primary_keyword、alternate_keywords、include_terms、exclude_terms、ranking_focus、must_have_signals、reject_signals、quality_checks、price_band、reasoning、failure_recovery。",
-    "search_strategy.primary_keyword 应该比 search_keyword 更适合首次检索；alternate_keywords 必须给 2-3 个与 primary 明显不同的备用淘宝搜索词，用于换一批或首轮无结果时恢复；include_terms 用于提升候选相关性；exclude_terms 用于规避用户不想买/已有物品；ranking_focus 用于说明排序时优先看哪些信号。",
-    "must_have_signals 给 2-4 个“好候选必须尽量满足”的可观察信号，例如适配性、规格、安装方式、预算段或核心功能；reject_signals 给 2-4 个应明显降权的信号；quality_checks 给 2-4 个进入推荐前要核查的信息完整性或可信度指标，例如图片、详情链接、店铺类型、规格明确度。",
-    "failure_recovery 用一句话说明搜索失败、候选质量薄或验收信号不足时如何收缩/改写搜索。",
+    "agent_directives.detail_policy 和 recovery_policy 各一句；rerank_rules、user_confirmation_points、safety_boundaries 各给 1-3 条短句。",
+    "search_strategy 只需输出真正需要 AI 判断的字段：primary_keyword、alternate_keywords、ranking_focus、must_have_signals、reject_signals、reasoning。include_terms、exclude_terms、quality_checks、price_band、failure_recovery 由后端结合模板和用户约束补齐。",
+    "primary_keyword 必须是可直接用于淘宝搜索的短词组；每个模块必须明显不同。alternate_keywords 给 1-2 个不同备用词；ranking_focus、must_have_signals、reject_signals 各给 1-3 个可观察信号。",
     "输出必须是严格 JSON，不要附加解释性文本。JSON 结构必须包含 overall_rationale、personalization_summary、execution_strategy、agent_directives、modules。",
     `基础模板 module_id：${template.map((module) => module.module_id).join("、")}`,
     dataBoundaryNotice(),
-    `Scene Brief: ${JSON.stringify(scene, null, 2)}`,
-    `Template: ${JSON.stringify(template, null, 2)}`
+    `Scene Brief: ${JSON.stringify(scene)}`,
+    `Template: ${JSON.stringify(template)}`
   ].join("\n");
 }
 
 export function reviewShoppingPlanPrompt(scene: SceneBrief, plan: ShoppingPlan) {
   const compactPlan = {
     overall_rationale: plan.overall_rationale,
-    personalization_summary: plan.personalization_summary,
-    execution_strategy: plan.execution_strategy,
-    agent_directives: plan.agent_directives,
+    execution_strategy: {
+      module_sequence: plan.execution_strategy.module_sequence,
+      tradeoffs: plan.execution_strategy.tradeoffs,
+      stop_rules: plan.execution_strategy.stop_rules
+    },
+    agent_directives: {
+      autonomy_level: plan.agent_directives.autonomy_level,
+      search_depth: plan.agent_directives.search_depth,
+      recovery_policy: plan.agent_directives.recovery_policy,
+      safety_boundaries: plan.agent_directives.safety_boundaries
+    },
     modules: plan.modules.map((module) => ({
       module_id: module.module_id,
       module_name: module.module_name,
@@ -76,8 +80,11 @@ export function reviewShoppingPlanPrompt(scene: SceneBrief, plan: ShoppingPlan) 
       priority: module.priority,
       budget_allocation: module.budget_allocation,
       search_keyword: module.search_keyword,
-      recommendation_strategy: module.recommendation_strategy,
-      search_strategy: module.search_strategy
+      primary_keyword: module.search_strategy?.primary_keyword ?? module.search_keyword,
+      alternate_keywords: module.search_strategy?.alternate_keywords ?? [],
+      ranking_focus: module.search_strategy?.ranking_focus ?? [],
+      must_have_signals: module.search_strategy?.must_have_signals ?? [],
+      reject_signals: module.search_strategy?.reject_signals ?? []
     }))
   };
 
@@ -89,8 +96,8 @@ export function reviewShoppingPlanPrompt(scene: SceneBrief, plan: ShoppingPlan) 
     "status 只能是 ready、needs_attention、risky 之一。",
     "strengths、risks、improvement_suggestions 每项 1-4 条，要求短句，面向用户可读。",
     dataBoundaryNotice(),
-    `Scene Brief: ${JSON.stringify(scene, null, 2)}`,
-    `Shopping Plan: ${JSON.stringify(compactPlan, null, 2)}`
+    `Scene Brief: ${JSON.stringify(scene)}`,
+    `Shopping Plan: ${JSON.stringify(compactPlan)}`
   ].join("\n");
 }
 
@@ -195,6 +202,21 @@ export function decideNextActionPrompt(
   const activeTasks = state.hosted_tasks
     .filter((task) => task.status === "pending" || task.status === "running")
     .map((task) => ({ task_id: task.task_id, task_type: task.task_type, module_id: task.module_id, status: task.status }));
+  const compactDirectives = {
+    autonomy_level: state.shopping_plan.agent_directives.autonomy_level,
+    search_depth: state.shopping_plan.agent_directives.search_depth,
+    recovery_policy: state.shopping_plan.agent_directives.recovery_policy,
+    safety_boundaries: state.shopping_plan.agent_directives.safety_boundaries
+  };
+  const compactExecution = {
+    module_sequence: state.shopping_plan.execution_strategy.module_sequence,
+    stop_rules: state.shopping_plan.execution_strategy.stop_rules
+  };
+  const compactRuntime = {
+    max_tool_calls: state.agent_runtime.max_tool_calls,
+    used_tool_calls: state.agent_runtime.used_tool_calls,
+    workflow_status: state.agent_runtime.workflow_status
+  };
 
   return [
     "你是 SceneCart AI Agent Runtime 2.0 的下一步决策器。",
@@ -207,10 +229,10 @@ export function decideNextActionPrompt(
     "JSON 字段：action、confidence、module_id、keyword_override、reason、evidence、expected_gain、tool_cost。",
     "confidence 只能是 high、medium、low；evidence 为 1-4 条短句；tool_cost 对搜索/补搜填 1，其他动作填 0。",
     dataBoundaryNotice(),
-    `Scene Brief: ${JSON.stringify(state.scene_brief, null, 2)}`,
-    `Agent Directives: ${JSON.stringify(state.shopping_plan.agent_directives, null, 2)}`,
-    `Execution Strategy: ${JSON.stringify(state.shopping_plan.execution_strategy, null, 2)}`,
-    `Runtime Budget: ${JSON.stringify(state.agent_runtime, null, 2)}`,
+    `Scene Brief: ${JSON.stringify(state.scene_brief)}`,
+    `Agent Directives: ${JSON.stringify(compactDirectives)}`,
+    `Execution Strategy: ${JSON.stringify(compactExecution)}`,
+    `Runtime Budget: ${JSON.stringify(compactRuntime)}`,
     `Market Feedback: ${JSON.stringify({
       status: state.market_feedback.status,
       observed_modules: state.market_feedback.observed_modules,
@@ -229,10 +251,10 @@ export function decideNextActionPrompt(
           suggested_keyword: signal.suggested_keyword
         })),
       reallocation_suggestions: state.market_feedback.reallocation_suggestions
-    }, null, 2)}`,
-    `Modules: ${JSON.stringify(modules, null, 2)}`,
-    `Active Tasks: ${JSON.stringify(activeTasks, null, 2)}`,
-    `Recent Decisions: ${JSON.stringify(state.agent_decisions.slice(-5).map((decision) => ({ action: decision.action, module_id: decision.module_id, consumed_at: decision.consumed_at, reason: decision.reason })), null, 2)}`,
-    `Policy Fallback Reference: ${JSON.stringify(policyFallback, null, 2)}`
+    })}`,
+    `Modules: ${JSON.stringify(modules)}`,
+    `Active Tasks: ${JSON.stringify(activeTasks)}`,
+    `Recent Decisions: ${JSON.stringify(state.agent_decisions.slice(-4).map((decision) => ({ action: decision.action, module_id: decision.module_id, consumed_at: decision.consumed_at, reason: decision.reason })) )}`,
+    `Policy Fallback Reference: ${JSON.stringify(policyFallback)}`
   ].join("\n");
 }

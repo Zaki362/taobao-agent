@@ -185,11 +185,11 @@ export function evaluateRuntimeHealth(input: RuntimeHealthInput) {
 
   const slowTaskThresholds: Record<string, number> = {
     parse_scene: 12_000,
-    personalize_template: 18_000,
+    personalize_template: 23_000,
     refine_plan: 16_000,
     review_candidates: 7_000,
-    review_plan: 5_000,
-    decide_next_action: 7_000,
+    review_plan: 9_000,
+    decide_next_action: 13_000,
     explain_product_fit: 5_000
   };
   for (const task of input.llm.tasks ?? []) {
