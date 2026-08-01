@@ -181,6 +181,8 @@ pending -> leased -> running -> completed
 
 `RUNTIME_STORE=postgres` 时，每次推进还会获取基于 Session ID 的 PostgreSQL transaction-level advisory lock。锁内的 Session 读取、Agent 决策落盘、Job 创建和事件写入通过 `AsyncLocalStorage` 复用同一数据库 client，并在同一事务提交；竞争实例立即返回等待状态，不会重复创建下一模块。Executor 的成功、失败和取消回填也使用同一把锁，避免重复回执用旧 Session 快照覆盖下一步任务。锁不覆盖 Qoder/Taobao 的长时间执行；平衡/探索档位下可能包含一次有界的 DeepSeek 下一动作判断，常规 chat 默认 8 秒、复杂 reasoner 默认 15 秒；工作流收敛时还可能包含一次默认 12 秒上限的购买组合提案。两者失败都使用确定性结果继续，不等待淘宝工具执行。
 
+`RUNTIME_STORE=local` 也使用进程内、按 Session ID 隔离的可重入锁队列：等待型事务会串行执行，Agent 推进使用非阻塞抢锁，超时等待者会安全退出队列。这样本机验收时并发回填、暂停/继续和加购不会互相覆盖；该锁只在单个 Node.js 进程内有效，因此多实例正式部署仍必须使用 PostgreSQL。
+
 每个模块获得真实候选后，`market-feedback` 会基于有效价格样本计算模块预算压力、参考入手价和跨模块余量。该结果会进入下一动作 prompt：平衡/探索档位可以在候选整体超预算时提出一次未尝试过的性价比补搜词。预算调拨最多按模块预算的 15% 生成总额守恒的建议，始终标记为“需要用户确认”，不会静默改写已经确认的购物规划。
 
 ## 7. 运维与诊断

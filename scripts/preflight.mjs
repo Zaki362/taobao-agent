@@ -355,6 +355,7 @@ function assertArchitectureContracts() {
   const hostedNextRoute = tryReadText("app/api/hosted/tasks/next/route.ts");
   const hostedResolveRoute = tryReadText("app/api/hosted/tasks/resolve/route.ts");
   const hostedWorkerStatusRoute = tryReadText("app/api/hosted/worker-status/route.ts");
+  const runtimeDatabase = tryReadText("lib/runtime/database.ts");
   const runtimeJobs = tryReadText("lib/runtime/jobs.ts");
   const sessionStore = tryReadText("lib/session/store.ts");
   const sessionGuards = tryReadText("lib/session/guards.ts");
@@ -420,6 +421,7 @@ function assertArchitectureContracts() {
     !hostedNextRoute ||
     !hostedResolveRoute ||
     !hostedWorkerStatusRoute ||
+    !runtimeDatabase ||
     !runtimeJobs ||
     !sessionStore ||
     !sessionGuards ||
@@ -530,6 +532,14 @@ function assertArchitectureContracts() {
         hostedConsole.includes("完成当前模块后暂停") &&
         hostedConsole.includes("从原进度继续"),
       message: "服务端 Agent 必须支持用户显式暂停和原进度继续，不能要求强杀运行中的外部工具"
+    },
+    {
+      ok:
+        runtimeDatabase.includes("__sceneCartLocalWorkflowLocks") &&
+        runtimeDatabase.includes("reserveLocalWorkflowLock") &&
+        runtimeDatabase.includes("waitForLocalWorkflowLock") &&
+        runtimeDatabase.includes("holdsLocalWorkflowLock"),
+      message: "本地运行时必须序列化同一 Session 的回填、暂停和加购写入，不能把 workflow lock 退化为空实现"
     },
     {
       ok: deepseek.includes("validateSceneBriefOutput") && deepseek.includes("validateShoppingPlanOutput"),

@@ -4,9 +4,75 @@ import { Pool, PoolClient, QueryResultRow } from "pg";
 declare global {
   // eslint-disable-next-line no-var
   var __sceneCartPgPool: Pool | undefined;
+  // eslint-disable-next-line no-var
+  var __sceneCartLocalWorkflowLocks: Map<string, Promise<void>> | undefined;
 }
 
 const databaseClientContext = new AsyncLocalStorage<PoolClient>();
+const localWorkflowLockContext = new AsyncLocalStorage<Set<string>>();
+const localWorkflowLocks = globalThis.__sceneCartLocalWorkflowLocks ?? new Map<string, Promise<void>>();
+globalThis.__sceneCartLocalWorkflowLocks = localWorkflowLocks;
+
+function localWorkflowLockKey(sessionId: string) {
+  return `scenecart:workflow:${sessionId}`;
+}
+
+function holdsLocalWorkflowLock(key: string) {
+  return localWorkflowLockContext.getStore()?.has(key) === true;
+}
+
+function runWithLocalWorkflowLockContext<T>(key: string, callback: () => Promise<T>) {
+  const existing = localWorkflowLockContext.getStore();
+  if (existing?.has(key)) return callback();
+  const held = new Set(existing ?? []);
+  held.add(key);
+  return localWorkflowLockContext.run(held, callback);
+}
+
+function reserveLocalWorkflowLock(key: string) {
+  const predecessor = (localWorkflowLocks.get(key) ?? Promise.resolve()).catch(() => undefined);
+  let releaseSlot!: () => void;
+  const slot = new Promise<void>((resolve) => {
+    releaseSlot = resolve;
+  });
+  const tail = predecessor.then(() => slot);
+  localWorkflowLocks.set(key, tail);
+
+  let released = false;
+  return {
+    ready: predecessor,
+    release(acquired: boolean) {
+      if (released) return;
+      released = true;
+      releaseSlot();
+      if (acquired && localWorkflowLocks.get(key) === tail) {
+        localWorkflowLocks.delete(key);
+        return;
+      }
+      void tail.finally(() => {
+        if (localWorkflowLocks.get(key) === tail) {
+          localWorkflowLocks.delete(key);
+        }
+      });
+    }
+  };
+}
+
+async function waitForLocalWorkflowLock(ready: Promise<void>, timeoutMs: number) {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      ready,
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => {
+          reject(new Error(`workflow session lock timed out after ${timeoutMs}ms`));
+        }, timeoutMs);
+      })
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
 
 export function isPostgresRuntimeEnabled() {
   return process.env.RUNTIME_STORE === "postgres";
@@ -93,7 +159,22 @@ export async function withDatabaseAdvisoryLockWait<T>(
 
 export async function withWorkflowSessionLock<T>(sessionId: string, callback: () => Promise<T>) {
   if (!isPostgresRuntimeEnabled()) {
-    return { acquired: true as const, value: await callback() };
+    const key = localWorkflowLockKey(sessionId);
+    if (holdsLocalWorkflowLock(key)) {
+      return { acquired: true as const, value: await callback() };
+    }
+    if (localWorkflowLocks.has(key)) return { acquired: false as const };
+
+    const reservation = reserveLocalWorkflowLock(key);
+    await reservation.ready;
+    try {
+      return {
+        acquired: true as const,
+        value: await runWithLocalWorkflowLockContext(key, callback)
+      };
+    } finally {
+      reservation.release(true);
+    }
   }
   return withDatabaseAdvisoryLock(`scenecart:workflow:${sessionId}`, callback);
 }
@@ -103,7 +184,20 @@ export async function withWorkflowSessionTransaction<T>(
   callback: () => Promise<T>,
   timeoutMs = 5_000
 ) {
-  if (!isPostgresRuntimeEnabled()) return callback();
+  if (!isPostgresRuntimeEnabled()) {
+    const key = localWorkflowLockKey(sessionId);
+    if (holdsLocalWorkflowLock(key)) return callback();
+
+    const reservation = reserveLocalWorkflowLock(key);
+    let acquired = false;
+    try {
+      await waitForLocalWorkflowLock(reservation.ready, timeoutMs);
+      acquired = true;
+      return await runWithLocalWorkflowLockContext(key, callback);
+    } finally {
+      reservation.release(acquired);
+    }
+  }
   return withDatabaseAdvisoryLockWait(`scenecart:workflow:${sessionId}`, callback, timeoutMs);
 }
 
