@@ -8,6 +8,11 @@ const originalBackend = process.env.TAOBAO_EXECUTION_BACKEND;
 const originalRecoverySecret = process.env.SCENECART_CRON_SECRET;
 const originalRecoveryStaleMs = process.env.SCENECART_RECOVERY_STALE_MS;
 const originalMcpDebug = process.env.SCENECART_ENABLE_MCP_DEBUG;
+const originalRuntimeStore = process.env.RUNTIME_STORE;
+const originalDatabaseUrl = process.env.DATABASE_URL;
+const originalAuthRequired = process.env.AUTH_REQUIRED;
+const originalAuthCookieSecure = process.env.AUTH_COOKIE_SECURE;
+const originalAppOrigin = process.env.APP_ORIGIN;
 
 beforeEach(() => {
   resetLocalRuntimeForTests();
@@ -28,6 +33,16 @@ afterEach(() => {
   else process.env.SCENECART_RECOVERY_STALE_MS = originalRecoveryStaleMs;
   if (originalMcpDebug === undefined) delete process.env.SCENECART_ENABLE_MCP_DEBUG;
   else process.env.SCENECART_ENABLE_MCP_DEBUG = originalMcpDebug;
+  if (originalRuntimeStore === undefined) delete process.env.RUNTIME_STORE;
+  else process.env.RUNTIME_STORE = originalRuntimeStore;
+  if (originalDatabaseUrl === undefined) delete process.env.DATABASE_URL;
+  else process.env.DATABASE_URL = originalDatabaseUrl;
+  if (originalAuthRequired === undefined) delete process.env.AUTH_REQUIRED;
+  else process.env.AUTH_REQUIRED = originalAuthRequired;
+  if (originalAuthCookieSecure === undefined) delete process.env.AUTH_COOKIE_SECURE;
+  else process.env.AUTH_COOKIE_SECURE = originalAuthCookieSecure;
+  if (originalAppOrigin === undefined) delete process.env.APP_ORIGIN;
+  else process.env.APP_ORIGIN = originalAppOrigin;
 });
 
 describe("production readiness", () => {
@@ -69,6 +84,30 @@ describe("production readiness", () => {
     expect(readiness.effective_executor_backend).toBe("local_executor");
     expect(checks.get("executor_backend")?.status).toBe("fail");
     expect(checks.get("executor_backend")?.detail).toContain("已阻断配置的 backend=qoder_cli");
+  });
+
+  it("does not mistake production safety overrides for valid deployment configuration", async () => {
+    process.env.SCENECART_PRODUCT_MODE = "production";
+    process.env.RUNTIME_STORE = "local";
+    delete process.env.DATABASE_URL;
+    process.env.AUTH_REQUIRED = "false";
+    process.env.AUTH_COOKIE_SECURE = "false";
+    process.env.APP_ORIGIN = "https://scenecart.example.com";
+
+    const readiness = await inspectRuntimeReadiness("misconfigured-production-user");
+    const checks = new Map(readiness.checks.map((item) => [item.id, item]));
+
+    expect(readiness.ready_for_production).toBe(false);
+    expect(checks.get("runtime_store")?.status).toBe("fail");
+    expect(checks.get("authentication")).toMatchObject({
+      status: "fail",
+      detail: expect.stringContaining("已强制账号隔离")
+    });
+    expect(checks.get("secure_cookie")).toMatchObject({
+      status: "fail",
+      detail: expect.stringContaining("已强制使用 Secure Cookie")
+    });
+    expect(checks.get("executor_online")?.detail).toContain("正式运行时配置未通过");
   });
 
   it("does not report full shopping operations when only search capability is online", async () => {

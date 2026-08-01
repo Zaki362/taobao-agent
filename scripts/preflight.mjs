@@ -440,6 +440,8 @@ function assertArchitectureContracts() {
   const hostedResolveRoute = tryReadText("app/api/hosted/tasks/resolve/route.ts");
   const hostedWorkerStatusRoute = tryReadText("app/api/hosted/worker-status/route.ts");
   const runtimeDatabase = tryReadText("lib/runtime/database.ts");
+  const runtimeIndex = tryReadText("lib/runtime/index.ts");
+  const authRequest = tryReadText("lib/auth/request.ts");
   const runtimeJobs = tryReadText("lib/runtime/jobs.ts");
   const sessionStore = tryReadText("lib/session/store.ts");
   const sessionGuards = tryReadText("lib/session/guards.ts");
@@ -510,6 +512,8 @@ function assertArchitectureContracts() {
     !hostedResolveRoute ||
     !hostedWorkerStatusRoute ||
     !runtimeDatabase ||
+    !runtimeIndex ||
+    !authRequest ||
     !runtimeJobs ||
     !sessionStore ||
     !sessionGuards ||
@@ -525,6 +529,15 @@ function assertArchitectureContracts() {
     !sessionStore.includes('mcp_status: state.mcp_status ?? "unavailable"')
   ) {
     fail("旧 Session 缺失执行字段时必须迁移到 local_executor，不能重新激活 Codex hosted 兼容通道");
+  }
+
+  if (
+    !runtimeIndex.includes("assertRuntimeRepositoryConfiguration") ||
+    !runtimeIndex.includes("正式产品模式拒绝使用本地运行时") ||
+    !authRequest.includes('isFormalProductMode() || process.env.AUTH_REQUIRED === "true"') ||
+    !authRequest.includes("if (hasHttpsAppOrigin()) return true")
+  ) {
+    fail("正式产品模式必须强制账号隔离、拒绝本地运行时，并阻止 HTTPS Cookie 被错误降级");
   }
 
   const contracts = [

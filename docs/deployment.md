@@ -56,6 +56,8 @@ SCENECART_RELEASE_VERIFY_URL=https://scenecart.example.com npm run release:verif
 
 `health` 只回答进程和数据库是否存活；`readiness` 才会检查正式产品模式、演示加购回退、数据库持久化、认证、服务端恢复心跳、安全 Cookie、正式 HTTPS Origin、DeepSeek、`local_executor`、手动 MCP 调试端点、旧 Mock 标志和当前账号执行器状态，不能用前者代替发布验收。内部 readiness 不带用户身份，因此只验证平台发布条件；某个用户是否具备真实搜索与加购能力，仍必须通过登录后的 `/api/runtime/readiness` 和 `executor:doctor` 验证。应用启动后应等待至少一次恢复 Worker/Cron 心跳，再把实例加入正式流量。
 
+`production` 运行时会安全阻断三类误配置：匿名访问会被强制关闭；HTTPS Origin 下的 Cookie 不允许被 `AUTH_COOKIE_SECURE=false` 降级；本地 Session 仓库不能代替 PostgreSQL。安全覆盖只用于 fail-closed，不会让 readiness 变绿，部署环境仍必须显式配置 `AUTH_REQUIRED=true`、`AUTH_COOKIE_SECURE=true`、`RUNTIME_STORE=postgres` 和 `DATABASE_URL`。
+
 `db:check` 会同时核对 migration checksum 与运行时实体表，包括恢复调度依赖的 `runtime_service_heartbeats`。Docker 镜像只包含 Web、数据库迁移和恢复 Worker；用户设备令牌、Qoder CLI、淘宝 skill 与淘宝登录态不得进入镜像或 Compose 环境。
 
 `SCENECART_PRODUCT_MODE=production` 会强制关闭演示购物车回退，即使误设 `ALLOW_DEMO_CART_FALLBACK=true` 也不会把真实加购失败伪装成成功。开发预览仍可保留该回退，但 UI 与购物清单必须明确标记“演示购物车”。

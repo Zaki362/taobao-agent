@@ -46,6 +46,8 @@ DEEPSEEK_CHAT_MODEL=deepseek-chat
 DEEPSEEK_REASONER_MODEL=deepseek-reasoner
 ```
 
+正式模式采用 fail-closed 运行契约：即使误设 `AUTH_REQUIRED=false`，请求仍会被强制要求账号身份；即使误设 `AUTH_COOKIE_SECURE=false`，只要 `APP_ORIGIN` 是 HTTPS，登录 Cookie 仍会强制使用 `Secure`；如果未启用 PostgreSQL 或缺少 `DATABASE_URL`，会话、认证和任务仓库会直接拒绝读写，不会静默回退到本地开发存储。Readiness 仍会把这些被安全兜底的误配置标记为失败，必须修正环境变量后才能发布。
+
 执行 migration：
 
 ```bash

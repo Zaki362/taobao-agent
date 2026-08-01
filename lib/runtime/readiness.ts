@@ -50,7 +50,9 @@ export async function inspectRuntimeReadiness(userId?: string) {
   const store = runtimeStoreMode();
   const executor = getExecutionBackend();
   const configuredExecutor = getConfiguredExecutionBackend();
+  const authConfigured = process.env.AUTH_REQUIRED === "true";
   const authRequired = isAuthenticationRequired();
+  const secureCookieConfigured = process.env.AUTH_COOKIE_SECURE === "true";
   const secureCookie = useSecureAuthCookie();
   const deepSeekConfigured = configured(process.env.DEEPSEEK_API_KEY) && process.env.DEEPSEEK_DISABLED !== "true";
   const llmRuntime = summarizeLlmRuntimeStatus();
@@ -120,9 +122,13 @@ export async function inspectRuntimeReadiness(userId?: string) {
   checks.push(check(
     "authentication",
     "用户认证",
-    authRequired ? "pass" : "fail",
+    authConfigured && authRequired ? "pass" : "fail",
     true,
-    authRequired ? "AUTH_REQUIRED 已开启" : "当前允许匿名使用",
+    authConfigured
+      ? "AUTH_REQUIRED 已开启"
+      : authRequired
+        ? "正式模式已强制账号隔离，但 AUTH_REQUIRED 尚未显式配置"
+        : "当前允许匿名使用",
     "正式环境设置 AUTH_REQUIRED=true"
   ));
   const workflowRecoveryStatus: ReadinessStatus = !workflowRecoveryConfigured
@@ -154,9 +160,13 @@ export async function inspectRuntimeReadiness(userId?: string) {
   checks.push(check(
     "secure_cookie",
     "安全会话 Cookie",
-    secureCookie ? "pass" : "fail",
+    secureCookieConfigured && secureCookie ? "pass" : "fail",
     true,
-    secureCookie ? "会话 Cookie 仅通过安全连接发送" : "Secure Cookie 尚未开启",
+    secureCookieConfigured
+      ? "会话 Cookie 仅通过安全连接发送"
+      : secureCookie
+        ? "HTTPS Origin 已强制使用 Secure Cookie，但 AUTH_COOKIE_SECURE 尚未显式配置"
+        : "Secure Cookie 尚未开启",
     "使用 HTTPS，并设置 AUTH_COOKIE_SECURE=true"
   ));
   checks.push(check(
@@ -244,7 +254,10 @@ export async function inspectRuntimeReadiness(userId?: string) {
   ));
 
   let executorCapabilities = summarizeExecutorDevices([]);
-  if (userId) {
+  const canInspectUserRuntime = Boolean(
+    userId && (productMode !== "production" || store === "postgres")
+  );
+  if (userId && canInspectUserRuntime) {
     const devices = await getRuntimeRepository().listDevices(userId);
     executorCapabilities = summarizeExecutorDevices(devices);
     checks.push(check(
@@ -276,6 +289,12 @@ export async function inspectRuntimeReadiness(userId?: string) {
       "确认淘宝账号与 Skill 支持加购，再注册包含 add_to_cart 能力的设备"
     ));
   } else {
+    const unavailableDetail = userId
+      ? "正式运行时配置未通过，暂不读取当前账号的执行器能力"
+      : "登录后才能检查当前账号的执行器能力";
+    const unavailableRemediation = userId
+      ? "先配置 RUNTIME_STORE=postgres 和 DATABASE_URL"
+      : "登录产品并打开 /settings/executor";
     for (const [id, label] of [
       ["executor_online", "本地执行器在线"],
       ["executor_search_capability", "真实商品搜索能力"],
@@ -286,8 +305,8 @@ export async function inspectRuntimeReadiness(userId?: string) {
         label,
         "warn",
         false,
-        "登录后才能检查当前账号的执行器能力",
-        "登录产品并打开 /settings/executor"
+        unavailableDetail,
+        unavailableRemediation
       ));
     }
   }
