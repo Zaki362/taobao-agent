@@ -1003,6 +1003,8 @@ executor 不只负责转发工具调用，也负责把 adapter 输出归一化�
 
 购物车确认页进一步采用来源隔离：`selected_items.cart_source` 明确区分 `taobao` 与 `demo`。`/api/cart/remove` 只允许删除经过用户确认的 `demo` 条目，并在 Session 锁内同步 `bundle_adoption`；真实淘宝条目和缺少来源的历史条目全部 fail-closed，只提供前往淘宝购物车管理的入口。这样不会把“删除产品内账本记录”伪装成“删除淘宝购物车商品”，也不会误伤用户原有购物车。
 
+`/api/cart/add` 的 Session 读取、幂等 Job 创建、任务挂接、状态保存和审计事件也位于同一 Session 事务锁中。多个商品的并发确认会被短暂串行化，但淘宝实际执行仍在本地 Worker 后台完成，不占用数据库锁；这样可以防止并发请求或执行器回填使用旧快照覆盖另一件商品的待执行状态。
+
 调试接口 `/api/mcp/run` 也不能绕过这套机制。它默认关闭，仅在 development 显式配置 `SCENECART_ENABLE_MCP_DEBUG=true` 后存在；production 始终返回 404。即使在调试模式，高风险工具仍必须同时满足：
 
 - 请求体 `confirm_high_risk=true`

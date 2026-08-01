@@ -790,6 +790,10 @@ function assertArchitectureContracts() {
       message: "购物车确认页只能移除明确标记的演示项；真实淘宝条目必须 fail-closed 并引导到淘宝管理"
     },
     {
+      ok: /export async function addToCart\([\s\S]{0,700}return withWorkflowSessionTransaction\(sessionId/.test(orchestrator),
+      message: "加购请求必须在 Session 事务锁内读取、入队和持久化，避免并发请求或执行器回填覆盖状态"
+    },
+    {
       ok:
         dashboard.includes("cartingProductId") &&
         dashboardResults.includes("cartingProductId === productId") &&

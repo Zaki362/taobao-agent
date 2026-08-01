@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createAgentDecision } from "@/lib/agent/decision-engine";
+import { addToCart } from "@/lib/agent/orchestrator";
 import { advanceAgentWorkflow } from "@/lib/agent/workflow-runner";
 import { recoverAgentWorkflows } from "@/lib/agent/workflow-recovery";
 import { closeDatabasePoolForTests, query, withWorkflowSessionLock } from "@/lib/runtime/database";
@@ -340,6 +341,62 @@ describeWithDatabase("PostgreSQL production runtime contract", () => {
     expect(restored?.tool_logs.filter((log) =>
       log.tool_name === "local_executor" && log.module_id === module.module_id
     )).toHaveLength(1);
+  });
+
+  it("serializes concurrent cart requests without losing either queued product", async () => {
+    const cartSessionId = `session-pg-cart-${randomUUID()}`;
+    const state = createSessionFixture({ session_id: cartSessionId, owner_id: userId });
+    const module = state.shopping_plan.modules[0];
+    state.module_candidates[module.module_id] = [
+      {
+        product_id: "pg-cart-product-a",
+        title: "PostgreSQL 并发加购商品 A",
+        price: 89,
+        source: "淘宝本地执行器测试",
+        shop_name: "并发加购旗舰店",
+        image_url: "https://example.com/cart-a.jpg",
+        detail_url: "https://item.taobao.com/item.htm?id=pg-cart-product-a",
+        shop_badges: ["旗舰店"],
+        highlights: ["并发测试"],
+        risk_notes: ["集成测试数据"],
+        fit_reason: "用于验证并发加购不会覆盖任务。",
+        recommendation_type: "稳妥推荐",
+        module_id: module.module_id
+      },
+      {
+        product_id: "pg-cart-product-b",
+        title: "PostgreSQL 并发加购商品 B",
+        price: 109,
+        source: "淘宝本地执行器测试",
+        shop_name: "并发加购旗舰店",
+        image_url: "https://example.com/cart-b.jpg",
+        detail_url: "https://item.taobao.com/item.htm?id=pg-cart-product-b",
+        shop_badges: ["旗舰店"],
+        highlights: ["并发测试"],
+        risk_notes: ["集成测试数据"],
+        fit_reason: "用于验证并发加购不会覆盖任务。",
+        recommendation_type: "性价比推荐",
+        module_id: module.module_id
+      }
+    ];
+    await postgresRuntimeRepository.saveSession(state);
+
+    await Promise.all([
+      addToCart(cartSessionId, "pg-cart-product-a", userId),
+      addToCart(cartSessionId, "pg-cart-product-b", userId)
+    ]);
+
+    const restored = await postgresRuntimeRepository.getSession(cartSessionId, userId);
+    const cartTasks = restored?.hosted_tasks.filter((task) => task.task_type === "add_to_cart") ?? [];
+    expect(new Set(cartTasks.map((task) => task.product_id))).toEqual(
+      new Set(["pg-cart-product-a", "pg-cart-product-b"])
+    );
+    expect(cartTasks.every((task) => task.status === "pending" && Boolean(task.runtime_job_id))).toBe(true);
+
+    const jobs = await postgresRuntimeRepository.listJobs(cartSessionId, userId);
+    expect(new Set(jobs.filter((job) => job.job_type === "add_to_cart").map((job) => job.payload.product_id))).toEqual(
+      new Set(["pg-cart-product-a", "pg-cart-product-b"])
+    );
   });
 
   it("recovers an orphaned completed job without re-executing the external tool", async () => {

@@ -192,16 +192,18 @@ export async function getNextAgentAction(sessionId: string, userId?: string) {
 }
 
 export async function addToCart(sessionId: string, productId: string, userId?: string) {
-  const state = await ensureSession(sessionId, userId);
-  if (!state) {
-    throw new Error("session not found");
-  }
-  const result = await runCartExecutor(state, productId);
-  await persistSession(state);
-  return {
-    state,
-    result
-  };
+  return withWorkflowSessionTransaction(sessionId, async () => {
+    const state = await ensureSession(sessionId, userId);
+    if (!state) {
+      throw new Error("session not found");
+    }
+    const result = await runCartExecutor(state, productId);
+    await persistSession(state);
+    return {
+      state,
+      result
+    };
+  });
 }
 
 export async function removeDemoCartItem(sessionId: string, productId: string, userId?: string) {
