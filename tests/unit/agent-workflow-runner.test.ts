@@ -2,7 +2,8 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { createAgentDecision } from "@/lib/agent/decision-engine";
-import { advanceAgentWorkflow } from "@/lib/agent/workflow-runner";
+import { buildAgentCompletionReport } from "@/lib/agent/completion-review";
+import { advanceAgentWorkflow, recoverAgentCompletionGaps } from "@/lib/agent/workflow-runner";
 import { recoverAgentWorkflowForExecutor, recoverAgentWorkflows } from "@/lib/agent/workflow-recovery";
 import { applyCompletedRuntimeJob, applyFailedRuntimeJob, enqueueModuleSearchJob } from "@/lib/runtime/jobs";
 import { localRuntimeRepository, resetLocalRuntimeForTests } from "@/lib/runtime/local-repository";
@@ -123,6 +124,58 @@ describe("server-managed Agent workflow", () => {
     expect(activeTasks).toHaveLength(1);
     expect(await localRuntimeRepository.claimJob(device, 30_000)).not.toBeNull();
     expect(await localRuntimeRepository.claimJob(device, 30_000)).toBeNull();
+  });
+
+  it("recovers only uncovered modules while preserving completed candidates", async () => {
+    const sessionId = `session-workflow-recover-${Date.now()}`;
+    sessionFiles.add(sessionId);
+    const state = createSessionFixture({ session_id: sessionId });
+    const missingModule = state.shopping_plan.modules.find((module) => !module.optional)!;
+    const preservedModule = state.shopping_plan.modules.find((module) => module.module_id !== missingModule.module_id)!;
+
+    for (const module of state.shopping_plan.modules) {
+      if (module.module_id !== missingModule.module_id) {
+        state.module_candidates[module.module_id] = candidates(module.module_id, module.module_name);
+      }
+    }
+    state.agent_runtime.workflow_status = "completed";
+    state.agent_decisions = [createAgentDecision({
+      action: "skip_module",
+      source: "policy_fallback",
+      confidence: "high",
+      module_id: missingModule.module_id,
+      module_name: missingModule.module_name,
+      reason: "上一轮工具失败",
+      evidence: ["无候选"]
+    })];
+    state.completion_report = buildAgentCompletionReport(state);
+    const preservedCandidates = state.module_candidates[preservedModule.module_id];
+    state.selected_items = [{
+      product_id: preservedCandidates[0].product_id,
+      module_id: preservedModule.module_id,
+      title: preservedCandidates[0].title,
+      price: preservedCandidates[0].price,
+      cart_source: "taobao",
+      added_at: new Date().toISOString()
+    }];
+    await localRuntimeRepository.saveSession(state);
+
+    const recovered = await recoverAgentCompletionGaps(sessionId, device.user_id);
+    const restored = await localRuntimeRepository.getSession(sessionId, device.user_id);
+    const queuedJob = await localRuntimeRepository.claimJob(device, 30_000);
+
+    expect(recovered.outcome).toBe("queued");
+    expect(recovered.recovered_module_ids).toEqual([missingModule.module_id]);
+    expect(queuedJob?.payload.module_id).toBe(missingModule.module_id);
+    expect(restored?.module_candidates[preservedModule.module_id]).toEqual(preservedCandidates);
+    expect(restored?.selected_items.map((item) => item.product_id)).toEqual([preservedCandidates[0].product_id]);
+    expect(restored?.completion_report).toBeUndefined();
+    expect(restored?.agent_decisions.some(
+      (decision) => decision.action === "skip_module" && decision.module_id === missingModule.module_id
+    )).toBe(false);
+    expect((await localRuntimeRepository.listEvents(sessionId, 0, device.user_id, 100)).some(
+      (event) => event.event_type === "agent.completion.recovery_confirmed"
+    )).toBe(true);
   });
 
   it("starts a confirmed rerun with a fresh per-run tool budget", async () => {

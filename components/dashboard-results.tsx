@@ -3,7 +3,7 @@
 import { ArrowRight, Loader2, Settings2, ShoppingCart, Sparkles, Store, Wand2 } from "lucide-react";
 import { HostedInstructionCard, InfoBlock } from "@/components/dashboard-common";
 import { quickActions } from "@/components/dashboard-config";
-import { getExecutionModeLabel, hasRealDetailUrl, isHostedMode, isQueuedExecutionMode } from "@/components/dashboard-helpers";
+import { getExecutionModeLabel, hasRealDetailUrl, isHostedMode } from "@/components/dashboard-helpers";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -42,6 +42,7 @@ export function ResultsPage({
   estimatedTotal,
   onQuickAction,
   onApplyBudgetSuggestion,
+  onRecoverCompletionGaps,
   onAddToCart,
   onProceedToCartReview,
   expandedLogs,
@@ -61,6 +62,7 @@ export function ResultsPage({
   estimatedTotal: number;
   onQuickAction: (action: QuickAction) => void;
   onApplyBudgetSuggestion: (suggestion: BudgetReallocationSuggestion) => void;
+  onRecoverCompletionGaps: () => void;
   onAddToCart: (product: ProductCandidate) => void;
   onProceedToCartReview: () => void;
   expandedLogs: boolean;
@@ -74,7 +76,6 @@ export function ResultsPage({
   busy: boolean;
 }) {
   const hostedMode = isHostedMode(mcpStatus);
-  const queuedMode = isQueuedExecutionMode(mcpStatus);
   const addToCartStateForProduct = (productId: string) => {
     const task = session.hosted_tasks.find(
       (entry) => entry.task_type === "add_to_cart" && entry.product_id === productId
@@ -96,6 +97,12 @@ export function ResultsPage({
   const selectedModule = session.shopping_plan.modules.find((item) => item.module_id === selectedModuleId);
   const selectedReview = session.module_reviews?.[selectedModuleId];
   const selectedTrace = session.module_search_traces?.[selectedModuleId];
+  const selectedModuleWaiting = session.hosted_tasks.some(
+    (task) =>
+      task.task_type === "module_search" &&
+      task.module_id === selectedModuleId &&
+      (task.status === "pending" || task.status === "running")
+  );
   const selectedMarketSignal = session.market_feedback.module_signals[selectedModuleId];
   const selectedBudgetSuggestion = session.market_feedback.reallocation_suggestions.find(
     (suggestion) => suggestion.from_module_id === selectedModuleId || suggestion.to_module_id === selectedModuleId
@@ -217,13 +224,21 @@ export function ResultsPage({
               })}
               {selectedProducts.length === 0 ? (
                 <div className="rounded-[28px] border border-dashed border-border/80 bg-white p-8 shadow-sm">
-                  <p className="text-lg font-semibold">{queuedMode ? "当前模块还在等待执行器回填结果" : "当前模块暂未返回可展示商品"}</p>
+                  <p className="text-lg font-semibold">
+                    {selectedModuleWaiting
+                      ? "当前模块还在等待执行器回填结果"
+                      : selectedTrace?.status === "failed"
+                        ? "当前模块搜索未形成可用候选"
+                        : "当前模块暂未返回可展示商品"}
+                  </p>
                   <p className="mt-3 text-sm leading-7 text-muted-foreground">
-                    {queuedMode
+                    {selectedModuleWaiting
                       ? mcpStatus?.mode === "local_executor"
                         ? "任务已经保存在后台队列，本地执行器完成后会自动写回当前会话。"
                         : "当前模式会把淘宝任务交给 Codex 宿主执行。你可以先刷新宿主结果，或查看右侧队列了解当前进度。"
-                      : "当前模块还没有返回推荐。你可以只针对这个模块单独再搜一次，避免一次性触发过多搜索动作。"}
+                      : selectedTrace?.status === "failed"
+                        ? "本轮工具执行已经结束，但没有保留可用候选。你可以让 Agent 补齐全部缺口，也可以只重搜当前模块。"
+                        : "当前模块还没有返回推荐。你可以只针对这个模块单独再搜一次，避免一次性触发过多搜索动作。"}
                   </p>
                   <div className="mt-4 flex flex-wrap gap-3">
                     {selectedReview?.suggested_keyword ? (
@@ -232,13 +247,13 @@ export function ResultsPage({
                         按 Agent 建议补搜
                       </Button>
                     ) : null}
-                    {!queuedMode ? (
+                    {!selectedModuleWaiting ? (
                       <Button onClick={() => onSearchModule(selectedModuleId)} disabled={busy || !selectedModuleId}>
                         {busy ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Sparkles className="mr-2 h-4 w-4" />}
                         仅搜索当前模块
                       </Button>
                     ) : null}
-                    <Button variant="outline" onClick={onRefresh}>{queuedMode ? "刷新后台结果" : "刷新执行结果"}</Button>
+                    <Button variant="outline" onClick={onRefresh}>{selectedModuleWaiting ? "刷新后台结果" : "刷新执行结果"}</Button>
                   </div>
                 </div>
               ) : null}
@@ -283,6 +298,12 @@ export function ResultsPage({
                     {completionReport.next_steps.map((item) => <p key={item} className="text-foreground">下一步：{item}</p>)}
                   </div>
                 </details>
+              ) : null}
+              {completionReport.uncovered_module_ids.length > 0 ? (
+                <Button className="w-full" disabled={busy} onClick={onRecoverCompletionGaps}>
+                  {busy ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Sparkles className="mr-2 h-4 w-4" />}
+                  继续补齐 {completionReport.uncovered_module_ids.length} 个缺口模块
+                </Button>
               ) : null}
             </CardContent>
           </Card>

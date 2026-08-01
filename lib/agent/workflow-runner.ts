@@ -2,7 +2,8 @@ import { randomUUID } from "node:crypto";
 import {
   consumeAgentDecision,
   pendingAgentDecision,
-  recordAgentDecision
+  recordAgentDecision,
+  removeModuleAgentDecisions
 } from "@/lib/agent/decision-engine";
 import { buildAgentCompletionReport } from "@/lib/agent/completion-review";
 import { runModuleSearch } from "@/lib/agent/product-matcher";
@@ -14,6 +15,7 @@ import type { AgentDecision, SessionState } from "@/lib/session/types";
 
 export type AgentWorkflowTrigger =
   | "user_start"
+  | "user_recover_gaps"
   | "job_completed"
   | "job_failed"
   | "legacy_task_resolved"
@@ -23,6 +25,13 @@ export interface AgentWorkflowAdvanceResult {
   state: SessionState;
   decision?: AgentDecision;
   outcome: "queued" | "waiting" | "completed" | "paused" | "no_op";
+}
+
+export class AgentCompletionRecoveryError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "AgentCompletionRecoveryError";
+  }
 }
 
 declare global {
@@ -258,4 +267,76 @@ export async function advanceAgentWorkflow(
       activeRunners.delete(runnerKey);
     }
   }
+}
+
+export async function recoverAgentCompletionGaps(
+  sessionId: string,
+  userId: string | undefined
+) {
+  const preparation = await withWorkflowSessionLock(sessionId, async () => {
+    const state = await loadSession(sessionId, userId);
+    if (!state) throw new Error("session not found");
+    if (
+      state.agent_runtime.auto_continue ||
+      state.agent_runtime.workflow_status === "running" ||
+      state.agent_runtime.workflow_status === "waiting_for_tools" ||
+      state.hosted_tasks.some((task) =>
+        task.task_type === "module_search" && (task.status === "pending" || task.status === "running")
+      )
+    ) {
+      throw new AgentCompletionRecoveryError("Agent 仍在执行当前搜索，请等待本轮结束后再补齐缺口。");
+    }
+
+    const report = state.completion_report;
+    if (!report) {
+      throw new AgentCompletionRecoveryError("当前会话还没有可恢复的 Agent 完成报告。");
+    }
+
+    const plannedModuleIds = new Set(state.shopping_plan.modules.map((module) => module.module_id));
+    const moduleIds = report.uncovered_module_ids.filter(
+      (moduleId) =>
+        plannedModuleIds.has(moduleId) &&
+        (state.module_candidates[moduleId]?.length ?? 0) === 0
+    );
+    if (moduleIds.length === 0) {
+      throw new AgentCompletionRecoveryError("当前规划没有未覆盖模块，无需重新启动搜索。");
+    }
+
+    for (const moduleId of moduleIds) {
+      removeModuleAgentDecisions(state, moduleId);
+      delete state.module_candidates[moduleId];
+      delete state.module_reviews[moduleId];
+      delete state.module_search_traces[moduleId];
+    }
+    state.completion_report = undefined;
+    transition(state, {
+      status: "idle",
+      message: `用户已确认补齐 ${moduleIds.length} 个未覆盖模块，等待 Agent 重新执行`,
+      autoContinue: false
+    });
+    await persistSession(state);
+    await getRuntimeRepository().appendEvent({
+      user_id: state.owner_id,
+      session_id: state.session_id,
+      event_type: "agent.completion.recovery_confirmed",
+      payload: {
+        module_ids: moduleIds,
+        preserved_module_count: state.shopping_plan.modules.length - moduleIds.length
+      }
+    });
+    return { moduleIds };
+  });
+
+  if (!preparation.acquired) {
+    throw new AgentCompletionRecoveryError("当前会话正在被另一个 Agent 进程更新，请稍后重试。");
+  }
+
+  const advance = await advanceAgentWorkflow(sessionId, userId, {
+    start: true,
+    trigger: "user_recover_gaps"
+  });
+  return {
+    ...advance,
+    recovered_module_ids: preparation.value.moduleIds
+  };
 }

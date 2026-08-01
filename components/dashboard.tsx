@@ -845,6 +845,60 @@ export function Dashboard() {
     }
   }
 
+  async function recoverCompletionGaps() {
+    if (!session?.completion_report || session.completion_report.uncovered_module_ids.length === 0) {
+      return;
+    }
+
+    const moduleNames = session.completion_report.uncovered_module_ids
+      .map((moduleId) => session.shopping_plan.modules.find((module) => module.module_id === moduleId)?.module_name)
+      .filter((name): name is string => Boolean(name));
+    const confirmed = window.confirm(
+      `确认让 Agent 继续补齐以下模块吗？\n\n${moduleNames.join("、") || "未覆盖模块"}\n\n其他模块的候选和已选商品会保留。`
+    );
+    if (!confirmed) {
+      return;
+    }
+
+    setBusy(true);
+    setErrorMessage("");
+    setStage("searching");
+    setSearchSummary([`已确认补齐：${moduleNames.join("、") || "未覆盖模块"}`]);
+    setStatusMessage("Agent 正在重新执行未覆盖模块");
+    try {
+      const response = await jsonFetch<{
+        recovered_module_ids: string[];
+        outcome: AgentRunResponse["outcome"];
+      }>("/api/agent/remediate", {
+        method: "POST",
+        body: JSON.stringify({
+          session_id: session.session_id,
+          confirmed: true
+        })
+      });
+      const latestSession = await waitForServerWorkflow(
+        session.session_id,
+        session.shopping_plan.modules.length
+      );
+      const firstRecoveredModule = response.recovered_module_ids.find(
+        (moduleId) => (latestSession.module_candidates[moduleId]?.length ?? 0) > 0
+      );
+      setSelectedModuleId(firstRecoveredModule ?? selectedModuleId);
+      setSearchSummary([
+        `Agent 已重新处理 ${response.recovered_module_ids.length} 个缺口模块`,
+        latestSession.completion_report?.summary ?? latestSession.agent_runtime.workflow_message
+      ]);
+      setStage("review_results");
+      setStatusMessage("缺口模块已重新处理，完成报告和推荐结果已更新。");
+    } catch (error) {
+      await hydrateSession(session.session_id).catch(() => undefined);
+      setErrorMessage(error instanceof Error ? error.message : "补齐缺口模块失败");
+      setStage("review_results");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function updateAgentProfile(profile: AgentDirectiveProfile) {
     if (!session) {
       return;
@@ -1083,6 +1137,7 @@ export function Dashboard() {
             estimatedTotal={estimatedTotal}
             onQuickAction={applyQuickAction}
             onApplyBudgetSuggestion={applyBudgetSuggestion}
+            onRecoverCompletionGaps={recoverCompletionGaps}
             onAddToCart={addToCart}
             onProceedToCartReview={() => setStage("cart_review")}
             expandedLogs={expandedLogs}

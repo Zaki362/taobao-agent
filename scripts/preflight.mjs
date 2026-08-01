@@ -205,6 +205,7 @@ function assertRequiredFiles() {
     "lib/agent/directives.ts",
     "lib/agent/decision-engine.ts",
     "lib/agent/completion-review.ts",
+    "app/api/agent/remediate/route.ts",
     "lib/agent/runtime-v2.ts",
     "lib/agent/orchestrator.ts",
     "lib/agent/planner.ts",
@@ -296,6 +297,7 @@ function assertArchitectureContracts() {
   const config = tryReadText("components/dashboard-config.ts");
   const modulesSearchRoute = tryReadText("app/api/modules/search/route.ts");
   const agentNextActionRoute = tryReadText("app/api/agent/next-action/route.ts");
+  const agentRemediateRoute = tryReadText("app/api/agent/remediate/route.ts");
   const responses = tryReadText("lib/api/responses.ts");
   const hostedWorkerAuth = tryReadText("lib/auth/hosted-worker.ts");
   const cart = tryReadText("lib/agent/cart.ts");
@@ -353,6 +355,7 @@ function assertArchitectureContracts() {
     !config ||
     !modulesSearchRoute ||
     !agentNextActionRoute ||
+    !agentRemediateRoute ||
     !responses ||
     !hostedWorkerAuth ||
     !cart ||
@@ -405,7 +408,11 @@ function assertArchitectureContracts() {
         completionReview.includes("buildAgentCompletionReport") &&
         completionReview.includes("critical_coverage_ratio") &&
         workflowRunner.includes("buildAgentCompletionReport") &&
+        workflowRunner.includes("recoverAgentCompletionGaps") &&
+        agentRemediateRoute.includes("body.confirmed !== true") &&
+        agentRemediateRoute.includes("recoverAgentCompletionGaps") &&
         dashboardResults.includes("Agent 完成报告") &&
+        dashboardResults.includes("继续补齐") &&
         hostedConsole.includes("Agent 完成质量审计") &&
         sessionsRoute.includes("completion_report: session.completion_report"),
       message: "Agent 结束搜索时必须生成可持久化的方案级完成报告，并在推荐页与执行台展示覆盖度和停止理由"

@@ -33,7 +33,11 @@ function candidatesFor(job: { id: string; payload: Record<string, unknown> }) {
 async function runExecutorUntilStopped(
   api: APIRequestContext,
   token: string,
-  shouldStop: () => boolean
+  shouldStop: () => boolean,
+  behavior?: {
+    failFirstModuleSearch: boolean;
+    failedModuleId?: string;
+  }
 ) {
   const headers = executorHeaders(token);
   while (!shouldStop()) {
@@ -48,6 +52,20 @@ async function runExecutorUntilStopped(
     };
     if (!job) {
       await new Promise((resolve) => setTimeout(resolve, 120));
+      continue;
+    }
+
+    if (job.job_type === "module_search" && behavior?.failFirstModuleSearch && !behavior.failedModuleId) {
+      behavior.failedModuleId = String(job.payload.module_id ?? "");
+      const failed = await api.post(`/api/executor/jobs/${job.id}/resolve`, {
+        headers,
+        data: {
+          status: "failed",
+          error: "E2E 注入一次不可重试搜索失败",
+          retryable: false
+        }
+      });
+      expect(failed.ok()).toBeTruthy();
       continue;
     }
 
@@ -174,7 +192,8 @@ test("authenticated new-car workflow reaches recommendations through the durable
   expect(readiness.checks.find((item) => item.id === "workflow_recovery")?.status).toBe("pass");
 
   let stopExecutor = false;
-  const executor = runExecutorUntilStopped(page.request, deviceToken, () => stopExecutor);
+  const executorBehavior = { failFirstModuleSearch: true, failedModuleId: undefined as string | undefined };
+  const executor = runExecutorUntilStopped(page.request, deviceToken, () => stopExecutor, executorBehavior);
 
   try {
     await page.getByRole("button", { name: /新车选购/ }).click();
@@ -225,6 +244,7 @@ test("authenticated new-car workflow reaches recommendations through the durable
         status: string;
         total_modules: number;
         covered_module_ids: string[];
+        uncovered_module_ids: string[];
         stop_reason: string;
       };
     };
@@ -232,16 +252,19 @@ test("authenticated new-car workflow reaches recommendations through the durable
     expect(completedState.agent_runtime.continuation_count).toBeGreaterThanOrEqual(
       completedState.shopping_plan.modules.length
     );
-    expect(Object.keys(completedState.module_candidates)).toHaveLength(completedState.shopping_plan.modules.length);
+    expect(executorBehavior.failedModuleId).toBeTruthy();
+    expect(Object.keys(completedState.module_candidates)).toHaveLength(completedState.shopping_plan.modules.length - 1);
     expect(completedState.completion_report.total_modules).toBe(completedState.shopping_plan.modules.length);
-    expect(completedState.completion_report.covered_module_ids).toHaveLength(completedState.shopping_plan.modules.length);
+    expect(completedState.completion_report.status).toBe("needs_attention");
+    expect(completedState.completion_report.covered_module_ids).toHaveLength(completedState.shopping_plan.modules.length - 1);
+    expect(completedState.completion_report.uncovered_module_ids).toEqual([executorBehavior.failedModuleId]);
     expect(completedState.completion_report.stop_reason.length).toBeGreaterThan(0);
 
     await page.goto("/?resume=1");
     await expect(page.getByText("搜索执行摘要")).toBeVisible();
     await expect(page.getByRole("button", { name: "查看推荐结果" })).toBeEnabled();
     await page.getByRole("button", { name: "查看推荐结果" }).click();
-    await expect(page.getByText(/E2E 真实链路候选/).first()).toBeVisible();
+    await expect(page.getByText("当前模块搜索未形成可用候选")).toBeVisible();
     await expect(page.getByText("Agent 完成报告")).toBeVisible();
     await expect(page.getByText("本地执行器", { exact: false }).first()).toBeVisible();
     await expect(page.getByText(/\[[^\]]+\] local_executor/).first()).toBeVisible();
@@ -261,6 +284,34 @@ test("authenticated new-car workflow reaches recommendations through the durable
       completedState.shopping_plan.modules.length
     );
     expect(completedSessionSummary?.completion_report?.stop_reason.length).toBeGreaterThan(0);
+
+    const unconfirmedRecovery = await page.request.post("/api/agent/remediate", {
+      headers: { Origin: "http://127.0.0.1:3100" },
+      data: { session_id: persistedSessionId, confirmed: false }
+    });
+    expect(unconfirmedRecovery.status()).toBe(400);
+
+    page.once("dialog", (dialog) => dialog.accept());
+    await page.getByRole("button", { name: /继续补齐 1 个缺口模块/ }).click();
+    await expect.poll(async () => {
+      const response = await page.request.get(`/api/session/state?session_id=${persistedSessionId}`);
+      const state = await response.json() as {
+        agent_runtime: { workflow_status: string };
+        module_candidates: Record<string, unknown[]>;
+        completion_report?: { uncovered_module_ids: string[] };
+      };
+      return {
+        status: state.agent_runtime.workflow_status,
+        covered: Object.keys(state.module_candidates).length,
+        uncovered: state.completion_report?.uncovered_module_ids.length ?? -1
+      };
+    }, { timeout: 60_000, intervals: [250, 500, 1_000] }).toEqual({
+      status: "completed",
+      covered: completedState.shopping_plan.modules.length,
+      uncovered: 0
+    });
+    await expect(page.getByText(/E2E 真实链路候选/).first()).toBeVisible();
+    await expect(page.getByRole("button", { name: /继续补齐/ })).toHaveCount(0);
 
     page.once("dialog", (dialog) => dialog.accept());
     await page.getByRole("button", { name: "加入购物车" }).first().click();
