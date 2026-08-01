@@ -8,6 +8,7 @@ import {
   resolveHostedAddToCartTask,
   resolveHostedModuleSearchTask
 } from "@/lib/mcp/hosted";
+import { reviewModuleCandidatesWithAgent } from "@/lib/agent/candidate-reviewer";
 import { isProductCandidate } from "@/lib/session/guards";
 import { persistSession } from "@/lib/session/repository";
 
@@ -365,11 +366,20 @@ async function persistCompletedRuntimeJobResult(
   if (task.status === expectedTaskStatus) return false;
 
   if (job.job_type === "module_search") {
-    const candidates = resultCandidates(result);
+    let candidates = resultCandidates(result);
+    const moduleId = typeof job.payload.module_id === "string" ? job.payload.module_id : "";
+    const module = state.shopping_plan.modules.find((item) => item.module_id === moduleId);
+    const assessment = module && candidates.length > 0
+      ? await reviewModuleCandidatesWithAgent(state, module, candidates)
+      : null;
+    if (assessment) {
+      candidates = assessment.candidates;
+    }
     resolveHostedModuleSearchTask(state, {
       task_id: task.task_id,
       status: "completed",
       candidates,
+      review: assessment?.review,
       result_summary: typeof result.summary === "string"
         ? result.summary
         : recovered

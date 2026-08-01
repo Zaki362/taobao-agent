@@ -410,7 +410,9 @@ export async function runModuleSearch(
   }
 
   let candidates = buildCandidatesFromSearchResults(state, module, mergedResults);
-  let review = await reviewModuleCandidatesWithAgent(state, module, candidates);
+  let assessment = await reviewModuleCandidatesWithAgent(state, module, candidates);
+  candidates = assessment.candidates;
+  let review = assessment.review;
   let recoveryKeyword: string | undefined;
 
   if (shouldUseReviewSuggestion(state, review, searchedKeywords, candidates.length)) {
@@ -434,7 +436,9 @@ export async function runModuleSearch(
         });
         mergedResults = mergeSearchResults(mergedResults, recoveryResult.results);
         candidates = buildCandidatesFromSearchResults(state, module, mergedResults);
-        review = await reviewModuleCandidatesWithAgent(state, module, candidates);
+        assessment = await reviewModuleCandidatesWithAgent(state, module, candidates);
+        candidates = assessment.candidates;
+        review = assessment.review;
       } catch (error) {
         attempts.push({
           keyword: suggestedKeyword,

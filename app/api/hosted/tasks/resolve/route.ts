@@ -6,6 +6,7 @@ import { persistSession } from "@/lib/session/repository";
 import { isHostedExecutionTask, isProductCandidate } from "@/lib/session/guards";
 import { getLegacyHostedAccess } from "@/lib/auth/hosted-worker";
 import { advanceAgentWorkflow } from "@/lib/agent/workflow-runner";
+import { reviewModuleCandidatesWithAgent } from "@/lib/agent/candidate-reviewer";
 
 function optionalString(value: unknown) {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
@@ -28,13 +29,21 @@ export async function POST(request: NextRequest) {
     }
 
     if (task.task_type === "module_search") {
-      const candidates = Array.isArray(body.candidates)
+      let candidates = Array.isArray(body.candidates)
         ? body.candidates.filter(isProductCandidate)
         : [];
+      const module = session.shopping_plan.modules.find((item) => item.module_id === task.module_id);
+      const assessment = body.status !== "failed" && module && candidates.length > 0
+        ? await reviewModuleCandidatesWithAgent(session, module, candidates)
+        : null;
+      if (assessment) {
+        candidates = assessment.candidates;
+      }
       resolveHostedModuleSearchTask(session, {
         task_id: task.task_id,
         status: body.status === "failed" ? "failed" : "completed",
         candidates,
+        review: assessment?.review,
         result_summary: optionalString(body.result_summary),
         error_message: optionalString(body.error_message)
       });

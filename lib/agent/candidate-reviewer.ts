@@ -145,6 +145,14 @@ export async function reviewModuleCandidatesWithAgent(
   candidates: ProductCandidate[]
 ) {
   const fallbackReview = reviewModuleCandidates(state, module, candidates);
+  if (candidates.length === 0) {
+    return {
+      review: fallbackReview,
+      candidates,
+      mode: "mock" as const
+    };
+  }
+
   const result = await reviewCandidatePool({
     scene: state.scene_brief,
     module,
@@ -152,5 +160,12 @@ export async function reviewModuleCandidatesWithAgent(
     fallbackReview
   });
 
-  return result.data;
+  return {
+    review: result.data,
+    candidates: candidates.map((candidate) => ({
+      ...candidate,
+      fit_reason: result.fitReasons[candidate.product_id] || candidate.fit_reason
+    })),
+    mode: result.mode
+  };
 }

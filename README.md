@@ -14,7 +14,7 @@ SceneCart AI 是一个正在按正式产品架构推进的“场景化购物 Age
 - Agent 方案自检：规划生成后会产出 `plan_review`，在用户确认前检查预算分配、模块覆盖、关键词差异化和风险点
 - AI 执行档位：用户可在规划确认页选择保守 / 平衡 / 探索，服务端会写回 `agent_directives`，影响后续搜索深度、补搜策略和恢复边界
 - AI 搜索策略 + 候选排序：搜索结果会经过 Candidate Ranker，根据 AI 生成的主搜索词、备用搜索词、包含词、排除词、排序关注点、验收信号、拒绝信号、预算、偏好、已有/排除项和店铺信号选出稳妥 / 性价比 / 升级三档
-- 搜索后 Agent 复盘：每个模块搜索后会生成 `module_reviews`，评估候选池是否足够、风险点是什么、下一步建议是什么；有 DeepSeek 时会尝试短超时复盘，无 key 或失败时使用启发式规则评估
+- 搜索后 Agent 复盘：每个模块搜索后会生成 `module_reviews`，并在同一次短超时 DeepSeek 调用中批量生成最多三条、与候选商品一一对应的适配理由；商品 ID 和理由长度经过严格校验，无 key、超时或结构异常时完整保留启发式评估与规则理由，不增加逐商品模型请求
 - Agent 搜索决策轨迹：每个模块搜索会写入 `module_search_traces`，记录首轮词、备用词、补搜原因、每次返回数、候选池复盘和下一步建议，让 AI 的执行判断可解释、可恢复
 - 服务端 Agent 决策循环：用户确认规划后只需启动一次，后端会消费 AI 规划顺序、执行档位、候选池复盘和工具状态，逐轮决定搜索、补搜、容错跳过、等待工具或结束，并把动作写入 `agent_decisions`
 - 浏览器断线续跑：`workflow-runner` 持久化运行 ID、当前模块、自动续跑开关和状态转换；本地执行器每次回填后由服务端自动排队下一模块，关闭或切换页面不会中断整轮搜索
@@ -160,7 +160,7 @@ lib/agent/
   plan-reviewer.ts                 规划质量自检
   refiner.ts                       快捷调整重算
   candidate-ranker.ts              候选商品排序与三档推荐选择
-  candidate-reviewer.ts            搜索后候选池质量评估与 DeepSeek 复盘 fallback
+  candidate-reviewer.ts            候选池质量评估、批量商品适配理由与规则 fallback
   product-matcher.ts               模块搜索与候选商品构造
   cart.ts                          加购与 demo cart fallback
 

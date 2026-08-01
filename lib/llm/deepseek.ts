@@ -1,5 +1,6 @@
 import {
   AgentDecisionProposal,
+  CandidateFitExplanation,
   PlanningModule,
   ModuleCandidateReview,
   PlanQualityReview,
@@ -333,6 +334,29 @@ function normalizeCandidateReview(
     suggested_keyword: asString(value.suggested_keyword, fallback.suggested_keyword ?? "") || undefined,
     generated_at: new Date().toISOString()
   };
+}
+
+function candidateFitReasonMap(
+  explanations: CandidateFitExplanation[],
+  candidates: ProductCandidate[]
+) {
+  const allowedIds = new Set(candidates.map((candidate) => candidate.product_id));
+  const normalized: Record<string, string> = {};
+  for (const explanation of explanations) {
+    const productId = explanation.product_id.trim();
+    const fitReason = explanation.fit_reason.replace(/\s+/g, " ").trim();
+    if (!allowedIds.has(productId) || normalized[productId] || fitReason.length < 6 || fitReason.length > 140) {
+      continue;
+    }
+    normalized[productId] = fitReason;
+  }
+  return normalized;
+}
+
+function fallbackCandidateFitReasons(candidates: ProductCandidate[]) {
+  return Object.fromEntries(
+    candidates.map((candidate) => [candidate.product_id, candidate.fit_reason])
+  );
 }
 
 function normalizePlanQualityReview(
@@ -788,13 +812,20 @@ export async function reviewCandidatePool({
   module: ShoppingPlan["modules"][number];
   candidates: ProductCandidate[];
   fallbackReview: ModuleCandidateReview;
-}): Promise<{ data: ModuleCandidateReview; mode: LlmMode }> {
-  const apiKey = process.env.DEEPSEEK_API_KEY;
-  if (!apiKey) {
-    return { data: fallbackReview, mode: "mock" };
-  }
+}): Promise<{ data: ModuleCandidateReview; fitReasons: Record<string, string>; mode: LlmMode }> {
+  type CandidateReviewModelOutput = Partial<ModuleCandidateReview> & {
+    fit_reasons?: CandidateFitExplanation[];
+  };
+  const fallbackFitReasons = fallbackCandidateFitReasons(candidates);
+  const fallbackOutput: CandidateReviewModelOutput = {
+    ...fallbackReview,
+    fit_reasons: candidates.map((candidate) => ({
+      product_id: candidate.product_id,
+      fit_reason: candidate.fit_reason
+    }))
+  };
 
-  const result = await deepseekJson<Partial<ModuleCandidateReview>>(
+  const result = await deepseekJson<CandidateReviewModelOutput>(
     "review_candidates",
     reviewCandidatePoolPrompt({
       scene: sanitizeScene(scene),
@@ -802,15 +833,28 @@ export async function reviewCandidatePool({
       candidates,
       fallbackReview
     }),
-    fallbackReview
+    fallbackOutput
   );
-  const validation = result.mode === "connected" ? validateCandidateReviewOutput(result.data) : true;
+  const candidateIds = candidates.map((candidate) => candidate.product_id);
+  const validation = result.mode === "connected"
+    ? validateCandidateReviewOutput(result.data, candidateIds) && result.data.module_id === module.module_id
+    : true;
   if (result.mode === "connected" && !validation) {
     downgradeLastLlmCall("review_candidates", "schema_validation_failed:candidate_review_invalid");
   }
+
+  if (result.mode !== "connected" || !validation) {
+    return {
+      data: fallbackReview,
+      fitReasons: fallbackFitReasons,
+      mode: "mock"
+    };
+  }
+
   return {
-    data: validation ? normalizeCandidateReview(result.data, fallbackReview) : fallbackReview,
-    mode: validation ? result.mode : "mock"
+    data: normalizeCandidateReview(result.data, fallbackReview),
+    fitReasons: candidateFitReasonMap(result.data.fit_reasons ?? [], candidates),
+    mode: result.mode
   };
 }
 

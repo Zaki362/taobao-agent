@@ -127,6 +127,11 @@ export interface ProductCandidate {
   module_id: string;
 }
 
+export interface CandidateFitExplanation {
+  product_id: string;
+  fit_reason: string;
+}
+
 export type ModuleCandidateReviewStatus = "ready" | "needs_detail_check" | "thin" | "needs_refine";
 
 export interface ModuleCandidateReview {

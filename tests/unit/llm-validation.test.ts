@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { normalizeAgentDirectives, normalizeSceneBrief, normalizeShoppingPlan } from "@/lib/llm/deepseek";
-import { validateShoppingPlanOutput } from "@/lib/llm/validation";
+import { validateCandidateReviewOutput, validateShoppingPlanOutput } from "@/lib/llm/validation";
 import { mockParseScene, mockPersonalizeTemplate } from "@/lib/llm/mock";
 import { NEW_CAR_SETUP_TEMPLATE } from "@/lib/templates/new-car-template";
 import { newCarScenario } from "@/lib/scenarios/new-car";
@@ -283,5 +283,51 @@ describe("DeepSeek shopping plan validation", () => {
       optional: true,
       origin: "ai_adaptive"
     });
+  });
+});
+
+describe("DeepSeek candidate fit reason validation", () => {
+  const review = {
+    module_id: "safety-essential",
+    status: "ready",
+    summary: "候选池可用于下一步确认。",
+    strengths: ["覆盖两个价格档位"],
+    caveats: ["仍需确认规格"],
+    next_action: "查看商品详情。",
+    suggested_keyword: "",
+    fit_reasons: [
+      { product_id: "p-1", fit_reason: "预算匹配且包含旗舰店信号，适合优先核验。" },
+      { product_id: "p-2", fit_reason: "卖点贴合模块策略，适合作为升级候选比较。" }
+    ]
+  };
+
+  it("requires exactly one fit reason for every known candidate", () => {
+    expect(validateCandidateReviewOutput(review, ["p-1", "p-2"])).toBe(true);
+    expect(validateCandidateReviewOutput({
+      ...review,
+      fit_reasons: review.fit_reasons.slice(0, 1)
+    }, ["p-1", "p-2"])).toBe(false);
+  });
+
+  it("rejects duplicate and unknown product ids", () => {
+    expect(validateCandidateReviewOutput({
+      ...review,
+      fit_reasons: [review.fit_reasons[0], { ...review.fit_reasons[1], product_id: "p-1" }]
+    }, ["p-1", "p-2"])).toBe(false);
+    expect(validateCandidateReviewOutput({
+      ...review,
+      fit_reasons: [review.fit_reasons[0], { ...review.fit_reasons[1], product_id: "invented" }]
+    }, ["p-1", "p-2"])).toBe(false);
+  });
+
+  it("rejects empty or unbounded fit reason text", () => {
+    expect(validateCandidateReviewOutput({
+      ...review,
+      fit_reasons: [review.fit_reasons[0], { product_id: "p-2", fit_reason: "短" }]
+    }, ["p-1", "p-2"])).toBe(false);
+    expect(validateCandidateReviewOutput({
+      ...review,
+      fit_reasons: [review.fit_reasons[0], { product_id: "p-2", fit_reason: "很".repeat(141) }]
+    }, ["p-1", "p-2"])).toBe(false);
   });
 });

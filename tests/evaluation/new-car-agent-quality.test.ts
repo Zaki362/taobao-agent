@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { reviewPlanWithAgent } from "@/lib/agent/plan-reviewer";
+import { reviewModuleCandidatesWithAgent } from "@/lib/agent/candidate-reviewer";
 import { runDeepSeekPlanner } from "@/lib/agent/planner";
 import { decideNextAgentActionV2 } from "@/lib/agent/runtime-v2";
 import { runSceneParser } from "@/lib/agent/scene";
@@ -149,6 +150,72 @@ describe(`new-car Agent quality gate (${liveEvaluation ? "live DeepSeek" : "dete
     expect(decision.module_id).toBe(module.module_id);
     expect(decision.keyword_override).not.toBe(primaryKeyword);
     expect(telemetry.tasks.find((task) => task.task === "decide_next_action")?.model).toBe("deepseek-reasoner");
+  });
+
+  it.runIf(liveEvaluation)("generates bounded product-specific reasons in one candidate review call", async () => {
+    const state = createSessionFixture();
+    const module = state.shopping_plan.modules[0];
+    const fallbackReason = "评测占位规则理由";
+    const candidates = [
+      {
+        product_id: "eval-stable",
+        title: "新能源车高清夜视行车记录仪",
+        price: 199,
+        source: "evaluation",
+        shop_name: "品牌旗舰店",
+        image_url: "https://example.com/stable.jpg",
+        detail_url: "https://item.taobao.com/item.htm?id=eval-stable",
+        shop_badges: ["旗舰店"],
+        highlights: ["高清夜视", "安装便捷"],
+        risk_notes: ["需确认车型和安装方式"],
+        fit_reason: fallbackReason,
+        recommendation_type: "稳妥推荐" as const,
+        module_id: module.module_id
+      },
+      {
+        product_id: "eval-value",
+        title: "入门级高清行车记录仪",
+        price: 129,
+        source: "evaluation",
+        shop_name: "车品专营店",
+        image_url: "https://example.com/value.jpg",
+        detail_url: "https://item.taobao.com/item.htm?id=eval-value",
+        shop_badges: ["精选"],
+        highlights: ["基础录像", "价格较低"],
+        risk_notes: ["需确认夜视效果"],
+        fit_reason: fallbackReason,
+        recommendation_type: "性价比推荐" as const,
+        module_id: module.module_id
+      },
+      {
+        product_id: "eval-upgrade",
+        title: "前后双录停车监控行车记录仪",
+        price: 399,
+        source: "evaluation",
+        shop_name: "官方旗舰店",
+        image_url: "https://example.com/upgrade.jpg",
+        detail_url: "https://item.taobao.com/item.htm?id=eval-upgrade",
+        shop_badges: ["官方", "旗舰店"],
+        highlights: ["前后双录", "停车监控"],
+        risk_notes: ["需确认取电与安装成本"],
+        fit_reason: fallbackReason,
+        recommendation_type: "升级推荐" as const,
+        module_id: module.module_id
+      }
+    ];
+
+    const assessment = await reviewModuleCandidatesWithAgent(state, module, candidates);
+    const telemetry = getLlmTelemetrySnapshot();
+    const diagnostics = `DeepSeek 候选复盘降级详情：${JSON.stringify(telemetry.tasks)}`;
+
+    expect(assessment.mode, diagnostics).toBe("connected");
+    expect(assessment.review.source).toBe("deepseek");
+    expect(assessment.candidates).toHaveLength(candidates.length);
+    expect(assessment.candidates.every((candidate) => candidate.fit_reason !== fallbackReason)).toBe(true);
+    expect(new Set(assessment.candidates.map((candidate) => candidate.product_id))).toEqual(
+      new Set(candidates.map((candidate) => candidate.product_id))
+    );
+    expect(telemetry.tasks.find((task) => task.task === "review_candidates")?.model).toBe("deepseek-chat");
   });
 
   it.runIf(liveEvaluation)("adds a bounded adaptive module for an explicit child travel need", async () => {

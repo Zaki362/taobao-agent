@@ -145,16 +145,19 @@ export function reviewCandidatePoolPrompt({
     shop_badges: candidate.shop_badges,
     highlights: candidate.highlights,
     risk_notes: candidate.risk_notes,
-    recommendation_type: candidate.recommendation_type
+    recommendation_type: candidate.recommendation_type,
+    rule_fit_reason: candidate.fit_reason
   }));
 
   return [
     "你是场景化购物 Agent 的候选池复盘器。",
     "请只基于候选商品摘要、模块策略和用户约束，判断当前候选池是否足够进入用户决策。",
     "不要编造商品详情，不要要求读取订单/地址/账号/聊天/浏览历史。",
-    "输出必须是严格 JSON，字段必须包含：module_id、status、summary、strengths、caveats、next_action、suggested_keyword。",
+    "输出必须是严格 JSON，字段必须包含：module_id、status、summary、strengths、caveats、next_action、suggested_keyword、fit_reasons。",
     "status 只能是 ready、needs_detail_check、thin、needs_refine 之一。",
     "suggested_keyword 如果不需要补搜可返回空字符串；如果候选偏少或偏离预算，请返回一个可直接用于淘宝搜索的短词组。",
+    "fit_reasons 必须为数组，并为每个候选商品各返回一项：{product_id, fit_reason}。product_id 必须原样来自候选摘要，不能遗漏、重复或新增。",
+    "每条 fit_reason 使用 15-90 个中文字符，结合当前预算、偏好、模块策略和摘要中真实可见的价格/店铺/卖点解释差异；不得编造规格、销量或评价。",
     dataBoundaryNotice(),
     `Scene Brief: ${JSON.stringify(scene, null, 2)}`,
     `Module: ${JSON.stringify({

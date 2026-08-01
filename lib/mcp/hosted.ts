@@ -1,4 +1,4 @@
-import { HostedExecutionTask, ProductCandidate, SelectedItem, SessionState } from "@/lib/session/types";
+import { HostedExecutionTask, ModuleCandidateReview, ProductCandidate, SelectedItem, SessionState } from "@/lib/session/types";
 import { reviewModuleCandidates } from "@/lib/agent/candidate-reviewer";
 import { refreshMarketFeedback } from "@/lib/agent/market-feedback";
 import { summarizeLogText } from "@/lib/mcp/logging";
@@ -174,6 +174,7 @@ export function resolveHostedModuleSearchTask(
     task_id: string;
     status: "completed" | "failed";
     candidates?: ProductCandidate[];
+    review?: ModuleCandidateReview;
     result_summary?: string;
     error_message?: string;
   }
@@ -199,7 +200,7 @@ export function resolveHostedModuleSearchTask(
     state.module_candidates[moduleId] = candidates;
     const module = state.shopping_plan.modules.find((item) => item.module_id === task.module_id);
     if (module) {
-      state.module_reviews[module.module_id] = reviewModuleCandidates(state, module, candidates);
+      state.module_reviews[module.module_id] = input.review ?? reviewModuleCandidates(state, module, candidates);
     }
     refreshMarketFeedback(state);
     createTaskLog(

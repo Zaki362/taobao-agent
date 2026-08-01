@@ -19,6 +19,10 @@ function hasText(value: unknown) {
   return typeof value === "string" && value.trim().length > 0;
 }
 
+function hasBoundedText(value: unknown, maxLength: number) {
+  return hasText(value) && String(value).trim().length <= maxLength;
+}
+
 function hasNumberLike(value: unknown) {
   if (typeof value === "number") {
     return Number.isFinite(value);
@@ -266,7 +270,10 @@ export function validatePlanQualityReviewOutput(value: unknown): boolean {
   );
 }
 
-export function validateCandidateReviewOutput(value: unknown): value is Partial<ModuleCandidateReview> {
+export function validateCandidateReviewOutput(
+  value: unknown,
+  candidateIds: string[] = []
+): value is Partial<ModuleCandidateReview> & { fit_reasons?: Array<{ product_id: string; fit_reason: string }> } {
   if (!isRecord(value)) {
     return false;
   }
@@ -278,12 +285,42 @@ export function validateCandidateReviewOutput(value: unknown): value is Partial<
     status === "thin" ||
     status === "needs_refine";
 
-  return (
-    hasText(value.module_id) &&
+  const reviewValid = (
+    hasBoundedText(value.module_id, 100) &&
     validStatus &&
-    hasText(value.summary) &&
+    hasBoundedText(value.summary, 400) &&
     Array.isArray(value.strengths) &&
+    value.strengths.length <= 6 &&
+    value.strengths.every((item) => hasBoundedText(item, 180)) &&
     Array.isArray(value.caveats) &&
-    hasText(value.next_action)
+    value.caveats.length <= 6 &&
+    value.caveats.every((item) => hasBoundedText(item, 180)) &&
+    hasBoundedText(value.next_action, 300) &&
+    (value.suggested_keyword === undefined || typeof value.suggested_keyword === "string") &&
+    (typeof value.suggested_keyword !== "string" || value.suggested_keyword.trim().length <= 100)
   );
+
+  if (!reviewValid || candidateIds.length === 0) {
+    return reviewValid;
+  }
+
+  if (!Array.isArray(value.fit_reasons) || value.fit_reasons.length !== candidateIds.length) {
+    return false;
+  }
+
+  const allowedIds = new Set(candidateIds);
+  const seenIds = new Set<string>();
+  for (const item of value.fit_reasons) {
+    if (!isRecord(item) || !hasText(item.product_id) || !hasText(item.fit_reason)) {
+      return false;
+    }
+    const productId = String(item.product_id).trim();
+    const reason = String(item.fit_reason).trim();
+    if (!allowedIds.has(productId) || seenIds.has(productId) || reason.length < 6 || reason.length > 140) {
+      return false;
+    }
+    seenIds.add(productId);
+  }
+
+  return seenIds.size === allowedIds.size;
 }
