@@ -9,6 +9,7 @@ import { SearchResultItem } from "@/lib/mcp/types";
 import { ModuleCandidateReview, ModuleSearchAttempt, ModuleSearchTrace, ProductCandidate, SessionState, ShoppingPlanModule } from "@/lib/session/types";
 import { getScenarioConfig } from "@/lib/scenarios";
 import { enqueueModuleSearchJob } from "@/lib/runtime/jobs";
+import { invalidateAgentCompletionArtifacts } from "@/lib/session/bundle-adoption";
 
 function truncateSentence(text: string, maxLength = 58) {
   const compact = text.replace(/\s+/g, " ").trim();
@@ -323,7 +324,7 @@ export async function runModuleSearch(
   if (!module) {
     throw new Error("module not found");
   }
-  state.completion_report = undefined;
+  invalidateAgentCompletionArtifacts(state);
 
   const searchKeywordQueue = buildSearchKeywordQueue(state, module, options?.keywordOverride);
   const searchIntent = searchKeywordQueue[0] || searchIntentForModule(state.scene_brief, module);

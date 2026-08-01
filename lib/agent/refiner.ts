@@ -3,6 +3,7 @@ import { refreshMarketFeedback } from "@/lib/agent/market-feedback";
 import { runDeepSeekPlanner } from "@/lib/agent/planner";
 import { reviewPlanWithAgent } from "@/lib/agent/plan-reviewer";
 import { removeModuleAgentDecisions } from "@/lib/agent/decision-engine";
+import { invalidateAgentCompletionArtifacts } from "@/lib/session/bundle-adoption";
 import { QuickAction, RefinementImpactSummary, RefinementModuleDecision, SessionState, ShoppingPlanModule } from "@/lib/session/types";
 
 function textSignature(value: string | undefined) {
@@ -146,7 +147,7 @@ export async function runRefiner(state: SessionState, action: QuickAction) {
 
   const impacted = selectImpactedModules(previousModules, state.shopping_plan.modules, action);
   state.last_refinement = impacted;
-  state.completion_report = undefined;
+  invalidateAgentCompletionArtifacts(state);
 
   for (const moduleId of [...impacted.impacted_modules, ...impacted.removed_modules]) {
     delete state.module_candidates[moduleId];

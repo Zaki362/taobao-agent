@@ -1,4 +1,5 @@
 import {
+  AgentBundleAdoption,
   AgentCompletionReport,
   AgentPurchaseBundle,
   ExecutionMode,
@@ -185,6 +186,55 @@ export function isAgentPurchaseBundle(value: unknown): value is AgentPurchaseBun
     return false;
   }
   return typeof value.summary === "string" && typeof value.generated_at === "string";
+}
+
+export function isAgentBundleAdoption(value: unknown): value is AgentBundleAdoption {
+  if (!isRecord(value)) return false;
+  const validStatus = value.status === "accepted" || value.status === "in_progress" || value.status === "completed";
+  if (
+    !validStatus ||
+    typeof value.bundle_generated_at !== "string" ||
+    typeof value.accepted_at !== "string" ||
+    typeof value.updated_at !== "string" ||
+    !isStringArray(value.product_ids) ||
+    !isStringArray(value.added_product_ids) ||
+    !isStringArray(value.pending_product_ids)
+  ) {
+    return false;
+  }
+
+  const productIds = value.product_ids as string[];
+  const addedIds = value.added_product_ids as string[];
+  const pendingIds = value.pending_product_ids as string[];
+  const productSet = new Set(productIds);
+  const addedSet = new Set(addedIds);
+  const pendingSet = new Set(pendingIds);
+  if (
+    productIds.length === 0 ||
+    productSet.size !== productIds.length ||
+    addedSet.size !== addedIds.length ||
+    pendingSet.size !== pendingIds.length ||
+    addedIds.some((id) => !productSet.has(id) || pendingSet.has(id)) ||
+    pendingIds.some((id) => !productSet.has(id)) ||
+    addedIds.length + pendingIds.length !== productIds.length
+  ) {
+    return false;
+  }
+  if (value.status === "completed" && pendingIds.length !== 0) return false;
+  if (value.status === "accepted" && addedIds.length !== 0) return false;
+  return true;
+}
+
+export function isAgentBundleAdoptionForReport(
+  value: unknown,
+  report: AgentCompletionReport | undefined
+): value is AgentBundleAdoption {
+  if (!isAgentBundleAdoption(value)) return false;
+  const bundle = report?.purchase_bundle;
+  if (!bundle || value.bundle_generated_at !== bundle.generated_at) return false;
+  const bundleProductIds = bundle.items.map((item) => item.product_id);
+  return value.product_ids.length === bundleProductIds.length &&
+    value.product_ids.every((productId) => bundleProductIds.includes(productId));
 }
 
 function isAgentRuntimeState(value: unknown) {
@@ -459,6 +509,10 @@ export function isRenderableSessionState(value: unknown): value is SessionState 
     return false;
   }
 
+  const completionReport = isAgentCompletionReport(value.completion_report)
+    ? value.completion_report
+    : undefined;
+
   return (
     isPlanQualityReview(value.plan_review) &&
     isRecord(value.module_reviews) &&
@@ -466,7 +520,8 @@ export function isRenderableSessionState(value: unknown): value is SessionState 
     isMarketFeedback(value.market_feedback) &&
     Array.isArray(value.agent_decisions) &&
     isAgentRuntimeState(value.agent_runtime) &&
-    (value.completion_report === undefined || isAgentCompletionReport(value.completion_report)) &&
+    (value.completion_report === undefined || Boolean(completionReport)) &&
+    (value.bundle_adoption === undefined || isAgentBundleAdoptionForReport(value.bundle_adoption, completionReport)) &&
     Array.isArray(value.hosted_tasks) &&
     isExecutionMode(value.execution_mode) &&
     isStringArray(value.permissions_scope) &&

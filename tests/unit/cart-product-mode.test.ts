@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createSessionFixture } from "@/tests/fixtures/session";
 import type { ProductCandidate } from "@/lib/session/types";
+import { buildAgentCompletionReport } from "@/lib/agent/completion-review";
+import { acceptCurrentPurchaseBundle } from "@/lib/session/bundle-adoption";
 
 const { executeMcpToolMock } = vi.hoisted(() => ({
   executeMcpToolMock: vi.fn()
@@ -64,6 +66,9 @@ describe("cart behavior by product mode", () => {
     const state = createSessionFixture();
     const moduleId = state.shopping_plan.modules[0].module_id;
     state.module_candidates[moduleId] = [candidate(moduleId)];
+    state.completion_report = buildAgentCompletionReport(state);
+    const bundle = state.completion_report.purchase_bundle!;
+    acceptCurrentPurchaseBundle(state, bundle.generated_at);
 
     const result = await runCartExecutor(state, "product-1");
 
@@ -71,6 +76,7 @@ describe("cart behavior by product mode", () => {
     expect(state.selected_items).toHaveLength(1);
     expect(state.selected_items[0].cart_source).toBe("demo");
     expect(state.tool_logs[0].tool_name).toBe("demo_cart_fallback");
+    expect(state.bundle_adoption?.status).toBe("completed");
   });
 
   it("fails closed without mutating the cart in formal product mode", async () => {

@@ -5,6 +5,7 @@ import { summarizeLogText, summarizeLogValue } from "@/lib/mcp/logging";
 import { ProductCandidate, SelectedItem, SessionState } from "@/lib/session/types";
 import { enqueueAddToCartJob } from "@/lib/runtime/jobs";
 import { allowDemoCartFallback } from "@/lib/runtime/product-mode";
+import { refreshBundleAdoptionProgress } from "@/lib/session/bundle-adoption";
 
 function normalizeProductDetailUrl(productId: string, rawUrl?: string) {
   const sourceUrl = rawUrl ?? "";
@@ -59,6 +60,7 @@ export async function runCartExecutor(state: SessionState, productId: string) {
       moduleName,
       title: product.title
     });
+    refreshBundleAdoptionProgress(state);
     return {
       success: true,
       message: "已提交本地执行器后台加购",
@@ -68,13 +70,15 @@ export async function runCartExecutor(state: SessionState, productId: string) {
   }
 
   if (backend === "codex_hosted") {
-    return queueAddToCartTask(state, {
+    const task = queueAddToCartTask(state, {
       product_id: product.product_id,
       module_id: product.module_id,
       module_name: state.shopping_plan.modules.find((module) => module.module_id === product.module_id)?.module_name,
       product_title: product.title,
       detail_url: normalizeProductDetailUrl(product.product_id, product.detail_url)
     });
+    refreshBundleAdoptionProgress(state);
+    return task;
   }
 
   const result = await executeMcpTool(state, "add_to_cart", {
@@ -96,6 +100,7 @@ export async function runCartExecutor(state: SessionState, productId: string) {
       cartNote: error instanceof Error ? summarizeLogText(error.message, 220) : "真实加购失败，已回退到演示购物车"
     });
     state.selected_items = [...state.selected_items.filter((item) => item.product_id !== productId), fallbackItem];
+    refreshBundleAdoptionProgress(state);
     state.tool_logs.unshift({
       id: `demo-cart-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       timestamp: new Date().toISOString(),
@@ -126,6 +131,7 @@ export async function runCartExecutor(state: SessionState, productId: string) {
       cartSource: "taobao"
     });
     state.selected_items = [...state.selected_items.filter((item) => item.product_id !== productId), selected];
+    refreshBundleAdoptionProgress(state);
   }
 
   return result;

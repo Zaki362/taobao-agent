@@ -3,6 +3,7 @@ import { reviewModuleCandidates } from "@/lib/agent/candidate-reviewer";
 import { mergeAndRankModuleCandidates } from "@/lib/agent/candidate-ranker";
 import { refreshMarketFeedback } from "@/lib/agent/market-feedback";
 import { summarizeLogText } from "@/lib/mcp/logging";
+import { refreshBundleAdoptionProgress } from "@/lib/session/bundle-adoption";
 
 let hostedTaskSequence = 0;
 
@@ -280,6 +281,7 @@ export function resolveHostedAddToCartTask(
       };
       state.selected_items = [...state.selected_items.filter((item) => item.product_id !== product.product_id), selected];
     }
+    refreshBundleAdoptionProgress(state);
     createTaskLog(
       state,
       task.title,
@@ -301,5 +303,6 @@ export function resolveHostedAddToCartTask(
     executionModeForTask(task),
     "error"
   );
+  refreshBundleAdoptionProgress(state);
   return task;
 }

@@ -44,6 +44,7 @@ export function ResultsPage({
   onApplyBudgetSuggestion,
   onRecoverCompletionGaps,
   onImproveThinCandidates,
+  onAcceptPurchaseBundle,
   onAddToCart,
   onProceedToCartReview,
   expandedLogs,
@@ -65,6 +66,7 @@ export function ResultsPage({
   onApplyBudgetSuggestion: (suggestion: BudgetReallocationSuggestion) => void;
   onRecoverCompletionGaps: () => void;
   onImproveThinCandidates: () => void;
+  onAcceptPurchaseBundle: () => void;
   onAddToCart: (product: ProductCandidate) => void;
   onProceedToCartReview: () => void;
   expandedLogs: boolean;
@@ -113,6 +115,9 @@ export function ResultsPage({
   const completionReport = session.completion_report;
   const purchaseBundle = completionReport?.purchase_bundle;
   const bundleProductIds = new Set(purchaseBundle?.items.map((item) => item.product_id) ?? []);
+  const bundleAdoption = session.bundle_adoption?.bundle_generated_at === purchaseBundle?.generated_at
+    ? session.bundle_adoption
+    : undefined;
   const sceneLabel = session.current_scene_label || session.scene_brief.scene_type || "当前场景";
   const aiPlanningLabel =
     session.deepseek_status === "connected"
@@ -164,7 +169,9 @@ export function ResultsPage({
                       <div>
                         <div className="flex flex-wrap items-center gap-2">
                           <Badge>{product.recommendation_type}</Badge>
-                          {bundleProductIds.has(product.product_id) ? <Badge variant="success">组合建议</Badge> : null}
+                          {bundleProductIds.has(product.product_id) ? (
+                            <Badge variant="success">{bundleAdoption ? "组合清单" : "组合建议"}</Badge>
+                          ) : null}
                           {product.shop_badges.map((badge) => (
                             <Badge key={badge} variant="outline">{badge}</Badge>
                           ))}
@@ -340,24 +347,72 @@ export function ResultsPage({
                 <InfoBlock label="预算余量" value={formatCurrency(purchaseBundle.remaining_budget)} />
               </div>
               <div className="space-y-2">
-                {purchaseBundle.items.map((item) => (
-                  <button
-                    key={item.product_id}
-                    type="button"
-                    className="w-full rounded-[18px] border border-border/70 bg-white px-3 py-3 text-left transition hover:border-primary/25"
-                    onClick={() => onSelectModule(item.module_id)}
-                  >
-                    <div className="flex items-center justify-between gap-3 text-xs text-muted-foreground">
-                      <span>{item.module_name}</span>
-                      <span className="shrink-0 font-semibold text-[#e65320]">{formatCurrency(item.price)}</span>
+                {purchaseBundle.items.map((item) => {
+                  const candidate = (session.module_candidates[item.module_id] ?? []).find(
+                    (product) => product.product_id === item.product_id
+                  );
+                  const cartState = addToCartStateForProduct(item.product_id);
+                  const adopted = Boolean(bundleAdoption?.product_ids.includes(item.product_id));
+                  const itemStatus = cartState === "success"
+                    ? "已加入"
+                    : cartState === "running"
+                      ? "处理中"
+                      : cartState === "failed"
+                        ? "可重试"
+                        : "待确认";
+
+                  return (
+                    <div key={item.product_id} className="rounded-[18px] border border-border/70 bg-white px-3 py-3">
+                      <button type="button" className="w-full text-left" onClick={() => onSelectModule(item.module_id)}>
+                        <div className="flex items-center justify-between gap-3 text-xs text-muted-foreground">
+                          <span>{item.module_name}</span>
+                          <span className="shrink-0 font-semibold text-[#e65320]">{formatCurrency(item.price)}</span>
+                        </div>
+                        <p className="mt-1 line-clamp-2 text-sm font-medium leading-5 text-foreground">{item.title}</p>
+                      </button>
+                      {adopted ? (
+                        <div className="mt-3 flex items-center justify-between gap-3 border-t border-border/60 pt-3">
+                          <Badge variant={cartState === "success" ? "success" : cartState === "failed" ? "danger" : "secondary"}>
+                            {itemStatus}
+                          </Badge>
+                          {candidate && cartState !== "success" ? (
+                            <Button
+                              size="sm"
+                              variant={cartState === "failed" ? "outline" : "secondary"}
+                              disabled={busy || cartState === "running"}
+                              onClick={() => {
+                                onSelectModule(item.module_id);
+                                onAddToCart(candidate);
+                              }}
+                            >
+                              {cartState === "running" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <ShoppingCart className="mr-2 h-4 w-4" />}
+                              {cartState === "failed" ? "重新确认加购" : "逐件确认加购"}
+                            </Button>
+                          ) : null}
+                        </div>
+                      ) : null}
                     </div>
-                    <p className="mt-1 line-clamp-2 text-sm font-medium leading-5 text-foreground">{item.title}</p>
-                  </button>
-                ))}
+                  );
+                })}
               </div>
               <div className="rounded-[18px] bg-white/80 px-4 py-3 text-xs leading-5 text-muted-foreground">
-                必需模块覆盖 {purchaseBundle.critical_selected_module_ids.length}/{purchaseBundle.critical_module_ids.length}。这是决策建议，不会自动加购或下单。
+                {bundleAdoption
+                  ? `已处理 ${bundleAdoption.added_product_ids.length}/${bundleAdoption.product_ids.length} 件。清单只记录你的采纳进度，不代表淘宝已加购。`
+                  : `必需模块覆盖 ${purchaseBundle.critical_selected_module_ids.length}/${purchaseBundle.critical_module_ids.length}。这是决策建议，不会自动加购或下单。`}
               </div>
+              {!bundleAdoption ? (
+                <Button className="w-full" disabled={busy || purchaseBundle.items.length === 0} onClick={onAcceptPurchaseBundle}>
+                  <Sparkles className="mr-2 h-4 w-4" />
+                  采用这套组合
+                </Button>
+              ) : (
+                <div className="rounded-[18px] border border-primary/15 bg-primary/[0.04] px-4 py-3 text-xs leading-5 text-muted-foreground">
+                  <p className="font-medium text-foreground">
+                    {bundleAdoption.status === "completed" ? "组合商品已逐件处理完" : "组合已加入产品内待处理清单"}
+                  </p>
+                  <p className="mt-1">真实加购仍会在每件商品操作前单独征得你的确认。</p>
+                </div>
+              )}
               {purchaseBundle.caveats.length > 0 ? (
                 <details className="rounded-[18px] border border-border/70 bg-white px-4 py-3">
                   <summary className="cursor-pointer text-xs font-medium">查看组合取舍</summary>

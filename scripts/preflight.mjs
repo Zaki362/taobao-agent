@@ -211,6 +211,7 @@ function assertRequiredFiles() {
     "app/api/session/agent-directives/route.ts",
     "app/api/session/budget-reallocation/route.ts",
     "app/api/session/search-strategy/route.ts",
+    "app/api/session/purchase-bundle/route.ts",
     "app/api/session/state/route.ts",
     "app/api/runtime/readiness/route.ts",
     "app/error.tsx",
@@ -224,6 +225,7 @@ function assertRequiredFiles() {
     "lib/agent/directives.ts",
     "lib/agent/decision-engine.ts",
     "lib/agent/completion-review.ts",
+    "lib/session/bundle-adoption.ts",
     "app/api/agent/remediate/route.ts",
     "lib/agent/runtime-v2.ts",
     "lib/agent/orchestrator.ts",
@@ -303,6 +305,7 @@ function assertArchitectureContracts() {
   const decisionEngine = tryReadText("lib/agent/decision-engine.ts");
   const completionReview = tryReadText("lib/agent/completion-review.ts");
   const purchaseBundle = tryReadText("lib/agent/purchase-bundle.ts");
+  const bundleAdoption = tryReadText("lib/session/bundle-adoption.ts");
   const workflowRunner = tryReadText("lib/agent/workflow-runner.ts");
   const marketFeedback = tryReadText("lib/agent/market-feedback.ts");
   const orchestrator = tryReadText("lib/agent/orchestrator.ts");
@@ -339,6 +342,7 @@ function assertArchitectureContracts() {
   const agentDirectivesRoute = tryReadText("app/api/session/agent-directives/route.ts");
   const budgetReallocationRoute = tryReadText("app/api/session/budget-reallocation/route.ts");
   const searchStrategyRoute = tryReadText("app/api/session/search-strategy/route.ts");
+  const purchaseBundleRoute = tryReadText("app/api/session/purchase-bundle/route.ts");
   const sessionsRoute = tryReadText("app/api/sessions/route.ts");
   const sessionStateRoute = tryReadText("app/api/session/state/route.ts");
   const hostedTasksRoute = tryReadText("app/api/hosted/tasks/route.ts");
@@ -364,6 +368,7 @@ function assertArchitectureContracts() {
     !decisionEngine ||
     !completionReview ||
     !purchaseBundle ||
+    !bundleAdoption ||
     !workflowRunner ||
     !marketFeedback ||
     !orchestrator ||
@@ -382,6 +387,7 @@ function assertArchitectureContracts() {
     !modulesSearchRoute ||
     !agentNextActionRoute ||
     !agentRemediateRoute ||
+    !purchaseBundleRoute ||
     !responses ||
     !hostedWorkerAuth ||
     !cart ||
@@ -465,6 +471,24 @@ function assertArchitectureContracts() {
         dashboardResults.includes("Agent 建议购买组合") &&
         hostedConsole.includes("预算安全购买组合"),
       message: "Agent 完成搜索后必须生成经预算、候选白名单与必需覆盖 guardrail 校验的可审计购买组合"
+    },
+    {
+      ok:
+        types.includes("AgentBundleAdoption") &&
+        types.includes("bundle_adoption") &&
+        bundleAdoption.includes("acceptCurrentPurchaseBundle") &&
+        bundleAdoption.includes("refreshBundleAdoptionProgress") &&
+        bundleAdoption.includes("invalidateAgentCompletionArtifacts") &&
+        purchaseBundleRoute.includes("confirmed !== true") &&
+        purchaseBundleRoute.includes("bundle_generated_at") &&
+        orchestrator.includes('event_type: "agent.purchase_bundle.accepted"') &&
+        cart.includes("refreshBundleAdoptionProgress") &&
+        mcpHosted.includes("refreshBundleAdoptionProgress") &&
+        dashboard.includes("/api/session/purchase-bundle") &&
+        dashboardResults.includes("采用这套组合") &&
+        dashboardResults.includes("逐件确认加购") &&
+        sessionsRoute.includes("bundle_adoption: session.bundle_adoption"),
+      message: "预算安全购买组合必须经用户确认后形成服务端校验的待处理清单，并仅通过逐件高风险确认推进加购"
     },
     {
       ok:
@@ -889,6 +913,10 @@ function assertDocumentationContracts() {
     {
       ok: readme.includes("预算安全购买组合") && architecture.includes("compose_purchase_bundle"),
       message: "README 与架构文档必须同步说明预算安全购买组合和模型 guardrail"
+    },
+    {
+      ok: readme.includes("预算组合采纳") && architecture.includes("bundle_adoption"),
+      message: "README 与架构文档必须同步说明组合采纳、待处理清单与逐件确认边界"
     },
     {
       ok: readme.includes("候选池复盘") && readme.includes("按 Agent 建议补搜"),

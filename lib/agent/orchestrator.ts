@@ -13,7 +13,13 @@ import { runModuleSearch } from "@/lib/agent/product-matcher";
 import { getDefaultSceneInput, runSceneParser, sceneSummary } from "@/lib/agent/scene";
 import { runRefiner } from "@/lib/agent/refiner";
 import { getExecutionBackend } from "@/lib/mcp/client";
+import { getRuntimeRepository } from "@/lib/runtime";
+import { withWorkflowSessionTransaction } from "@/lib/runtime/database";
 import { loadSession, persistSession } from "@/lib/session/repository";
+import {
+  acceptCurrentPurchaseBundle,
+  invalidateAgentCompletionArtifacts
+} from "@/lib/session/bundle-adoption";
 import { ModuleSearchStrategy, PlanQualityReview, QuickAction, ScenarioId, SceneBrief, SessionState } from "@/lib/session/types";
 import { getScenarioConfig } from "@/lib/scenarios";
 
@@ -198,6 +204,33 @@ export async function addToCart(sessionId: string, productId: string, userId?: s
   };
 }
 
+export async function adoptPurchaseBundle(
+  sessionId: string,
+  bundleGeneratedAt: string,
+  userId?: string
+) {
+  return withWorkflowSessionTransaction(sessionId, async () => {
+    const state = await ensureSession(sessionId, userId);
+    if (!state) {
+      throw new Error("session not found");
+    }
+    const adoption = acceptCurrentPurchaseBundle(state, bundleGeneratedAt);
+    await persistSession(state);
+    await getRuntimeRepository().appendEvent({
+      user_id: state.owner_id ?? userId,
+      session_id: state.session_id,
+      event_type: "agent.purchase_bundle.accepted",
+      payload: {
+        bundle_generated_at: bundleGeneratedAt,
+        product_count: adoption.product_ids.length,
+        estimated_total: state.completion_report?.purchase_bundle?.estimated_total ?? 0,
+        source: state.completion_report?.purchase_bundle?.source ?? "policy"
+      }
+    });
+    return { state, adoption };
+  });
+}
+
 export async function updateAgentDirectiveProfile(sessionId: string, profile: AgentDirectiveProfile, userId?: string) {
   const state = await ensureSession(sessionId, userId);
   if (!state) {
@@ -283,7 +316,7 @@ export async function updateModuleSearchStrategy(
   module.search_keyword = primaryKeyword;
   module.search_strategy = nextStrategy;
   module.status = "refined";
-  state.completion_report = undefined;
+  invalidateAgentCompletionArtifacts(state);
   delete state.module_candidates[moduleId];
   delete state.module_reviews[moduleId];
   delete state.module_search_traces[moduleId];

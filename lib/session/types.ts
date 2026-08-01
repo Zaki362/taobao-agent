@@ -327,6 +327,16 @@ export interface AgentPurchaseBundle {
   generated_at: string;
 }
 
+export interface AgentBundleAdoption {
+  bundle_generated_at: string;
+  product_ids: string[];
+  added_product_ids: string[];
+  pending_product_ids: string[];
+  status: "accepted" | "in_progress" | "completed";
+  accepted_at: string;
+  updated_at: string;
+}
+
 export interface AgentCompletionReport {
   status: AgentCompletionStatus;
   source: "deepseek_runtime" | "policy";
@@ -434,6 +444,7 @@ export interface SessionState {
   agent_decisions: AgentDecision[];
   agent_runtime: AgentRuntimeState;
   completion_report?: AgentCompletionReport;
+  bundle_adoption?: AgentBundleAdoption;
   selected_items: SelectedItem[];
   tool_logs: MCPToolLog[];
   hosted_tasks: HostedExecutionTask[];

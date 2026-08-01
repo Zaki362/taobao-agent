@@ -12,6 +12,7 @@ import { decideNextAgentActionV2 } from "@/lib/agent/runtime-v2";
 import { getRuntimeRepository } from "@/lib/runtime";
 import { withWorkflowSessionLock } from "@/lib/runtime/database";
 import { loadSession, persistSession } from "@/lib/session/repository";
+import { invalidateAgentCompletionArtifacts } from "@/lib/session/bundle-adoption";
 import type { AgentDecision, SessionState } from "@/lib/session/types";
 
 export type AgentWorkflowTrigger =
@@ -115,7 +116,7 @@ async function executeAdvance(
       state.agent_runtime.workflow_run_id = randomUUID();
       state.agent_runtime.continuation_count = 0;
       state.agent_runtime.used_tool_calls = 0;
-      state.completion_report = undefined;
+      invalidateAgentCompletionArtifacts(state);
       state.agent_decisions = state.agent_decisions.filter(
         (decision) =>
           Boolean(decision.consumed_at) ||
@@ -330,7 +331,7 @@ export async function recoverAgentCompletionGaps(
       delete state.module_reviews[moduleId];
       delete state.module_search_traces[moduleId];
     }
-    state.completion_report = undefined;
+    invalidateAgentCompletionArtifacts(state);
     transition(state, {
       status: "idle",
       message: `用户已确认补齐 ${moduleIds.length} 个未覆盖模块，等待 Agent 重新执行`,
@@ -426,7 +427,7 @@ export async function improveAgentCompletionQuality(
         review.next_action = `用户已确认使用“${target.keyword}”增量补搜，并保留当前候选。`;
       }
     }
-    state.completion_report = undefined;
+    invalidateAgentCompletionArtifacts(state);
     transition(state, {
       status: "idle",
       message: `用户已确认优化 ${targets.length} 个薄弱候选池，等待 Agent 增量补搜`,

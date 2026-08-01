@@ -34,6 +34,7 @@ Local Executor on user's device
 - 用户确认规划后只启动一次服务端工作流；本地执行器每次回填后，服务端自动决定并排队下一模块，浏览器关闭不会中断搜索。
 - PostgreSQL 正式运行时使用按 Session ID 派生的事务级 advisory lock，防止多个服务实例并发推进同一购物工作流。
 - DeepSeek 可以在平衡/探索档位提议下一动作，但只能在动作白名单中选择；后端验证模块、重复任务、置信度和工具预算后才执行。
+- Agent 生成的预算安全组合可由用户显式采纳为 `bundle_adoption` 待处理清单；服务端从当前报告重建商品白名单，逐件加购仍复用原有高风险确认和异步回填链路。
 - 保守档位、模型失败、低置信度、越界动作或预算耗尽时，确定性策略始终可接管。
 - 旧 Qoder 直连、Codex hosted 与 experimental bridge 仅保留为开发兼容路径；production 强制使用 `local_executor`，并以 `410 legacy_hosted_disabled` 关闭旧 hosted Worker API。
 
@@ -817,7 +818,7 @@ DeepSeek 目前承担六类结构化任务：
 
 补搜采用跨轮次候选池，而不是“最后一次搜索覆盖前一次”。`candidate-ranker` 将已有 `ProductCandidate` 与本轮回填按 `product_id` 去重，合并完整字段后，用当前 Scene Brief、模块预算、搜索策略和 Agent 重排规则重新选择三档候选。`runtime/jobs` 在 DeepSeek 候选复盘前完成这次合并，因此模型评估的是完整证据池；`hosted.resolve` 再执行一次幂等合并，覆盖进程恢复和旧宿主兼容路径。`module_search_traces` 保留每轮关键词和原始返回量，同时单独记录最终候选数；补搜失败只追加失败 attempt，已有候选不会被清空。
 
-当 Runtime 决定 `complete_workflow` 时，`completion-review` 会生成方案级 `completion_report`：计算规划覆盖率、必需模块覆盖率、候选总量、薄弱候选池、预算压力、缺价模块和容错跳过，并保留最终 DeepSeek Runtime/规则停止理由。同时，`purchase-bundle` 会先通过确定性搜索得到预算安全组合，再允许 DeepSeek `compose_purchase_bundle` 在已知候选 ID 内提出更符合用户偏好的组合。后端强制校验商品白名单、每模块最多一件、总预算上限和必需模块覆盖下限；不合格输出回退为规则组合。该组合只提供建议与审计，不会自动加购或下单；任何重搜或规划变更都会清除旧报告。
+当 Runtime 决定 `complete_workflow` 时，`completion-review` 会生成方案级 `completion_report`：计算规划覆盖率、必需模块覆盖率、候选总量、薄弱候选池、预算压力、缺价模块和容错跳过，并保留最终 DeepSeek Runtime/规则停止理由。同时，`purchase-bundle` 会先通过确定性搜索得到预算安全组合，再允许 DeepSeek `compose_purchase_bundle` 在已知候选 ID 内提出更符合用户偏好的组合。后端强制校验商品白名单、每模块最多一件、总预算上限和必需模块覆盖下限；不合格输出回退为规则组合。用户可以显式把该组合采纳为 `bundle_adoption`，但它只是一份产品内待处理清单：服务端重新核对当前报告、候选模块、标题和价格，真实加购仍逐件确认。任何重搜或规划变更都会同时清除旧报告和旧清单。
 
 完成报告不是只读终点。若存在未覆盖模块，用户可显式确认 `/api/agent/remediate`；服务端只重置报告列出的缺口模块及其旧失败决策，在 Session 锁保护下保留其他候选与购物清单，再交给同一 `workflow-runner` 续跑。这样恢复动作仍由用户授权，但后续模块选择、排队和停止判断继续由 Agent 完成。
 

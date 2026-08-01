@@ -9,6 +9,7 @@ import type {
   SessionState,
   ShoppingPlanModule
 } from "@/lib/session/types";
+import { invalidateAgentCompletionArtifacts } from "@/lib/session/bundle-adoption";
 
 const MAX_REALLOCATION_RATIO = 0.15;
 
@@ -350,7 +351,7 @@ export function applyBudgetReallocationSuggestion(
 
   state.last_action = refinementImpact.quick_action;
   state.last_refinement = refinementImpact;
-  state.completion_report = undefined;
+  invalidateAgentCompletionArtifacts(state);
   state.agent_runtime.workflow_status = "idle";
   state.agent_runtime.auto_continue = false;
   state.agent_runtime.current_module_id = undefined;

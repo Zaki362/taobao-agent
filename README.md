@@ -41,6 +41,7 @@ SceneCart AI 是一个正在按正式产品架构推进的“场景化购物 Age
 - 淘宝 skill / MCP 工具层：正式路径为 `local_executor`；原有 Qoder 直连、Codex hosted 和 experimental bridge 仅保留为开发兼容路径
 - 商品搜索链路：当前主流程可串行搜索规划中的各个模块，并生成推荐商品卡片
 - 加购结果分级：高风险动作必须显式确认，服务端和 MCP executor 会双重校验；开发预览模式可选择回退到产品内演示购物车，正式产品模式强制关闭回退并明确返回真实失败
+- 预算组合采纳：用户可把 Agent 的预算安全购买组合采纳为产品内待处理清单，再逐件显式确认真实加购；采纳不等于淘宝加购，也不会触发批量交易
 - 后端执行台：可查看当前 session、执行进度、工具日志、规划和购物清单
 - 文档材料：包含产品复盘与技术架构文档，适合面试汇报和架构图整理
 
@@ -223,6 +224,7 @@ lib/scenarios/
 - `POST /api/agent/run`：用户确认规划后启动一次服务端工作流；工具回填会自动续跑后续模块
 - `POST /api/agent/remediate`：用户显式确认后，可补齐完成报告中的未覆盖模块，或用 `scope=thin` 增量优化候选偏薄模块；始终保留不受影响的候选和已选商品
 - `POST /api/cart/add`：尝试加购，要求 `confirmed: true`；开发预览可配置演示回退，正式产品模式只接受真实淘宝执行结果
+- `POST /api/session/purchase-bundle`：显式采纳当前完成报告中的预算安全组合；服务端校验生成时间和候选白名单，只生成待处理清单，不会自动加购
 - `POST /api/session/agent-directives`：用户确认规划前切换 AI 执行档位，写回当前 session 的 `agent_directives`
 - `POST /api/session/budget-reallocation`：用户确认真实候选价格生成的跨模块预算建议；金额由服务端建议决定，保持总预算不变并仅失效受影响模块
 - `POST /api/session/search-strategy`：用户确认规划前微调模块搜索任务包，写回当前 session 的主搜索词和备用词

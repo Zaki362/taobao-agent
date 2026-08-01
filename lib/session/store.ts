@@ -4,7 +4,7 @@ import { reviewModuleCandidates } from "@/lib/agent/candidate-reviewer";
 import { buildMarketFeedback } from "@/lib/agent/market-feedback";
 import { normalizeSearchKeywords } from "@/lib/agent/search-strategy";
 import { mockReviewShoppingPlan } from "@/lib/llm/mock";
-import { isAgentCompletionReport, isAgentDecision, isHostedExecutionTask, isModuleCandidateReview, isModuleSearchTrace, isProductCandidate, isRefinementImpactSummary, isSelectedItem, isSessionState } from "@/lib/session/guards";
+import { isAgentBundleAdoptionForReport, isAgentCompletionReport, isAgentDecision, isHostedExecutionTask, isModuleCandidateReview, isModuleSearchTrace, isProductCandidate, isRefinementImpactSummary, isSelectedItem, isSessionState } from "@/lib/session/guards";
 import { AgentDirectives, ModuleCandidateReview, ModuleSearchTrace, PlanExecutionStrategy, PlanQualityReview, ProductCandidate, SelectedItem, SessionState, ShoppingPlanModule } from "@/lib/session/types";
 
 declare global {
@@ -353,6 +353,15 @@ function normalizeModuleSearchTraces(
 }
 
 export function normalizeSessionState(state: SessionState): SessionState {
+  const completionReport = isAgentCompletionReport((state as Partial<SessionState>).completion_report)
+    ? (state as Partial<SessionState>).completion_report
+    : undefined;
+  const bundleAdoption = isAgentBundleAdoptionForReport(
+    (state as Partial<SessionState>).bundle_adoption,
+    completionReport
+  )
+    ? (state as Partial<SessionState>).bundle_adoption
+    : undefined;
   const shoppingPlan = {
     ...state.shopping_plan,
     modules: normalizeSearchKeywords(
@@ -467,9 +476,8 @@ export function normalizeSessionState(state: SessionState): SessionState {
       initialized_at:
         (state as Partial<SessionState>).agent_runtime?.initialized_at ?? new Date().toISOString()
     },
-    completion_report: isAgentCompletionReport((state as Partial<SessionState>).completion_report)
-      ? (state as Partial<SessionState>).completion_report
-      : undefined,
+    completion_report: completionReport,
+    bundle_adoption: bundleAdoption,
     selected_items: normalizeSelectedItems(state),
     tool_logs: Array.isArray(state.tool_logs) ? state.tool_logs.slice(0, MAX_TOOL_LOGS) : [],
     hosted_tasks: Array.isArray((state as Partial<SessionState>).hosted_tasks)

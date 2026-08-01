@@ -53,6 +53,7 @@ export async function GET() {
         agent_decisions: session.agent_decisions.slice(-MAX_SESSION_LIST_AGENT_DECISIONS),
         agent_runtime: session.agent_runtime,
         completion_report: session.completion_report,
+        bundle_adoption: session.bundle_adoption,
         tool_logs: session.tool_logs.slice(0, MAX_SESSION_LIST_TOOL_LOGS),
         hosted_tasks: session.hosted_tasks.slice(0, MAX_SESSION_LIST_HOSTED_TASKS)
       }));

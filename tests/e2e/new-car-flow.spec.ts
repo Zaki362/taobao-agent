@@ -41,7 +41,16 @@ async function runExecutorUntilStopped(
 ) {
   const headers = executorHeaders(token);
   while (!shouldStop()) {
-    const claim = await api.post("/api/executor/jobs/claim", { headers, data: {} });
+    let claim;
+    try {
+      claim = await api.post("/api/executor/jobs/claim", { headers, data: {}, timeout: 5_000 });
+    } catch (error) {
+      if (shouldStop()) return;
+      // Next.js dev compilation can briefly hold the local endpoint. A real worker
+      // treats this as a transient transport failure and continues polling.
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      continue;
+    }
     expect(claim.ok()).toBeTruthy();
     const { job } = await claim.json() as {
       job: null | {
@@ -332,11 +341,36 @@ test("authenticated new-car workflow reaches recommendations through the durable
     await expect(page.getByText(/E2E 真实链路候选/).first()).toBeVisible();
     await expect(page.getByRole("button", { name: /继续补齐/ })).toHaveCount(0);
 
+    const bundleReadyResponse = await page.request.get(`/api/session/state?session_id=${persistedSessionId}`);
+    const bundleReadyState = await bundleReadyResponse.json() as {
+      completion_report: { purchase_bundle: { generated_at: string; items: Array<{ product_id: string }> } };
+    };
+    const unconfirmedBundle = await page.request.post("/api/session/purchase-bundle", {
+      headers: { Origin: "http://127.0.0.1:3100" },
+      data: {
+        session_id: persistedSessionId,
+        bundle_generated_at: bundleReadyState.completion_report.purchase_bundle.generated_at,
+        confirmed: false
+      }
+    });
+    expect(unconfirmedBundle.status()).toBe(400);
+
     page.once("dialog", (dialog) => dialog.accept());
-    await page.getByRole("button", { name: "加入购物车" }).first().click();
+    await page.getByRole("button", { name: "采用这套组合" }).click();
+    await expect(page.getByText("组合已加入产品内待处理清单")).toBeVisible();
+    const adoptedResponse = await page.request.get(`/api/session/state?session_id=${persistedSessionId}`);
+    const adoptedState = await adoptedResponse.json() as {
+      bundle_adoption: { status: string; product_ids: string[]; pending_product_ids: string[] };
+    };
+    expect(adoptedState.bundle_adoption.status).toBe("accepted");
+    expect(adoptedState.bundle_adoption.pending_product_ids).toEqual(adoptedState.bundle_adoption.product_ids);
+
+    page.once("dialog", (dialog) => dialog.accept());
+    await page.getByRole("button", { name: "逐件确认加购" }).first().click();
     await expect(page.getByRole("button", { name: "加入购物车成功" }).first()).toBeVisible({
       timeout: 30_000
     });
+    await expect(page.getByText(/已处理 1\/\d+ 件/)).toBeVisible();
 
     await page.getByRole("button", { name: "进入下单购买" }).click();
     await expect(page.getByText("确认下单清单")).toBeVisible();
@@ -399,7 +433,10 @@ test("authenticated new-car workflow reaches recommendations through the durable
     await expect(page.getByText("确认购物规划")).toBeVisible();
 
     const reallocatedResponse = await page.request.get(`/api/session/state?session_id=${persistedSessionId}`);
-    const reallocatedState = await reallocatedResponse.json() as typeof feedbackState;
+    const reallocatedState = await reallocatedResponse.json() as typeof feedbackState & {
+      bundle_adoption?: unknown;
+      completion_report?: unknown;
+    };
     expect(reallocatedState.shopping_plan.modules.reduce(
       (total, module) => total + module.budget_allocation,
       0
@@ -409,6 +446,8 @@ test("authenticated new-car workflow reaches recommendations through the durable
     expect(Object.keys(reallocatedState.module_candidates).length).toBe(
       Object.keys(feedbackState.module_candidates).length - 2
     );
+    expect(reallocatedState.bundle_adoption).toBeUndefined();
+    expect(reallocatedState.completion_report).toBeUndefined();
 
     await page.goto("/hosted");
     await expect(page.getByText("Agent Runtime 2.0")).toBeVisible();

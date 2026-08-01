@@ -1093,6 +1093,38 @@ export function Dashboard() {
     }
   }
 
+  async function acceptPurchaseBundle() {
+    const purchaseBundle = session?.completion_report?.purchase_bundle;
+    if (!session || !purchaseBundle) return;
+    const confirmed = window.confirm(
+      "采用后会生成产品内待处理清单，不会自动加入淘宝购物车。每件商品仍需你逐件确认，是否继续？"
+    );
+    if (!confirmed) return;
+
+    setBusy(true);
+    setErrorMessage("");
+    setStatusMessage("正在确认 Agent 购买组合");
+    try {
+      const response = await jsonFetch<{ state: unknown }>("/api/session/purchase-bundle", {
+        method: "POST",
+        body: JSON.stringify({
+          session_id: session.session_id,
+          bundle_generated_at: purchaseBundle.generated_at,
+          confirmed: true
+        })
+      });
+      if (!isRenderableSessionState(response.state)) {
+        throw new Error("采用购买组合后返回的会话状态不完整");
+      }
+      setSession(response.state);
+      setStatusMessage("已采用 Agent 组合。接下来可逐件确认加入淘宝购物车。");
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "采用购买组合失败");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   const missingStageData =
     (stage === "confirm_scene" && !parsedScene) ||
     (SESSION_REQUIRED_STAGES.includes(stage) && !session);
@@ -1189,6 +1221,7 @@ export function Dashboard() {
             onApplyBudgetSuggestion={applyBudgetSuggestion}
             onRecoverCompletionGaps={recoverCompletionGaps}
             onImproveThinCandidates={improveThinCandidates}
+            onAcceptPurchaseBundle={acceptPurchaseBundle}
             onAddToCart={addToCart}
             onProceedToCartReview={() => setStage("cart_review")}
             expandedLogs={expandedLogs}

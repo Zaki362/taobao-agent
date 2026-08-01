@@ -562,6 +562,23 @@ export function HostedConsole() {
                               value={`${selectedSession.completion_report.purchase_bundle.critical_selected_module_ids.length}/${selectedSession.completion_report.purchase_bundle.critical_module_ids.length}`}
                             />
                           </div>
+                          {selectedSession.bundle_adoption?.bundle_generated_at === selectedSession.completion_report.purchase_bundle.generated_at ? (
+                            <div className="mt-4 rounded-[16px] border border-primary/15 bg-primary/[0.04] p-3 text-xs">
+                              <div className="flex flex-wrap items-center justify-between gap-2">
+                                <span className="font-medium text-foreground">用户已采纳组合</span>
+                                <Badge variant={selectedSession.bundle_adoption.status === "completed" ? "success" : "secondary"}>
+                                  {selectedSession.bundle_adoption.status === "completed"
+                                    ? "全部处理完成"
+                                    : selectedSession.bundle_adoption.status === "in_progress"
+                                      ? "逐件处理中"
+                                      : "等待逐件确认"}
+                                </Badge>
+                              </div>
+                              <p className="mt-2 text-muted-foreground">
+                                已加入淘宝购物车 {selectedSession.bundle_adoption.added_product_ids.length}/{selectedSession.bundle_adoption.product_ids.length} 件 · 采纳于 {new Date(selectedSession.bundle_adoption.accepted_at).toLocaleString("zh-CN", { hour12: false })}
+                              </p>
+                            </div>
+                          ) : null}
                           <div className="mt-4 grid gap-2 md:grid-cols-2">
                             {selectedSession.completion_report.purchase_bundle.items.map((item) => (
                               <div key={item.product_id} className="rounded-[16px] border border-border/70 bg-white p-3 text-xs">
