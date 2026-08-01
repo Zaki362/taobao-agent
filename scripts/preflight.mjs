@@ -224,15 +224,19 @@ function assertDevelopmentLauncher() {
   }
 
   if (
-    !String(pkg.scripts?.dev ?? "").includes("scripts/dev-server.mjs") ||
+    !String(pkg.scripts?.dev ?? "").includes("scripts/dev-auto.mjs") ||
+    !String(pkg.scripts?.["dev:web"] ?? "").includes("scripts/dev-server.mjs") ||
     !launcher.includes("resolveDevServer") ||
     !launcher.includes('probeAddress(port, "127.0.0.1")') ||
     !launcher.includes('probeAddress(port, "::", true)') ||
     !launcher.includes("SCENECART_DEV_PORT") ||
     !autoLauncher.includes('from "./dev-server.mjs"') ||
-    !autoLauncher.includes("runtimeEnv.SCENECART_API_URL = apiBaseUrl")
+    !autoLauncher.includes("runtimeEnv.SCENECART_API_URL = apiBaseUrl") ||
+    !autoLauncher.includes("resolveExecutorEnvironment") ||
+    !autoLauncher.includes("discoverAndStartWorker") ||
+    !autoLauncher.includes('spawnCommand("npm", ["run", "worker:local"]')
   ) {
-    fail("开发启动器必须检测双栈端口冲突，并让网页与本地执行器共享同一个实际 API 地址");
+    fail("默认开发启动器必须检测双栈端口冲突、热发现设备令牌，并让网页与本地执行器共享同一个实际 API 地址");
   }
 }
 

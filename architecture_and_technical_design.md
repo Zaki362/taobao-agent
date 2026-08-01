@@ -30,6 +30,7 @@ Local Executor on user's device
 - Session 不再只依赖 Next.js 进程内 Map 或本地 JSON；`RUNTIME_STORE=postgres` 时按用户持久化到 PostgreSQL。
 - Qoder/Taobao 不再运行在 `/api/modules/search` 或 `/api/cart/add` 的长请求内；API 只创建任务并立即返回。
 - 本地执行器使用一次性设备令牌、15 秒心跳、任务租约、最大重试次数和结果账本。
+- 默认开发入口 `npm run dev` 同时管理网页与本地执行器：先确定唯一可用端口并启动 Web，再从受保护的 `.env.local` 热发现设备令牌，Web 健康后启动 Worker；`dev:web` 保留给测试和纯 UI 排障，避免 E2E 意外领取真实淘宝任务。
 - 搜索、失败重试、Agent 状态转换和加购结果以执行事件写入，并通过 SSE 自动刷新当前浏览器会话。
 - 用户确认规划后只启动一次服务端工作流；本地执行器每次回填后，服务端自动决定并排队下一模块，浏览器关闭不会中断搜索。
 - PostgreSQL 正式运行时使用按 Session ID 派生的事务级 advisory lock，防止多个服务实例并发推进同一购物工作流。

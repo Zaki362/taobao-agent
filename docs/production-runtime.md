@@ -75,6 +75,8 @@ npm run start
 
 本地启动使用 `npm run dev`。启动器会同时检查 `127.0.0.1` 和 Next.js 默认 IPv6 监听地址；3000 被占用时自动选择后续可用端口，并打印准确 URL。注册设备和运行 `executor:configure` 时必须使用这个实际 URL。若需要稳定地址，可在 `.env.local` 设置 `SCENECART_DEV_PORT=3001` 与匹配的 `SCENECART_API_URL=http://127.0.0.1:3001`。显式配置的端口被占用时启动器会直接报错，不会静默把网页和 Worker 分流到不同端口。
 
+默认 `npm run dev` 同时承担本地执行器管理：已有合法设备令牌时会等待 Web 健康后启动 `worker:local`；首次注册时可以保持命令运行，`executor:configure` 原子更新 `.env.local` 后，启动器会在数秒内发现令牌并接入 Worker。令牌不会输出到日志，Worker 启动失败也不会无限重试。纯网页调试或自动化测试使用 `npm run dev:web`，正式部署中的用户设备仍建议由进程守护器独立运行 `worker:local`。
+
 1. 在 SceneCart AI 注册并登录。执行器设备必须绑定账号；匿名访问设置页会安全跳转到登录页，成功后返回原设置页。
 2. 打开 `/settings/executor`。
 3. 输入设备名并注册。
@@ -113,7 +115,7 @@ npm run executor:doctor
 
 Doctor 会额外执行一次不调用淘宝工具的 Qoder headless 请求，用于提前识别 CLI 版本过旧或登录失效。若显示 `Qoder CLI 未登录`，先运行 `qodercli` 并输入 `/login`；若显示需要升级，运行 `qodercli update`。这两类配置错误会被标记为不可重试，避免真实任务重复消耗三次执行机会。
 
-Doctor 只检查服务端、设备令牌和 Qoder CLI，不触发淘宝页面或账号动作。全部通过后启动：
+Doctor 只检查服务端、设备令牌和 Qoder CLI，不触发淘宝页面或账号动作。如果使用默认 `npm run dev`，配置令牌后 Worker 会自动接入；如果使用 `npm run dev:web`、正式远端服务或进程守护器，则显式启动：
 
 ```bash
 npm run worker:local

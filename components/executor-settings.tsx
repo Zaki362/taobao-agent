@@ -228,7 +228,7 @@ export function ExecutorSettings() {
     },
     {
       title: "保持执行器在线",
-      detail: "启动本地 Worker 后，搜索和加购任务会在后台执行并自动回填。",
+      detail: "默认 npm run dev 会在保存令牌后自动接入 Worker；纯网页或正式部署可单独启动 worker:local。",
       status: onlineDevices.length > 0 ? "done" as const : "pending" as const,
       icon: Wifi
     }
@@ -469,7 +469,7 @@ export function ExecutorSettings() {
           </CardHeader>
           <CardContent className="space-y-3">
             <p className="text-sm leading-6 text-muted-foreground">
-              推荐在新的本地终端运行下面的配置命令，再按提示粘贴令牌。输入过程不会回显，也不会把令牌写入 shell history；脚本只更新执行器相关配置，并把 <code>.env.local</code> 权限限制为当前用户可读写。
+              在项目终端运行下面的配置命令，再按提示粘贴令牌。输入过程不会回显，也不会把令牌写入 shell history；脚本只更新执行器相关配置，并把 <code>.env.local</code> 权限限制为当前用户可读写。默认 <code>npm run dev</code> 会在保存后自动接入 Worker。
             </p>
             <div className="rounded-[18px] border border-primary/20 bg-primary/[0.04] p-4">
               <div className="flex flex-wrap items-center justify-between gap-3">
