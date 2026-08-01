@@ -100,6 +100,12 @@ async function executeAdvance(
     if (!continuingExistingRun) {
       state.agent_runtime.workflow_run_id = randomUUID();
       state.agent_runtime.continuation_count = 0;
+      state.agent_runtime.used_tool_calls = 0;
+      state.agent_decisions = state.agent_decisions.filter(
+        (decision) =>
+          Boolean(decision.consumed_at) ||
+          (decision.action !== "search_module" && decision.action !== "retry_module")
+      );
     }
     transition(state, {
       status: "running",

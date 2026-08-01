@@ -1,6 +1,10 @@
 import { runCartExecutor } from "@/lib/agent/cart";
 import { consumeAgentDecision, pendingAgentDecision, recordAgentDecision, removeModuleAgentDecisions } from "@/lib/agent/decision-engine";
-import { buildMarketFeedback, refreshMarketFeedback } from "@/lib/agent/market-feedback";
+import {
+  applyBudgetReallocationSuggestion,
+  buildMarketFeedback,
+  refreshMarketFeedback
+} from "@/lib/agent/market-feedback";
 import { decideNextAgentActionV2 } from "@/lib/agent/runtime-v2";
 import { AgentDirectiveProfile, applyAgentDirectiveProfile } from "@/lib/agent/directives";
 import { runDeepSeekPlanner, runTemplatePlannerForScenario } from "@/lib/agent/planner";
@@ -306,5 +310,28 @@ export async function updateModuleSearchStrategy(
   return {
     state,
     module
+  };
+}
+
+export async function applyMarketBudgetSuggestion(
+  sessionId: string,
+  fromModuleId: string,
+  toModuleId: string,
+  userId?: string
+) {
+  const state = await ensureSession(sessionId, userId);
+  if (!state) {
+    throw new Error("session not found");
+  }
+
+  const applied = applyBudgetReallocationSuggestion(state, {
+    fromModuleId,
+    toModuleId
+  });
+  await persistSession(state);
+
+  return {
+    state,
+    ...applied
   };
 }

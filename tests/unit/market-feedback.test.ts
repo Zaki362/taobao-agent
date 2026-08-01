@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { decideNextAgentAction } from "@/lib/agent/decision-engine";
-import { buildMarketFeedback, refreshMarketFeedback } from "@/lib/agent/market-feedback";
+import {
+  applyBudgetReallocationSuggestion,
+  buildMarketFeedback,
+  refreshMarketFeedback
+} from "@/lib/agent/market-feedback";
 import { reviewModuleCandidates } from "@/lib/agent/candidate-reviewer";
 import type { ProductCandidate, ShoppingPlanModule } from "@/lib/session/types";
 import { createSessionFixture } from "@/tests/fixtures/session";
@@ -77,6 +81,78 @@ describe("cross-module market feedback", () => {
     expect(feedback.observed_modules).toBe(0);
     expect(feedback.module_signals[module.module_id].pressure).toBe("unobserved");
     expect(feedback.reallocation_suggestions).toEqual([]);
+  });
+
+  it("applies one current suggestion without changing the total budget or unrelated module results", () => {
+    const state = createSessionFixture();
+    const [donor, receiver, reusable] = state.shopping_plan.modules;
+    state.module_candidates[donor.module_id] = pricedPool(donor, [0.25, 0.35, 0.45]);
+    state.module_candidates[receiver.module_id] = pricedPool(receiver, [1.2, 1.35, 1.5]);
+    state.module_candidates[reusable.module_id] = pricedPool(reusable, [0.7, 0.8, 0.9]);
+    state.module_reviews[donor.module_id] = reviewModuleCandidates(
+      state,
+      donor,
+      state.module_candidates[donor.module_id]
+    );
+    state.module_reviews[receiver.module_id] = reviewModuleCandidates(
+      state,
+      receiver,
+      state.module_candidates[receiver.module_id]
+    );
+    refreshMarketFeedback(state);
+    const suggestion = state.market_feedback.reallocation_suggestions[0];
+    const previousTotal = state.shopping_plan.modules.reduce(
+      (total, module) => total + module.budget_allocation,
+      0
+    );
+    const previousDonorBudget = donor.budget_allocation;
+    const previousReceiverBudget = receiver.budget_allocation;
+    const reusableCandidates = state.module_candidates[reusable.module_id];
+
+    const applied = applyBudgetReallocationSuggestion(state, {
+      fromModuleId: suggestion.from_module_id,
+      toModuleId: suggestion.to_module_id
+    });
+
+    expect(donor.budget_allocation).toBe(previousDonorBudget - suggestion.amount);
+    expect(receiver.budget_allocation).toBe(previousReceiverBudget + suggestion.amount);
+    expect(state.shopping_plan.modules.reduce(
+      (total, module) => total + module.budget_allocation,
+      0
+    )).toBe(previousTotal);
+    expect(state.module_candidates[donor.module_id]).toBeUndefined();
+    expect(state.module_candidates[receiver.module_id]).toBeUndefined();
+    expect(state.module_reviews[donor.module_id]).toBeUndefined();
+    expect(state.module_reviews[receiver.module_id]).toBeUndefined();
+    expect(state.module_candidates[reusable.module_id]).toEqual(reusableCandidates);
+    expect(applied.impacted_modules).toEqual([donor.module_id, receiver.module_id]);
+    expect(state.last_refinement?.quick_action).toBe("应用市场预算建议");
+    expect(state.agent_runtime.workflow_status).toBe("idle");
+    expect(state.agent_runtime.auto_continue).toBe(false);
+    expect(state.market_feedback.reallocation_suggestions).toEqual([]);
+  });
+
+  it("rejects stale or forged suggestions and active searches without mutating budgets", () => {
+    const state = createSessionFixture();
+    const [donor, receiver] = state.shopping_plan.modules;
+    state.module_candidates[donor.module_id] = pricedPool(donor, [0.25, 0.35, 0.45]);
+    state.module_candidates[receiver.module_id] = pricedPool(receiver, [1.2, 1.35, 1.5]);
+    refreshMarketFeedback(state);
+    const suggestion = state.market_feedback.reallocation_suggestions[0];
+    const budgets = state.shopping_plan.modules.map((module) => module.budget_allocation);
+
+    expect(() => applyBudgetReallocationSuggestion(state, {
+      fromModuleId: "forged-module",
+      toModuleId: suggestion.to_module_id
+    })).toThrow("预算建议已失效");
+    expect(state.shopping_plan.modules.map((module) => module.budget_allocation)).toEqual(budgets);
+
+    state.agent_runtime.workflow_status = "waiting_for_tools";
+    expect(() => applyBudgetReallocationSuggestion(state, {
+      fromModuleId: suggestion.from_module_id,
+      toModuleId: suggestion.to_module_id
+    })).toThrow("搜索任务仍在执行");
+    expect(state.shopping_plan.modules.map((module) => module.budget_allocation)).toEqual(budgets);
   });
 
   it("uses an untried value keyword for one guarded retry when real candidates all exceed budget", () => {

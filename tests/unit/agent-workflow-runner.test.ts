@@ -120,6 +120,36 @@ describe("server-managed Agent workflow", () => {
     expect(await localRuntimeRepository.claimJob(device, 30_000)).toBeNull();
   });
 
+  it("starts a confirmed rerun with a fresh per-run tool budget", async () => {
+    const sessionId = `session-workflow-rerun-${Date.now()}`;
+    sessionFiles.add(sessionId);
+    const state = createSessionFixture({ session_id: sessionId });
+    state.agent_runtime.used_tool_calls = state.agent_runtime.max_tool_calls;
+    state.agent_runtime.workflow_status = "completed";
+    state.agent_decisions = [createAgentDecision({
+      action: "search_module",
+      source: "plan_strategy",
+      confidence: "high",
+      module_id: state.shopping_plan.modules.at(-1)?.module_id,
+      module_name: state.shopping_plan.modules.at(-1)?.module_name,
+      reason: "上一轮未消费决策",
+      evidence: ["旧运行"]
+    })];
+    await localRuntimeRepository.saveSession(state);
+
+    const restarted = await advanceAgentWorkflow(sessionId, device.user_id, {
+      start: true,
+      trigger: "user_start"
+    });
+    const restored = await localRuntimeRepository.getSession(sessionId, device.user_id);
+    const queuedJob = await localRuntimeRepository.claimJob(device, 30_000);
+
+    expect(restarted.outcome).toBe("queued");
+    expect(restored?.agent_runtime.used_tool_calls).toBe(1);
+    expect(queuedJob).not.toBeNull();
+    expect(queuedJob?.payload.module_id).toBe(state.shopping_plan.modules[0].module_id);
+  });
+
   it("does not share an active workflow promise across user identities", async () => {
     const sessionId = `session-workflow-owner-${Date.now()}`;
     sessionFiles.add(sessionId);
@@ -150,6 +180,8 @@ describe("server-managed Agent workflow", () => {
       reason: "unit test invalid decision",
       evidence: []
     })];
+    state.agent_runtime.auto_continue = true;
+    state.agent_runtime.workflow_status = "running";
     await localRuntimeRepository.saveSession(state);
 
     await expect(advanceAgentWorkflow(sessionId, device.user_id, {

@@ -24,7 +24,15 @@ import {
 } from "@/components/dashboard-config";
 import { formatCurrency } from "@/lib/utils";
 import { isRenderableSessionState } from "@/lib/session/guards";
-import { AgentDecision, ProductCandidate, QuickAction, RefinementImpactSummary, SessionState, WorkflowStage } from "@/lib/session/types";
+import {
+  AgentDecision,
+  BudgetReallocationSuggestion,
+  ProductCandidate,
+  QuickAction,
+  RefinementImpactSummary,
+  SessionState,
+  WorkflowStage
+} from "@/lib/session/types";
 import type { AgentDirectiveProfile } from "@/lib/agent/directives";
 
 type HostedTaskInstruction = {
@@ -791,6 +799,52 @@ export function Dashboard() {
     }
   }
 
+  async function applyBudgetSuggestion(suggestion: BudgetReallocationSuggestion) {
+    if (!session) {
+      return;
+    }
+
+    const confirmed = window.confirm(
+      `确认从「${suggestion.from_module_name}」向「${suggestion.to_module_name}」调配 ${formatCurrency(suggestion.amount)}？\n\n两个模块的旧候选会被清除，其他模块结果和已选商品会保留。确认新规划后才会重新搜索。`
+    );
+    if (!confirmed) {
+      return;
+    }
+
+    setBusy(true);
+    setErrorMessage("");
+    setStatusMessage("正在应用真实价格反馈并校验预算总额");
+    try {
+      const result = await jsonFetch<{
+        session_id: string;
+        impacted_modules: string[];
+        refinement_impact: RefinementImpactSummary;
+      }>("/api/session/budget-reallocation", {
+        method: "POST",
+        body: JSON.stringify({
+          session_id: session.session_id,
+          from_module_id: suggestion.from_module_id,
+          to_module_id: suggestion.to_module_id,
+          confirmed: true
+        }),
+        timeoutMs: 20_000
+      });
+      const hydrated = await hydrateSession(result.session_id);
+      setParsedScene(hydrated.scene_brief);
+      setSearchSummary([]);
+      setSelectedModuleId(
+        suggestion.to_module_id || result.impacted_modules[0] || hydrated.shopping_plan.modules[0]?.module_id || ""
+      );
+      setStage("confirm_plan");
+      setStatusMessage(result.refinement_impact.summary);
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "预算调配失败");
+      setStage("review_results");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function updateAgentProfile(profile: AgentDirectiveProfile) {
     if (!session) {
       return;
@@ -1028,6 +1082,7 @@ export function Dashboard() {
             selectedProducts={selectedProducts}
             estimatedTotal={estimatedTotal}
             onQuickAction={applyQuickAction}
+            onApplyBudgetSuggestion={applyBudgetSuggestion}
             onAddToCart={addToCart}
             onProceedToCartReview={() => setStage("cart_review")}
             expandedLogs={expandedLogs}

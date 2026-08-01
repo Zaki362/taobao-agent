@@ -209,6 +209,7 @@ lib/scenarios/
 - `POST /api/agent/run`：用户确认规划后启动一次服务端工作流；工具回填会自动续跑后续模块
 - `POST /api/cart/add`：尝试加购，要求 `confirmed: true`；开发预览可配置演示回退，正式产品模式只接受真实淘宝执行结果
 - `POST /api/session/agent-directives`：用户确认规划前切换 AI 执行档位，写回当前 session 的 `agent_directives`
+- `POST /api/session/budget-reallocation`：用户确认真实候选价格生成的跨模块预算建议；金额由服务端建议决定，保持总预算不变并仅失效受影响模块
 - `POST /api/session/search-strategy`：用户确认规划前微调模块搜索任务包，写回当前 session 的主搜索词和备用词
 - `GET /api/session/state`：读取当前 session 完整状态
 - `GET /api/mcp/status`：读取当前工具执行模式状态

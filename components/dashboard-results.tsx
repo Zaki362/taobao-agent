@@ -9,7 +9,12 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { HostedWorkerStatus, MpcStatus } from "@/components/dashboard-types";
 import { formatCurrency } from "@/lib/utils";
-import { ProductCandidate, QuickAction, SessionState } from "@/lib/session/types";
+import {
+  BudgetReallocationSuggestion,
+  ProductCandidate,
+  QuickAction,
+  SessionState
+} from "@/lib/session/types";
 
 function renderProductImage(product: ProductCandidate) {
   if (product.image_url && product.image_url.trim()) {
@@ -36,6 +41,7 @@ export function ResultsPage({
   selectedProducts,
   estimatedTotal,
   onQuickAction,
+  onApplyBudgetSuggestion,
   onAddToCart,
   onProceedToCartReview,
   expandedLogs,
@@ -54,6 +60,7 @@ export function ResultsPage({
   selectedProducts: ProductCandidate[];
   estimatedTotal: number;
   onQuickAction: (action: QuickAction) => void;
+  onApplyBudgetSuggestion: (suggestion: BudgetReallocationSuggestion) => void;
   onAddToCart: (product: ProductCandidate) => void;
   onProceedToCartReview: () => void;
   expandedLogs: boolean;
@@ -291,9 +298,21 @@ export function ResultsPage({
                   {selectedMarketSignal.median_price === undefined ? "" : ` · 中位价 ${formatCurrency(selectedMarketSignal.median_price)}`}
                 </p>
                 {selectedBudgetSuggestion ? (
-                  <p className="mt-2 text-xs leading-5">
-                    预算建议：可考虑从「{selectedBudgetSuggestion.from_module_name}」向「{selectedBudgetSuggestion.to_module_name}」调配 {formatCurrency(selectedBudgetSuggestion.amount)}，确认前不会修改方案。
-                  </p>
+                  <div className="mt-3 rounded-[16px] border border-[#efc7b2] bg-white/80 p-3">
+                    <p className="text-xs leading-5">
+                      预算建议：可从「{selectedBudgetSuggestion.from_module_name}」向「{selectedBudgetSuggestion.to_module_name}」调配 {formatCurrency(selectedBudgetSuggestion.amount)}。这是基于本轮真实候选价格生成的建议，确认前不会修改方案。
+                    </p>
+                    <Button
+                      className="mt-3 w-full"
+                      size="sm"
+                      variant="outline"
+                      disabled={busy}
+                      onClick={() => onApplyBudgetSuggestion(selectedBudgetSuggestion)}
+                    >
+                      <ArrowRight className="mr-2 h-4 w-4" />
+                      确认调配并查看新规划
+                    </Button>
+                  </div>
                 ) : null}
               </div>
             ) : null}

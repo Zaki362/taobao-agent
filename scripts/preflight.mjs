@@ -189,6 +189,7 @@ function assertRequiredFiles() {
     "app/api/cart/add/route.ts",
     "app/api/mcp/status/route.ts",
     "app/api/session/agent-directives/route.ts",
+    "app/api/session/budget-reallocation/route.ts",
     "app/api/session/search-strategy/route.ts",
     "app/api/session/state/route.ts",
     "app/api/runtime/readiness/route.ts",
@@ -276,6 +277,7 @@ function assertArchitectureContracts() {
   const reviewer = tryReadText("lib/agent/candidate-reviewer.ts");
   const directives = tryReadText("lib/agent/directives.ts");
   const decisionEngine = tryReadText("lib/agent/decision-engine.ts");
+  const marketFeedback = tryReadText("lib/agent/market-feedback.ts");
   const orchestrator = tryReadText("lib/agent/orchestrator.ts");
   const refiner = tryReadText("lib/agent/refiner.ts");
   const prompts = tryReadText("lib/llm/prompts.ts");
@@ -306,6 +308,7 @@ function assertArchitectureContracts() {
   const planRoute = tryReadText("app/api/scene/plan/route.ts");
   const refineRoute = tryReadText("app/api/scene/refine/route.ts");
   const agentDirectivesRoute = tryReadText("app/api/session/agent-directives/route.ts");
+  const budgetReallocationRoute = tryReadText("app/api/session/budget-reallocation/route.ts");
   const searchStrategyRoute = tryReadText("app/api/session/search-strategy/route.ts");
   const sessionsRoute = tryReadText("app/api/sessions/route.ts");
   const sessionStateRoute = tryReadText("app/api/session/state/route.ts");
@@ -329,6 +332,7 @@ function assertArchitectureContracts() {
     !reviewer ||
     !directives ||
     !decisionEngine ||
+    !marketFeedback ||
     !orchestrator ||
     !refiner ||
     !prompts ||
@@ -359,6 +363,7 @@ function assertArchitectureContracts() {
     !planRoute ||
     !refineRoute ||
     !agentDirectivesRoute ||
+    !budgetReallocationRoute ||
     !searchStrategyRoute ||
     !sessionsRoute ||
     !sessionStateRoute ||
@@ -562,6 +567,19 @@ function assertArchitectureContracts() {
         matcher.includes("agent_directives.autonomy_level") &&
         matcher.includes("agent_directives.search_depth"),
       message: "AI 执行档位和模块搜索任务包必须可由用户在规划确认页调整，并写回后端 session 影响后续搜索深度与关键词"
+    },
+    {
+      ok:
+        marketFeedback.includes("applyBudgetReallocationSuggestion") &&
+        marketFeedback.includes("MAX_REALLOCATION_RATIO") &&
+        marketFeedback.includes("预算总额校验失败") &&
+        orchestrator.includes("applyMarketBudgetSuggestion") &&
+        budgetReallocationRoute.includes("confirmed !== true") &&
+        budgetReallocationRoute.includes("applyMarketBudgetSuggestion") &&
+        dashboard.includes("/api/session/budget-reallocation") &&
+        dashboard.includes("applyBudgetSuggestion") &&
+        dashboardResults.includes("确认调配并查看新规划"),
+      message: "真实候选产生的跨模块预算建议必须由用户显式确认、由服务端校验金额与总额，并只失效受影响模块"
     },
     {
       ok: !types.includes('| "confirm_refine"') && !config.includes("confirm_refine:"),

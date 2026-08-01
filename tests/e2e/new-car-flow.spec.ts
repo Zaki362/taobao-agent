@@ -11,16 +11,18 @@ const executorHeaders = (token: string) => ({
 function candidatesFor(job: { id: string; payload: Record<string, unknown> }) {
   const moduleId = String(job.payload.module_id ?? "module");
   const moduleName = String(job.payload.module_name ?? "新车用品");
+  const moduleBudget = Math.max(1, Number(job.payload.budget) || 200);
+  const ratios = moduleName.includes("安全") ? [1.2, 1.35, 1.5] : [0.25, 0.35, 0.45];
   return recommendationTypes.map((recommendationType, index) => ({
     product_id: `${moduleId}-${index + 1}`,
     title: `${moduleName} E2E 真实链路候选 ${index + 1}`,
-    price: 99 + index * 60,
+    price: Math.round(moduleBudget * ratios[index] * 100) / 100,
     source: "淘宝本地执行器测试",
     shop_name: `测试旗舰店 ${index + 1}`,
     image_url: "https://img.alicdn.com/imgextra/i1/O1CN01dummy.jpg",
     detail_url: `https://item.taobao.com/item.htm?id=${encodeURIComponent(`${moduleId}${index + 1}`)}`,
     shop_badges: ["旗舰店"],
-    highlights: ["适配新车阶段", "预算内候选"],
+    highlights: ["适配新车阶段", "真实价格样本"],
     risk_notes: ["当前为搜索结果摘要，未自动打开详情页，建议点开淘宝详情页确认规格与适配性"],
     fit_reason: `符合${moduleName}模块的预算和使用阶段。`,
     recommendation_type: recommendationType,
@@ -260,6 +262,61 @@ test("authenticated new-car workflow reaches recommendations through the durable
     await expect(page.getByText(/已观察：\d+\/\d+ 个模块/)).toBeVisible();
     await expect(page.getByText("本地执行器队列", { exact: false }).first()).toBeVisible();
 
+    const feedbackResponse = await page.request.get(`/api/session/state?session_id=${persistedSessionId}`);
+    const feedbackState = await feedbackResponse.json() as {
+      shopping_plan: { modules: Array<{ module_id: string; module_name: string; budget_allocation: number }> };
+      module_candidates: Record<string, unknown[]>;
+      market_feedback: {
+        reallocation_suggestions: Array<{
+          from_module_id: string;
+          from_module_name: string;
+          to_module_id: string;
+          to_module_name: string;
+          amount: number;
+        }>;
+      };
+    };
+    const budgetSuggestion = feedbackState.market_feedback.reallocation_suggestions[0];
+    expect(budgetSuggestion).toBeTruthy();
+    const previousPlanTotal = feedbackState.shopping_plan.modules.reduce(
+      (total, module) => total + module.budget_allocation,
+      0
+    );
+    const missingConfirmation = await page.request.post("/api/session/budget-reallocation", {
+      headers: { Origin: "http://127.0.0.1:3100" },
+      data: {
+        session_id: persistedSessionId,
+        from_module_id: budgetSuggestion.from_module_id,
+        to_module_id: budgetSuggestion.to_module_id,
+        confirmed: false
+      }
+    });
+    expect(missingConfirmation.status()).toBe(400);
+
+    await page.goto("/?resume=1");
+    await expect(page.getByText("确认下单清单")).toBeVisible();
+    await page.getByRole("button", { name: "返回上一步继续加购" }).click();
+    await page.getByRole("button", { name: budgetSuggestion.to_module_name, exact: true }).click();
+    await expect(page.getByRole("button", { name: "确认调配并查看新规划" })).toBeVisible();
+    page.once("dialog", (dialog) => dialog.accept());
+    await page.getByRole("button", { name: "确认调配并查看新规划" }).click();
+    await expect(page.getByText("确认购物规划")).toBeVisible();
+
+    const reallocatedResponse = await page.request.get(`/api/session/state?session_id=${persistedSessionId}`);
+    const reallocatedState = await reallocatedResponse.json() as typeof feedbackState;
+    expect(reallocatedState.shopping_plan.modules.reduce(
+      (total, module) => total + module.budget_allocation,
+      0
+    )).toBe(previousPlanTotal);
+    expect(reallocatedState.module_candidates[budgetSuggestion.from_module_id]).toBeUndefined();
+    expect(reallocatedState.module_candidates[budgetSuggestion.to_module_id]).toBeUndefined();
+    expect(Object.keys(reallocatedState.module_candidates).length).toBe(
+      Object.keys(feedbackState.module_candidates).length - 2
+    );
+
+    await page.goto("/hosted");
+    await expect(page.getByText("Agent Runtime 2.0")).toBeVisible();
+
     stopExecutor = true;
     await executor;
     const sessionsResponse = await page.request.get("/api/sessions");
@@ -310,7 +367,7 @@ test("authenticated new-car workflow reaches recommendations through the durable
     await expect(page.getByRole("button", { name: "取消待执行" }).first()).toBeVisible();
 
     await page.getByRole("button", { name: "返回当前进度" }).click();
-    await expect(page.getByText("确认下单清单")).toBeVisible();
+    await expect(page.getByText("确认购物规划")).toBeVisible();
   } finally {
     stopExecutor = true;
     await executor;
