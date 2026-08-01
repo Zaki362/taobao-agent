@@ -4,6 +4,7 @@ import {
   SessionState,
   ShoppingPlanModule
 } from "@/lib/session/types";
+import { validateAutonomousSearchKeyword } from "@/lib/agent/search-strategy";
 
 const MAX_AGENT_DECISIONS = 120;
 
@@ -40,10 +41,18 @@ function hasSkippedModule(state: SessionState, moduleId: string) {
 function canRetryFromReview(state: SessionState, module: ShoppingPlanModule) {
   const review = state.module_reviews[module.module_id];
   const trace = state.module_search_traces[module.module_id];
-  const reviewKeyword = review?.suggested_keyword?.replace(/\s+/g, " ").trim();
+  const reviewKeywordValidation = review?.suggested_keyword
+    ? validateAutonomousSearchKeyword(module, review.suggested_keyword)
+    : undefined;
+  const reviewKeyword = reviewKeywordValidation?.valid
+    ? reviewKeywordValidation.normalized
+    : undefined;
   const marketSignal = state.market_feedback.module_signals[module.module_id];
-  const marketKeyword = marketSignal?.pressure === "over_budget"
-    ? marketSignal.suggested_keyword?.replace(/\s+/g, " ").trim()
+  const marketKeywordValidation = marketSignal?.pressure === "over_budget" && marketSignal.suggested_keyword
+    ? validateAutonomousSearchKeyword(module, marketSignal.suggested_keyword)
+    : undefined;
+  const marketKeyword = marketKeywordValidation?.valid
+    ? marketKeywordValidation.normalized
     : undefined;
   if (!review) {
     return null;

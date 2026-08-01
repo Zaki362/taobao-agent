@@ -161,7 +161,7 @@ pending -> leased -> running -> completed
 - `wait_for_tools`
 - `complete_workflow`
 
-后端在执行前验证模块 ID、活跃任务、重复搜索、补搜关键词、可跳过条件、置信度和剩余工具预算。模型生成的 `keyword_override` 可以自主增加品牌、功能与价格带，但必须保留模块品类锚点，并通过 URL、工具指令、命令行参数、控制字符与长度检查；`retry_module` 还必须已有首轮搜索轨迹。模型输出无效、低置信度、超时或超过预算时，系统自动使用确定性规则决策。工具调用权不直接交给模型。
+后端在执行前验证模块 ID、活跃任务、重复搜索、补搜关键词、可跳过条件、置信度和剩余工具预算。模型生成的 `keyword_override` 可以自主增加品牌、功能与价格带，但必须保留模块品类锚点，并通过 URL、工具指令、命令行参数、控制字符与长度检查；`retry_module` 还必须已有首轮搜索轨迹。相同校验会在 `product-matcher` 入队前再次执行，并覆盖候选复盘建议、规划主/备用词及用户手动编辑入口。模型输出无效、低置信度、超时或超过预算时，系统自动使用确定性规则决策。工具调用权不直接交给模型。
 
 模型路由按任务复杂度选择：没有候选或恢复证据的常规模块调度使用 `deepseek-chat`，候选偏薄补搜、模块失败恢复或真实价格产生预算压力时使用 `deepseek-reasoner`。两类决策分别受 `DEEPSEEK_AGENT_CHAT_TIMEOUT_MS` 和 `DEEPSEEK_AGENT_REASONER_TIMEOUT_MS` 约束，执行台会记录实际模型、fallback 原因和 P95 延迟。
 

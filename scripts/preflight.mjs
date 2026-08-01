@@ -595,6 +595,10 @@ function assertArchitectureContracts() {
         searchStrategy.includes("moduleSearchAnchorTerms") &&
         agentRuntimeV2.includes("validateAutonomousSearchKeyword") &&
         agentRuntimeV2.includes("补搜前必须已有首轮搜索记录") &&
+        matcher.includes("requireValidModuleSearchKeyword") &&
+        decisionEngine.includes("validateAutonomousSearchKeyword") &&
+        orchestrator.includes("requireValidModuleSearchKeyword") &&
+        responses.includes("invalid_search_keyword") &&
         prompts.includes("allowed_category_anchors") &&
         orchestrator.includes("getNextAgentAction") &&
         agentNextActionRoute.includes("getNextAgentAction") &&

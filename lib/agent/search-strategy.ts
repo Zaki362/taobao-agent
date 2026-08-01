@@ -25,6 +25,16 @@ export interface AutonomousSearchKeywordValidation {
   notes: string[];
 }
 
+export class InvalidSearchKeywordError extends Error {
+  constructor(
+    message: string,
+    public readonly notes: string[]
+  ) {
+    super(message);
+    this.name = "InvalidSearchKeywordError";
+  }
+}
+
 const unsafeKeywordPatterns = [
   { pattern: /https?:\/\/|www\./i, note: "自主搜索词不能包含 URL" },
   { pattern: /\b(?:qodercli|taobao-native|sourceApp)\b/i, note: "自主搜索词不能包含工具调用指令" },
@@ -69,6 +79,14 @@ export function validateAutonomousSearchKeyword(
     matched_anchors: matchedAnchors,
     notes: [...new Set(notes)]
   };
+}
+
+export function requireValidModuleSearchKeyword(module: ShoppingPlanModule, value: string) {
+  const validation = validateAutonomousSearchKeyword(module, value);
+  if (!validation.valid) {
+    throw new InvalidSearchKeywordError(validation.notes.join("；"), validation.notes);
+  }
+  return validation.normalized;
 }
 
 function countAnchorMatches(keyword: string, module: ShoppingPlanModule) {

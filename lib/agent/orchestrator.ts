@@ -10,6 +10,7 @@ import { AgentDirectiveProfile, applyAgentDirectiveProfile } from "@/lib/agent/d
 import { runDeepSeekPlanner, runTemplatePlannerForScenario } from "@/lib/agent/planner";
 import { reviewPlanWithAgent } from "@/lib/agent/plan-reviewer";
 import { runModuleSearch } from "@/lib/agent/product-matcher";
+import { requireValidModuleSearchKeyword } from "@/lib/agent/search-strategy";
 import { getDefaultSceneInput, runSceneParser, sceneSummary } from "@/lib/agent/scene";
 import { runRefiner } from "@/lib/agent/refiner";
 import { getExecutionBackend } from "@/lib/mcp/client";
@@ -291,14 +292,10 @@ export async function updateModuleSearchStrategy(
     throw new Error("module not found");
   }
 
-  const primaryKeyword = payload.primaryKeyword.replace(/\s+/g, " ").trim().slice(0, 80);
-  if (!primaryKeyword) {
-    throw new Error("primary keyword is required");
-  }
+  const primaryKeyword = requireValidModuleSearchKeyword(module, payload.primaryKeyword);
 
   const alternateKeywords = (payload.alternateKeywords ?? [])
-    .map((item) => item.replace(/\s+/g, " ").trim().slice(0, 80))
-    .filter(Boolean)
+    .map((item) => requireValidModuleSearchKeyword(module, item))
     .filter((item, index, list) => item !== primaryKeyword && list.indexOf(item) === index)
     .slice(0, 4);
 

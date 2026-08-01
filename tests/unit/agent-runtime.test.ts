@@ -141,6 +141,46 @@ describe("Agent Runtime 2.0", () => {
     expect(validation.notes).toContain("补搜前必须已有首轮搜索记录");
   });
 
+  it("ignores an unrelated candidate-review retry keyword", () => {
+    const state = createSessionFixture();
+    const module = state.shopping_plan.modules[0];
+    state.shopping_plan.agent_directives.autonomy_level = "探索执行";
+    state.shopping_plan.agent_directives.search_depth = "深度搜索";
+    state.module_candidates[module.module_id] = [{
+      product_id: "candidate-1",
+      title: `${module.module_name} 候选`,
+      price: 99,
+      source: "淘宝",
+      shop_name: "测试旗舰店",
+      image_url: "https://example.com/item.jpg",
+      detail_url: "https://item.taobao.com/item.htm?id=candidate-1",
+      shop_badges: ["旗舰店"],
+      highlights: [module.module_name],
+      risk_notes: ["仅用于测试"],
+      fit_reason: "符合当前模块",
+      recommendation_type: "稳妥推荐",
+      module_id: module.module_id
+    }];
+    state.module_reviews[module.module_id] = {
+      module_id: module.module_id,
+      status: "thin",
+      source: "deepseek",
+      summary: "候选偏薄",
+      strengths: [],
+      caveats: ["候选不足"],
+      next_action: "建议补搜",
+      suggested_keyword: "双人露营帐篷 户外过夜",
+      generated_at: new Date().toISOString()
+    };
+
+    const decision = decideNextAgentAction(state);
+
+    expect(decision).not.toMatchObject({
+      action: "retry_module",
+      module_id: module.module_id
+    });
+  });
+
   it("accepts and normalizes a semantically aligned autonomous retry", async () => {
     const state = createSessionFixture();
     const module = state.shopping_plan.modules[0];

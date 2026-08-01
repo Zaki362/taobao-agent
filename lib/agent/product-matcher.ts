@@ -10,6 +10,10 @@ import { ModuleCandidateReview, ModuleSearchAttempt, ModuleSearchTrace, ProductC
 import { getScenarioConfig } from "@/lib/scenarios";
 import { enqueueModuleSearchJob } from "@/lib/runtime/jobs";
 import { invalidateAgentCompletionArtifacts } from "@/lib/session/bundle-adoption";
+import {
+  requireValidModuleSearchKeyword,
+  validateAutonomousSearchKeyword
+} from "@/lib/agent/search-strategy";
 
 function truncateSentence(text: string, maxLength = 58) {
   const compact = text.replace(/\s+/g, " ").trim();
@@ -49,18 +53,34 @@ function buildSearchKeywordQueue(
   module: ShoppingPlanModule,
   keywordOverride?: string
 ) {
-  const primary = module.search_strategy?.primary_keyword || module.search_keyword || searchIntentForModule(state.scene_brief, module);
+  const plannedPrimary = module.search_strategy?.primary_keyword || module.search_keyword || "";
+  const plannedPrimaryValidation = plannedPrimary
+    ? validateAutonomousSearchKeyword(module, plannedPrimary)
+    : undefined;
+  const primary = plannedPrimaryValidation?.valid
+    ? plannedPrimaryValidation.normalized
+    : requireValidModuleSearchKeyword(module, searchIntentForModule(state.scene_brief, module));
   const alternates = (module.search_strategy?.alternate_keywords ?? [])
-    .map((keyword) => keyword.replace(/\s+/g, " ").trim())
+    .map((keyword) => validateAutonomousSearchKeyword(module, keyword))
+    .filter((validation) => validation.valid)
+    .map((validation) => validation.normalized)
     .filter((keyword) => keyword && keyword !== primary);
-  const override = keywordOverride?.replace(/\s+/g, " ").trim();
+  const override = keywordOverride
+    ? requireValidModuleSearchKeyword(module, keywordOverride)
+    : undefined;
   const previousReview = state.module_reviews[module.module_id];
-  const reviewSuggestedKeyword =
+  const rawReviewSuggestedKeyword =
     previousReview &&
     (previousReview.status === "thin" || previousReview.status === "needs_refine") &&
     previousReview.suggested_keyword
       ? previousReview.suggested_keyword.replace(/\s+/g, " ").trim()
       : "";
+  const reviewSuggestedValidation = rawReviewSuggestedKeyword
+    ? validateAutonomousSearchKeyword(module, rawReviewSuggestedKeyword)
+    : undefined;
+  const reviewSuggestedKeyword = reviewSuggestedValidation?.valid
+    ? reviewSuggestedValidation.normalized
+    : "";
   const orderedKeywords = override
     ? [override, reviewSuggestedKeyword, primary, ...alternates]
     : state.last_action === "换一批推荐" && alternates.length > 0
@@ -134,11 +154,15 @@ function shouldTryAdditionalSearch(
 
 function shouldUseReviewSuggestion(
   state: SessionState,
+  module: ShoppingPlanModule,
   review: ModuleCandidateReview,
   searchedKeywords: Set<string>,
   candidateCount: number
 ) {
-  const suggestedKeyword = review.suggested_keyword?.replace(/\s+/g, " ").trim();
+  const validation = review.suggested_keyword
+    ? validateAutonomousSearchKeyword(module, review.suggested_keyword)
+    : undefined;
+  const suggestedKeyword = validation?.valid ? validation.normalized : undefined;
   if (!suggestedKeyword || searchedKeywords.has(suggestedKeyword)) {
     return false;
   }
@@ -232,6 +256,9 @@ function setModuleSearchTrace({
   recoveryKeyword?: string;
 }) {
   const now = new Date().toISOString();
+  const reviewSuggestedValidation = review.suggested_keyword
+    ? validateAutonomousSearchKeyword(module, review.suggested_keyword)
+    : undefined;
   const searchedKeywords = attempts
     .filter((attempt) => attempt.status !== "skipped")
     .map((attempt) => attempt.keyword)
@@ -249,7 +276,9 @@ function setModuleSearchTrace({
     candidate_count: candidates.length,
     review_status: review.status,
     review_summary: review.summary,
-    recovery_keyword: recoveryKeyword || review.suggested_keyword,
+    recovery_keyword:
+      recoveryKeyword ||
+      (reviewSuggestedValidation?.valid ? reviewSuggestedValidation.normalized : undefined),
     ai_decision_summary: buildTraceSummary({ module, candidates, attempts, review, recoveryKeyword }),
     next_action: review.next_action,
     generated_at: state.module_search_traces[module.module_id]?.generated_at ?? now,
@@ -427,8 +456,11 @@ export async function runModuleSearch(
   let review = assessment.review;
   let recoveryKeyword: string | undefined;
 
-  if (shouldUseReviewSuggestion(state, review, searchedKeywords, candidates.length)) {
-    const suggestedKeyword = review.suggested_keyword?.replace(/\s+/g, " ").trim();
+  if (shouldUseReviewSuggestion(state, module, review, searchedKeywords, candidates.length)) {
+    const suggestedValidation = review.suggested_keyword
+      ? validateAutonomousSearchKeyword(module, review.suggested_keyword)
+      : undefined;
+    const suggestedKeyword = suggestedValidation?.valid ? suggestedValidation.normalized : undefined;
     if (suggestedKeyword) {
       try {
         const recoveryResult = await executeMcpTool(state, "search_taobao_products", {

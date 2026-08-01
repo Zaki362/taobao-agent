@@ -140,6 +140,9 @@ export function apiRouteError(error: unknown, fallbackMessage: string) {
   if (error instanceof ApiRouteError) {
     return apiError(redactSensitiveText(error.message), error.status, error.code);
   }
+  if (error instanceof Error && error.name === "InvalidSearchKeywordError") {
+    return apiError(redactSensitiveText(error.message), 400, "invalid_search_keyword");
+  }
 
   const message = error instanceof Error && error.message ? error.message : fallbackMessage;
   const normalized = message.toLowerCase();
