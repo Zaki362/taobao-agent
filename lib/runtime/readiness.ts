@@ -4,6 +4,10 @@ import { query } from "@/lib/runtime/database";
 import { getRuntimeRepository, runtimeStoreMode } from "@/lib/runtime";
 import { allowDemoCartFallback, getProductMode } from "@/lib/runtime/product-mode";
 import { summarizeExecutorDevices } from "@/lib/runtime/executor-status";
+import {
+  summarizeWorkflowRecoveryHeartbeat,
+  WORKFLOW_RECOVERY_SERVICE
+} from "@/lib/runtime/recovery-heartbeat";
 
 export type ReadinessStatus = "pass" | "fail" | "warn";
 
@@ -51,6 +55,10 @@ export async function inspectRuntimeReadiness(userId?: string) {
   const productMode = getProductMode();
   const demoCartFallback = allowDemoCartFallback();
   const workflowRecoveryConfigured = (process.env.SCENECART_CRON_SECRET?.trim().length ?? 0) >= 32;
+  const workflowRecoveryHeartbeat = workflowRecoveryConfigured
+    ? await getRuntimeRepository().getServiceHeartbeat(WORKFLOW_RECOVERY_SERVICE).catch(() => null)
+    : null;
+  const workflowRecovery = summarizeWorkflowRecoveryHeartbeat(workflowRecoveryHeartbeat);
 
   checks.push(check(
     "product_mode",
@@ -114,15 +122,31 @@ export async function inspectRuntimeReadiness(userId?: string) {
     authRequired ? "AUTH_REQUIRED 已开启" : "当前允许匿名使用",
     "正式环境设置 AUTH_REQUIRED=true"
   ));
+  const workflowRecoveryStatus: ReadinessStatus = !workflowRecoveryConfigured
+    ? "fail"
+    : workflowRecovery.state === "healthy"
+      ? "pass"
+      : workflowRecovery.state === "degraded"
+        ? "warn"
+        : "fail";
+  const workflowRecoveryDetail = !workflowRecoveryConfigured
+    ? "未配置服务端恢复扫描密钥，进程中断后的续跑仍可能依赖本地执行器"
+    : workflowRecovery.state === "missing"
+      ? "恢复调度已配置，但尚未收到 Worker 或 Cron 心跳"
+      : workflowRecovery.state === "stale"
+        ? `恢复调度心跳已过期，最后一次运行在 ${workflowRecovery.last_heartbeat_at ?? "未知时间"}`
+        : workflowRecovery.state === "failed"
+          ? `最近一次恢复扫描失败，时间 ${workflowRecovery.last_heartbeat_at ?? "未知"}`
+          : workflowRecovery.state === "degraded"
+            ? `恢复调度在线，但最近一批存在失败会话，时间 ${workflowRecovery.last_heartbeat_at ?? "未知"}`
+            : `恢复调度运行正常，最近心跳 ${workflowRecovery.last_heartbeat_at ?? "未知"}`;
   checks.push(check(
     "workflow_recovery",
     "服务端工作流恢复",
-    workflowRecoveryConfigured ? "pass" : "fail",
+    workflowRecoveryStatus,
     true,
-    workflowRecoveryConfigured
-      ? "恢复扫描端点已配置独立的高熵访问密钥"
-      : "未配置服务端恢复扫描密钥，进程中断后的续跑仍可能依赖本地执行器",
-    "设置至少 32 字符的 SCENECART_CRON_SECRET，并启动 worker:recovery 或配置云端 Cron"
+    workflowRecoveryDetail,
+    "设置 SCENECART_CRON_SECRET，并确认 worker:recovery 或云端 Cron 持续调用内部恢复端点"
   ));
   checks.push(check(
     "secure_cookie",
@@ -234,6 +258,10 @@ export async function inspectRuntimeReadiness(userId?: string) {
     ready_for_production: readyForProduction,
     operational_for_shopping: readyForProduction && executorReady,
     executor_capabilities: executorCapabilities,
+    workflow_recovery: {
+      configured: workflowRecoveryConfigured,
+      ...workflowRecovery
+    },
     checked_at: new Date().toISOString(),
     checks
   };

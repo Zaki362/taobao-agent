@@ -7,6 +7,7 @@ import type {
   ExecutorDevice,
   RuntimeJob,
   RuntimeRepository,
+  RuntimeServiceHeartbeat,
   RuntimeUser
 } from "@/lib/runtime/types";
 import type { SessionState } from "@/lib/session/types";
@@ -84,6 +85,15 @@ function normalizeEvent(row: Record<string, unknown>): ExecutionEvent {
     event_type: String(row.event_type),
     payload: (row.payload ?? {}) as Record<string, unknown>,
     created_at: iso(row.created_at as Date)!
+  };
+}
+
+function normalizeServiceHeartbeat(row: Record<string, unknown>): RuntimeServiceHeartbeat {
+  return {
+    service_name: String(row.service_name),
+    status: row.status as RuntimeServiceHeartbeat["status"],
+    metadata: (row.metadata ?? {}) as Record<string, unknown>,
+    checked_at: iso(row.checked_at as Date)!
   };
 }
 
@@ -431,6 +441,33 @@ export const postgresRuntimeRepository: RuntimeRepository = {
        WHERE status IN ('leased', 'running') AND lease_expires_at <= NOW()`
     );
     return result.rowCount ?? 0;
+  },
+
+  async recordServiceHeartbeat(heartbeat) {
+    const result = await query(
+      `INSERT INTO runtime_service_heartbeats(service_name, status, metadata, checked_at)
+       VALUES($1, $2, $3::jsonb, $4)
+       ON CONFLICT(service_name) DO UPDATE SET
+         status = EXCLUDED.status,
+         metadata = EXCLUDED.metadata,
+         checked_at = EXCLUDED.checked_at
+       RETURNING *`,
+      [
+        heartbeat.service_name,
+        heartbeat.status,
+        JSON.stringify(heartbeat.metadata),
+        heartbeat.checked_at
+      ]
+    );
+    return normalizeServiceHeartbeat(result.rows[0]);
+  },
+
+  async getServiceHeartbeat(serviceName) {
+    const result = await query(
+      "SELECT * FROM runtime_service_heartbeats WHERE service_name = $1",
+      [serviceName]
+    );
+    return result.rowCount ? normalizeServiceHeartbeat(result.rows[0]) : null;
   },
 
   async appendEvent(input) {

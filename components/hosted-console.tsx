@@ -47,6 +47,14 @@ type RuntimeMetrics = {
     payload: Record<string, unknown>;
     created_at: string;
   }>;
+  workflow_recovery: {
+    configured: boolean;
+    state: "missing" | "stale" | "healthy" | "degraded" | "failed";
+    status: "healthy" | "degraded" | "failed" | null;
+    last_heartbeat_at: string | null;
+    age_ms: number | null;
+    stale_after_ms: number;
+  };
   llm: {
     calls: number;
     connected: number;
@@ -290,7 +298,7 @@ export function HostedConsole() {
         </div>
 
         {runtimeMetrics?.available ? (
-          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-6">
+          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-7">
             <InfoBlock label="队列积压" value={`${runtimeMetrics.jobs.pending} 个待领取`} />
             <InfoBlock label="执行中" value={`${runtimeMetrics.jobs.active} 个任务`} />
             <InfoBlock label="失败 / 取消" value={`${runtimeMetrics.jobs.failed} / ${runtimeMetrics.jobs.cancelled}`} />
@@ -302,6 +310,18 @@ export function HostedConsole() {
             <InfoBlock
               label="能力覆盖"
               value={`搜索 ${runtimeMetrics.devices.capabilities.module_search.online} · 加购 ${runtimeMetrics.devices.capabilities.add_to_cart.online}`}
+            />
+            <InfoBlock
+              label="恢复调度"
+              value={runtimeMetrics.workflow_recovery.state === "healthy"
+                ? `正常 · ${formatTime(runtimeMetrics.workflow_recovery.last_heartbeat_at)}`
+                : runtimeMetrics.workflow_recovery.state === "degraded"
+                  ? `部分失败 · ${formatTime(runtimeMetrics.workflow_recovery.last_heartbeat_at)}`
+                  : runtimeMetrics.workflow_recovery.state === "stale"
+                    ? "心跳已过期"
+                    : runtimeMetrics.workflow_recovery.state === "failed"
+                      ? "最近执行失败"
+                      : "尚未运行"}
             />
           </div>
         ) : null}

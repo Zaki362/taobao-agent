@@ -6,6 +6,10 @@ import { getRuntimeRepository } from "@/lib/runtime";
 import { getLlmTelemetrySnapshot } from "@/lib/llm/telemetry";
 import { evaluateRuntimeHealth } from "@/lib/runtime/monitoring";
 import { isExecutorDeviceOnline, summarizeExecutorDevices } from "@/lib/runtime/executor-status";
+import {
+  summarizeWorkflowRecoveryHeartbeat,
+  WORKFLOW_RECOVERY_SERVICE
+} from "@/lib/runtime/recovery-heartbeat";
 
 export async function GET(request: NextRequest) {
   try {
@@ -15,10 +19,11 @@ export async function GET(request: NextRequest) {
     if (!session) return apiOk({ available: false });
 
     const repository = getRuntimeRepository();
-    const [jobs, devices, deviceAuditEvents] = await Promise.all([
+    const [jobs, devices, deviceAuditEvents, recoveryHeartbeat] = await Promise.all([
       repository.listJobs(sessionId, identity.userId),
       identity.userId ? repository.listDevices(identity.userId) : Promise.resolve([]),
-      identity.userId ? repository.listAuditEvents(identity.userId, 12) : Promise.resolve([])
+      identity.userId ? repository.listAuditEvents(identity.userId, 12) : Promise.resolve([]),
+      repository.getServiceHeartbeat(WORKFLOW_RECOVERY_SERVICE)
     ]);
     const now = Date.now();
     const counts = jobs.reduce<Record<string, number>>((result, job) => {
@@ -63,6 +68,10 @@ export async function GET(request: NextRequest) {
         .at(-1) ?? null
     };
     const llmMetrics = getLlmTelemetrySnapshot();
+    const workflowRecovery = {
+      configured: (process.env.SCENECART_CRON_SECRET?.trim().length ?? 0) >= 32,
+      ...summarizeWorkflowRecoveryHeartbeat(recoveryHeartbeat, now)
+    };
 
     return apiOk({
       available: true,
@@ -70,11 +79,13 @@ export async function GET(request: NextRequest) {
       jobs: jobMetrics,
       devices: deviceMetrics,
       device_audit_events: deviceAuditEvents,
+      workflow_recovery: workflowRecovery,
       llm: llmMetrics,
       health: evaluateRuntimeHealth({
         jobs: jobMetrics,
         devices: deviceMetrics,
         llm: llmMetrics,
+        workflowRecovery,
         agentRuntime: session.agent_runtime
       }),
       generated_at: new Date(now).toISOString()

@@ -4,9 +4,13 @@ import { localRuntimeRepository, resetLocalRuntimeForTests } from "@/lib/runtime
 
 const originalProductMode = process.env.SCENECART_PRODUCT_MODE;
 const originalBackend = process.env.TAOBAO_EXECUTION_BACKEND;
+const originalRecoverySecret = process.env.SCENECART_CRON_SECRET;
+const originalRecoveryStaleMs = process.env.SCENECART_RECOVERY_STALE_MS;
 
 beforeEach(() => {
   resetLocalRuntimeForTests();
+  delete process.env.SCENECART_CRON_SECRET;
+  delete process.env.SCENECART_RECOVERY_STALE_MS;
 });
 
 afterEach(() => {
@@ -14,6 +18,10 @@ afterEach(() => {
   else process.env.SCENECART_PRODUCT_MODE = originalProductMode;
   if (originalBackend === undefined) delete process.env.TAOBAO_EXECUTION_BACKEND;
   else process.env.TAOBAO_EXECUTION_BACKEND = originalBackend;
+  if (originalRecoverySecret === undefined) delete process.env.SCENECART_CRON_SECRET;
+  else process.env.SCENECART_CRON_SECRET = originalRecoverySecret;
+  if (originalRecoveryStaleMs === undefined) delete process.env.SCENECART_RECOVERY_STALE_MS;
+  else process.env.SCENECART_RECOVERY_STALE_MS = originalRecoveryStaleMs;
 });
 
 describe("production readiness", () => {
@@ -68,5 +76,43 @@ describe("production readiness", () => {
     expect(readiness.executor_capabilities.capabilities.module_search.available).toBe(true);
     expect(readiness.executor_capabilities.capabilities.add_to_cart.available).toBe(false);
     expect(readiness.operational_for_shopping).toBe(false);
+  });
+
+  it("requires evidence that the configured recovery scheduler is actually running", async () => {
+    process.env.SCENECART_CRON_SECRET = "readiness-recovery-secret-with-at-least-32-characters";
+
+    const missing = await inspectRuntimeReadiness();
+    expect(missing.checks.find((item) => item.id === "workflow_recovery")).toMatchObject({
+      status: "fail",
+      detail: expect.stringContaining("尚未收到")
+    });
+
+    await localRuntimeRepository.recordServiceHeartbeat({
+      service_name: "workflow_recovery",
+      status: "healthy",
+      metadata: { scanned: 0, recovered: 0, failed: 0 },
+      checked_at: new Date().toISOString()
+    });
+    const healthy = await inspectRuntimeReadiness();
+    expect(healthy.checks.find((item) => item.id === "workflow_recovery")?.status).toBe("pass");
+    expect(healthy.workflow_recovery.state).toBe("healthy");
+  });
+
+  it("fails readiness when the recovery scheduler heartbeat is stale", async () => {
+    process.env.SCENECART_CRON_SECRET = "readiness-recovery-secret-with-at-least-32-characters";
+    process.env.SCENECART_RECOVERY_STALE_MS = "60000";
+    await localRuntimeRepository.recordServiceHeartbeat({
+      service_name: "workflow_recovery",
+      status: "healthy",
+      metadata: {},
+      checked_at: new Date(Date.now() - 120_000).toISOString()
+    });
+
+    const readiness = await inspectRuntimeReadiness();
+    expect(readiness.checks.find((item) => item.id === "workflow_recovery")).toMatchObject({
+      status: "fail",
+      detail: expect.stringContaining("已过期")
+    });
+    expect(readiness.workflow_recovery.state).toBe("stale");
   });
 });

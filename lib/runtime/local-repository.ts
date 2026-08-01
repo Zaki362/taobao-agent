@@ -7,6 +7,7 @@ import type {
   ExecutorDevice,
   RuntimeJob,
   RuntimeRepository,
+  RuntimeServiceHeartbeat,
   RuntimeUser
 } from "@/lib/runtime/types";
 
@@ -15,6 +16,7 @@ interface LocalRuntimeState {
   authSessions: Map<string, AuthSessionRecord>;
   devices: Map<string, ExecutorDevice>;
   jobs: Map<string, RuntimeJob>;
+  serviceHeartbeats: Map<string, RuntimeServiceHeartbeat>;
   events: ExecutionEvent[];
   eventSequence: number;
 }
@@ -31,10 +33,13 @@ function runtimeState() {
       authSessions: new Map(),
       devices: new Map(),
       jobs: new Map(),
+      serviceHeartbeats: new Map(),
       events: [],
       eventSequence: 0
     };
   }
+  // Preserve compatibility with an already-created dev/HMR singleton after schema additions.
+  globalThis.__sceneCartLocalRuntime.serviceHeartbeats ??= new Map();
   return globalThis.__sceneCartLocalRuntime;
 }
 
@@ -331,6 +336,16 @@ export const localRuntimeRepository: RuntimeRepository = {
       }
     }
     return recovered;
+  },
+
+  async recordServiceHeartbeat(heartbeat) {
+    runtimeState().serviceHeartbeats.set(heartbeat.service_name, copy(heartbeat));
+    return copy(heartbeat);
+  },
+
+  async getServiceHeartbeat(serviceName) {
+    const heartbeat = runtimeState().serviceHeartbeats.get(serviceName);
+    return heartbeat ? copy(heartbeat) : null;
   },
 
   async appendEvent(input) {

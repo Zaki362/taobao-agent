@@ -163,9 +163,13 @@ test("authenticated new-car workflow reaches recommendations through the durable
   const readiness = await readinessResponse.json() as {
     ready_for_production: boolean;
     operational_for_shopping: boolean;
+    workflow_recovery: { state: string };
+    checks: Array<{ id: string; status: string }>;
   };
   expect(readiness.ready_for_production).toBe(false);
   expect(readiness.operational_for_shopping).toBe(false);
+  expect(readiness.workflow_recovery.state).toBe("healthy");
+  expect(readiness.checks.find((item) => item.id === "workflow_recovery")?.status).toBe("pass");
 
   let stopExecutor = false;
   const executor = runExecutorUntilStopped(page.request, deviceToken, () => stopExecutor);

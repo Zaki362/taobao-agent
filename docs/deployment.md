@@ -30,6 +30,7 @@ AUTH_REQUIRED=true
 RUNTIME_STORE=postgres
 TAOBAO_EXECUTION_BACKEND=local_executor
 SCENECART_CRON_SECRET=至少32字符的独立随机密钥
+SCENECART_RECOVERY_STALE_MS=180000
 ```
 
 `DATABASE_URL`、`POSTGRES_PASSWORD`、`DEEPSEEK_API_KEY`、`SCENECART_CRON_SECRET` 和设备令牌应使用部署平台 Secret，不写入镜像、Compose 文件或 Git。自托管 Compose 会启动独立 `recovery` 服务；其他平台应每分钟携带 Bearer Secret 调用 `/api/internal/workflow-recovery`。
@@ -45,7 +46,7 @@ SCENECART_CRON_SECRET=至少32字符的独立随机密钥
 7. 使用隔离淘宝测试账号完成一次搜索；真实加购仅在明确授权且账号能力稳定时验收。
 8. 检查执行台中的任务积压、在线设备、模型 fallback、失败任务和“运行健康诊断”，不得带着严重告警发布。
 
-`health` 只回答进程和数据库是否存活；`readiness` 才会检查正式产品模式、演示加购回退、数据库持久化、认证、服务端恢复、安全 Cookie、正式 HTTPS Origin、DeepSeek、`local_executor`、旧 Mock 标志和当前账号执行器状态，不能用前者代替发布验收。
+`health` 只回答进程和数据库是否存活；`readiness` 才会检查正式产品模式、演示加购回退、数据库持久化、认证、服务端恢复心跳、安全 Cookie、正式 HTTPS Origin、DeepSeek、`local_executor`、旧 Mock 标志和当前账号执行器状态，不能用前者代替发布验收。应用启动后应等待至少一次恢复 Worker/Cron 心跳，再把实例加入正式流量。
 
 `SCENECART_PRODUCT_MODE=production` 会强制关闭演示购物车回退，即使误设 `ALLOW_DEMO_CART_FALLBACK=true` 也不会把真实加购失败伪装成成功。开发预览仍可保留该回退，但 UI 与购物清单必须明确标记“演示购物车”。
 

@@ -70,6 +70,13 @@ export interface ExecutionEvent {
   created_at: string;
 }
 
+export interface RuntimeServiceHeartbeat {
+  service_name: string;
+  status: "healthy" | "degraded" | "failed";
+  metadata: Record<string, unknown>;
+  checked_at: string;
+}
+
 export interface CreateRuntimeJobInput {
   id: string;
   user_id?: string;
@@ -125,6 +132,9 @@ export interface RuntimeRepository {
   ): Promise<RuntimeJob>;
   cancelJob(jobId: string, userId?: string): Promise<RuntimeJob | null>;
   recoverExpiredJobs(): Promise<number>;
+
+  recordServiceHeartbeat(heartbeat: RuntimeServiceHeartbeat): Promise<RuntimeServiceHeartbeat>;
+  getServiceHeartbeat(serviceName: string): Promise<RuntimeServiceHeartbeat | null>;
 
   appendEvent(input: Omit<ExecutionEvent, "id" | "created_at">): Promise<ExecutionEvent>;
   listEvents(sessionId: string, afterId: number, userId?: string, limit?: number): Promise<ExecutionEvent[]>;

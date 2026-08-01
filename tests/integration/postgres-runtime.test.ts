@@ -57,6 +57,27 @@ describeWithDatabase("PostgreSQL production runtime contract", () => {
     expect(await postgresRuntimeRepository.listSessions(otherUserId)).toHaveLength(0);
   });
 
+  it("persists the latest runtime service heartbeat with upsert semantics", async () => {
+    const first = await postgresRuntimeRepository.recordServiceHeartbeat({
+      service_name: "workflow_recovery",
+      status: "degraded",
+      metadata: { failed: 1 },
+      checked_at: new Date(Date.now() - 1_000).toISOString()
+    });
+    const latestTime = new Date().toISOString();
+    const latest = await postgresRuntimeRepository.recordServiceHeartbeat({
+      service_name: "workflow_recovery",
+      status: "healthy",
+      metadata: { failed: 0 },
+      checked_at: latestTime
+    });
+
+    expect(first.service_name).toBe("workflow_recovery");
+    expect(latest).toMatchObject({ status: "healthy", metadata: { failed: 0 } });
+    expect((await postgresRuntimeRepository.getServiceHeartbeat("workflow_recovery"))?.checked_at)
+      .toBe(latestTime);
+  });
+
   it("enforces queue leases, idempotency, event ordering and replay-safe completion", async () => {
     await postgresRuntimeRepository.createDevice(device);
     expect(await postgresRuntimeRepository.updateDeviceCapabilities(

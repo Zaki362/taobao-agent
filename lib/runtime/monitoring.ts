@@ -35,6 +35,11 @@ interface RuntimeHealthInput {
     connected: number;
     fallback: number;
   };
+  workflowRecovery?: {
+    configured: boolean;
+    state: "missing" | "stale" | "healthy" | "degraded" | "failed";
+    last_heartbeat_at: string | null;
+  };
   agentRuntime: AgentRuntimeState;
 }
 
@@ -51,6 +56,36 @@ function incident(
 export function evaluateRuntimeHealth(input: RuntimeHealthInput) {
   const incidents: RuntimeIncident[] = [];
   const queuedWork = input.jobs.pending + input.jobs.active;
+
+  if (input.workflowRecovery?.configured) {
+    if (input.workflowRecovery.state === "missing" || input.workflowRecovery.state === "stale") {
+      incidents.push(incident(
+        "workflow_recovery_offline",
+        "critical",
+        "服务端恢复调度未持续运行",
+        input.workflowRecovery.state === "missing"
+          ? "恢复调度已配置，但从未记录成功心跳。"
+          : `恢复调度心跳已过期，最后记录于 ${input.workflowRecovery.last_heartbeat_at ?? "未知时间"}。`,
+        "检查 worker:recovery 或云端 Cron，并验证内部恢复端点可以持续返回成功。"
+      ));
+    } else if (input.workflowRecovery.state === "failed") {
+      incidents.push(incident(
+        "workflow_recovery_failed",
+        "critical",
+        "最近一次服务端恢复扫描失败",
+        `恢复调度最近一次执行失败，时间 ${input.workflowRecovery.last_heartbeat_at ?? "未知"}。`,
+        "检查恢复 Worker 日志、数据库连接和内部恢复 API。"
+      ));
+    } else if (input.workflowRecovery.state === "degraded") {
+      incidents.push(incident(
+        "workflow_recovery_degraded",
+        "warning",
+        "部分工作流恢复失败",
+        `恢复调度仍在线，但最近一批存在无法恢复的会话，时间 ${input.workflowRecovery.last_heartbeat_at ?? "未知"}。`,
+        "在执行台定位 recovery_failed 会话并检查其 Agent 决策或持久任务状态。"
+      ));
+    }
+  }
 
   if (queuedWork > 0 && input.devices.online === 0) {
     incidents.push(incident(
