@@ -16,6 +16,7 @@ import type { AgentDecision, SessionState } from "@/lib/session/types";
 export type AgentWorkflowTrigger =
   | "user_start"
   | "user_recover_gaps"
+  | "user_improve_quality"
   | "job_completed"
   | "job_failed"
   | "legacy_task_resolved"
@@ -338,5 +339,105 @@ export async function recoverAgentCompletionGaps(
   return {
     ...advance,
     recovered_module_ids: preparation.value.moduleIds
+  };
+}
+
+function normalizeSearchKeyword(keyword: string | undefined) {
+  return keyword?.replace(/\s+/g, " ").trim() ?? "";
+}
+
+function nextQualityKeyword(state: SessionState, moduleId: string) {
+  const module = state.shopping_plan.modules.find((item) => item.module_id === moduleId);
+  if (!module) return "";
+  const trace = state.module_search_traces[moduleId];
+  const searched = new Set((trace?.searched_keywords ?? []).map(normalizeSearchKeyword));
+  const primary = normalizeSearchKeyword(
+    module.search_strategy?.primary_keyword || module.search_keyword || module.module_name
+  );
+  const proposals = [
+    state.module_reviews[moduleId]?.suggested_keyword,
+    ...(module.search_strategy?.alternate_keywords ?? []),
+    `${primary} ${(module.search_strategy?.must_have_signals ?? []).slice(0, 2).join(" ")}`,
+    ...["官方旗舰", "高销量口碑", "预算内适配", "规格明确"].map((suffix) => `${primary} ${suffix}`)
+  ].map(normalizeSearchKeyword).filter(Boolean);
+
+  return proposals.find((keyword) => !searched.has(keyword)) ?? "";
+}
+
+export async function improveAgentCompletionQuality(
+  sessionId: string,
+  userId: string | undefined
+) {
+  const preparation = await withWorkflowSessionLock(sessionId, async () => {
+    const state = await loadSession(sessionId, userId);
+    if (!state) throw new Error("session not found");
+    if (
+      state.agent_runtime.auto_continue ||
+      state.agent_runtime.workflow_status === "running" ||
+      state.agent_runtime.workflow_status === "waiting_for_tools" ||
+      state.hosted_tasks.some((task) =>
+        task.task_type === "module_search" && (task.status === "pending" || task.status === "running")
+      )
+    ) {
+      throw new AgentCompletionRecoveryError("Agent 仍在执行当前搜索，请等待本轮结束后再优化候选池。");
+    }
+
+    const report = state.completion_report;
+    if (!report) {
+      throw new AgentCompletionRecoveryError("当前会话还没有可优化的 Agent 完成报告。");
+    }
+
+    const targets = report.thin_module_ids
+      .map((moduleId) => ({ moduleId, keyword: nextQualityKeyword(state, moduleId) }))
+      .filter(({ moduleId, keyword }) =>
+        Boolean(keyword) && (state.module_candidates[moduleId]?.length ?? 0) > 0
+      );
+    if (targets.length === 0) {
+      throw new AgentCompletionRecoveryError("当前没有可使用新关键词继续优化的薄弱候选池。");
+    }
+
+    for (const target of targets) {
+      const review = state.module_reviews[target.moduleId];
+      if (review) {
+        review.status = "thin";
+        review.suggested_keyword = target.keyword;
+        review.user_confirmed_retry = true;
+        review.next_action = `用户已确认使用“${target.keyword}”增量补搜，并保留当前候选。`;
+      }
+    }
+    state.completion_report = undefined;
+    transition(state, {
+      status: "idle",
+      message: `用户已确认优化 ${targets.length} 个薄弱候选池，等待 Agent 增量补搜`,
+      autoContinue: false
+    });
+    await persistSession(state);
+    await getRuntimeRepository().appendEvent({
+      user_id: state.owner_id,
+      session_id: state.session_id,
+      event_type: "agent.completion.quality_improvement_confirmed",
+      payload: {
+        module_ids: targets.map((target) => target.moduleId),
+        keywords: Object.fromEntries(targets.map((target) => [target.moduleId, target.keyword])),
+        preserved_candidate_count: targets.reduce(
+          (count, target) => count + (state.module_candidates[target.moduleId]?.length ?? 0),
+          0
+        )
+      }
+    });
+    return { targets };
+  });
+
+  if (!preparation.acquired) {
+    throw new AgentCompletionRecoveryError("当前会话正在被另一个 Agent 进程更新，请稍后重试。");
+  }
+
+  const advance = await advanceAgentWorkflow(sessionId, userId, {
+    start: true,
+    trigger: "user_improve_quality"
+  });
+  return {
+    ...advance,
+    targeted_module_ids: preparation.value.targets.map((target) => target.moduleId)
   };
 }

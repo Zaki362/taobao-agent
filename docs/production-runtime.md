@@ -163,6 +163,8 @@ pending -> leased -> running -> completed
 
 当报告存在未覆盖模块时，用户可以显式确认调用 `/api/agent/remediate`。服务端在 Session 锁内仅清理这些模块上一轮的失败、跳过和搜索轨迹，保留其他模块候选、预算与已选商品，然后创建新的运行 ID 继续持久工作流；该入口不能静默触发，也不会因候选偏贵而自动改预算。
 
+当报告只有候选偏薄而不是模块空白时，同一 API 可使用 `scope=thin`。服务端为报告列出的薄弱模块选择未尝试过的新关键词，在对应 `module_review` 写入一次性 `user_confirmed_retry` 授权，不永久改变用户原有的保守/平衡档位。Agent 随后使用跨轮次候选池增量补搜；回填生成新复盘时该授权自然失效，避免一次确认被重复消费。
+
 `RUNTIME_STORE=postgres` 时，每次推进还会获取基于 Session ID 的 PostgreSQL transaction-level advisory lock。锁内的 Session 读取、Agent 决策落盘、Job 创建和事件写入通过 `AsyncLocalStorage` 复用同一数据库 client，并在同一事务提交；竞争实例立即返回等待状态，不会重复创建下一模块。Executor 的成功、失败和取消回填也使用同一把锁，避免重复回执用旧 Session 快照覆盖下一步任务。锁不覆盖 Qoder/Taobao 的长时间执行；平衡/探索档位下只可能额外包含一次有界的 DeepSeek 下一动作判断，常规 chat 默认 8 秒、复杂 reasoner 默认 15 秒。
 
 每个模块获得真实候选后，`market-feedback` 会基于有效价格样本计算模块预算压力、参考入手价和跨模块余量。该结果会进入下一动作 prompt：平衡/探索档位可以在候选整体超预算时提出一次未尝试过的性价比补搜词。预算调拨最多按模块预算的 15% 生成总额守恒的建议，始终标记为“需要用户确认”，不会静默改写已经确认的购物规划。

@@ -899,6 +899,56 @@ export function Dashboard() {
     }
   }
 
+  async function improveThinCandidates() {
+    if (!session?.completion_report || session.completion_report.thin_module_ids.length === 0) {
+      return;
+    }
+
+    const moduleNames = session.completion_report.thin_module_ids
+      .map((moduleId) => session.shopping_plan.modules.find((module) => module.module_id === moduleId)?.module_name)
+      .filter((name): name is string => Boolean(name));
+    const confirmed = window.confirm(
+      `确认让 Agent 增量优化以下候选池吗？\n\n${moduleNames.join("、") || "薄弱模块"}\n\n现有候选和已选商品会保留，新结果会合并重排。`
+    );
+    if (!confirmed) return;
+
+    setBusy(true);
+    setErrorMessage("");
+    setStage("searching");
+    setSearchSummary([`已确认优化：${moduleNames.join("、") || "薄弱模块"}`]);
+    setStatusMessage("Agent 正在为薄弱候选池增量补搜");
+    try {
+      const response = await jsonFetch<{
+        targeted_module_ids: string[];
+        outcome: AgentRunResponse["outcome"];
+      }>("/api/agent/remediate", {
+        method: "POST",
+        body: JSON.stringify({
+          session_id: session.session_id,
+          scope: "thin",
+          confirmed: true
+        })
+      });
+      const latestSession = await waitForServerWorkflow(
+        session.session_id,
+        session.shopping_plan.modules.length
+      );
+      setSelectedModuleId(response.targeted_module_ids[0] ?? selectedModuleId);
+      setSearchSummary([
+        `Agent 已增量优化 ${response.targeted_module_ids.length} 个薄弱模块`,
+        latestSession.completion_report?.summary ?? latestSession.agent_runtime.workflow_message
+      ]);
+      setStage("review_results");
+      setStatusMessage("薄弱候选池已重新评估，原候选与新结果已合并。");
+    } catch (error) {
+      await hydrateSession(session.session_id).catch(() => undefined);
+      setErrorMessage(error instanceof Error ? error.message : "优化薄弱候选池失败");
+      setStage("review_results");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function updateAgentProfile(profile: AgentDirectiveProfile) {
     if (!session) {
       return;
@@ -1138,6 +1188,7 @@ export function Dashboard() {
             onQuickAction={applyQuickAction}
             onApplyBudgetSuggestion={applyBudgetSuggestion}
             onRecoverCompletionGaps={recoverCompletionGaps}
+            onImproveThinCandidates={improveThinCandidates}
             onAddToCart={addToCart}
             onProceedToCartReview={() => setStage("cart_review")}
             expandedLogs={expandedLogs}

@@ -45,10 +45,14 @@ function canRetryFromReview(state: SessionState, module: ShoppingPlanModule) {
   const marketKeyword = marketSignal?.pressure === "over_budget"
     ? marketSignal.suggested_keyword?.replace(/\s+/g, " ").trim()
     : undefined;
+  if (!review) {
+    return null;
+  }
+  const userConfirmedRetry = review.user_confirmed_retry === true;
   if (
-    !review ||
-    state.shopping_plan.agent_directives.autonomy_level === "保守执行" ||
-    state.shopping_plan.agent_directives.search_depth === "轻量搜索"
+    !userConfirmedRetry &&
+    (state.shopping_plan.agent_directives.autonomy_level === "保守执行" ||
+      state.shopping_plan.agent_directives.search_depth === "轻量搜索")
   ) {
     return null;
   }
@@ -59,7 +63,11 @@ function canRetryFromReview(state: SessionState, module: ShoppingPlanModule) {
       keyword: reviewKeyword,
       source: "candidate_review" as const,
       reason: review.next_action,
-      evidence: [review.summary, ...review.caveats.slice(0, 2)]
+      evidence: [
+        review.summary,
+        ...review.caveats.slice(0, 2),
+        ...(userConfirmedRetry ? ["用户已显式确认本轮增量补搜"] : [])
+      ]
     });
   }
   if (marketKeyword && marketSignal?.pressure === "over_budget") {

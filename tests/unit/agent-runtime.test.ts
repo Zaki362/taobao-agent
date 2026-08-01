@@ -6,6 +6,7 @@ import {
 } from "@/lib/agent/decision-engine";
 import { decideNextAgentActionV2, validateModelProposal } from "@/lib/agent/runtime-v2";
 import { applyAgentDirectiveProfile } from "@/lib/agent/directives";
+import { reviewModuleCandidates } from "@/lib/agent/candidate-reviewer";
 import { createSessionFixture } from "@/tests/fixtures/session";
 
 describe("Agent Runtime 2.0", () => {
@@ -138,5 +139,66 @@ describe("Agent Runtime 2.0", () => {
     expect(decision.action).toBe("search_module");
     expect(state.agent_runtime.model_failures).toBe(1);
     expect(state.agent_runtime.last_decision_mode).toBe("policy");
+  });
+
+  it("honors a one-time user-confirmed retry before asking the model for another action", async () => {
+    const state = createSessionFixture();
+    const module = state.shopping_plan.modules[0];
+    const primaryKeyword = module.search_strategy?.primary_keyword || module.search_keyword || module.module_name;
+    const candidate = {
+      product_id: "confirmed-retry-candidate",
+      title: `${module.module_name} 首轮候选`,
+      price: 99,
+      source: "淘宝",
+      shop_name: "测试旗舰店",
+      image_url: "https://example.com/item.jpg",
+      detail_url: "https://item.taobao.com/item.htm?id=confirmed-retry-candidate",
+      shop_badges: ["旗舰店"],
+      highlights: [module.module_name],
+      risk_notes: ["测试摘要"],
+      fit_reason: "符合当前模块",
+      recommendation_type: "稳妥推荐" as const,
+      module_id: module.module_id
+    };
+    state.module_candidates[module.module_id] = [candidate];
+    state.module_reviews[module.module_id] = {
+      ...reviewModuleCandidates(state, module, [candidate]),
+      suggested_keyword: `${primaryKeyword} 官方旗舰`,
+      user_confirmed_retry: true
+    };
+    state.module_search_traces[module.module_id] = {
+      module_id: module.module_id,
+      module_name: module.module_name,
+      status: "thin",
+      primary_keyword: primaryKeyword,
+      searched_keywords: [primaryKeyword],
+      attempts: [],
+      result_count: 1,
+      candidate_count: 1,
+      review_status: "thin",
+      ai_decision_summary: "候选偏薄",
+      next_action: "用户已确认补搜",
+      generated_at: new Date().toISOString(),
+      updated_at: new Date().toISOString()
+    };
+    state.shopping_plan.agent_directives.autonomy_level = "平衡执行";
+    state.shopping_plan.agent_directives.search_depth = "轻量搜索";
+    let modelCalled = false;
+
+    const decision = await decideNextAgentActionV2(state, async (_state, fallback) => {
+      modelCalled = true;
+      return {
+        mode: "connected",
+        data: { ...fallback, action: "complete_workflow", module_id: undefined, keyword_override: undefined }
+      };
+    });
+
+    expect(modelCalled).toBe(false);
+    expect(decision).toMatchObject({
+      action: "retry_module",
+      module_id: module.module_id,
+      keyword_override: `${primaryKeyword} 官方旗舰`
+    });
+    expect(state.agent_runtime.last_fallback_reason).toBe("user_confirmed_retry");
   });
 });

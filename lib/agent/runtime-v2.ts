@@ -129,8 +129,13 @@ export async function decideNextAgentActionV2(
   const policyDecision = decideNextAgentAction(state);
   const policyProposal = proposalFromPolicy(policyDecision);
   const budgetRemaining = state.agent_runtime.max_tool_calls - state.agent_runtime.used_tool_calls;
+  const userConfirmedRetry =
+    policyDecision.action === "retry_module" &&
+    Boolean(policyDecision.module_id) &&
+    state.module_reviews[policyDecision.module_id!]?.user_confirmed_retry === true;
   const hardPolicyAction =
     policyDecision.action === "wait_for_tools" ||
+    userConfirmedRetry ||
     (budgetRemaining <= 0 && policyDecision.action !== "complete_workflow") ||
     state.shopping_plan.agent_directives.autonomy_level === "保守执行";
 
@@ -156,7 +161,9 @@ export async function decideNextAgentActionV2(
     state.agent_runtime.last_decision_mode = "policy";
     state.agent_runtime.last_fallback_reason = policyDecision.action === "wait_for_tools"
       ? "active_tool_task"
-      : "conservative_execution_policy";
+      : userConfirmedRetry
+        ? "user_confirmed_retry"
+        : "conservative_execution_policy";
     state.agent_runtime.last_decision_at = new Date().toISOString();
     return policyDecision;
   }

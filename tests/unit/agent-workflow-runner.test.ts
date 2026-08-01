@@ -3,7 +3,12 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { createAgentDecision } from "@/lib/agent/decision-engine";
 import { buildAgentCompletionReport } from "@/lib/agent/completion-review";
-import { advanceAgentWorkflow, recoverAgentCompletionGaps } from "@/lib/agent/workflow-runner";
+import { reviewModuleCandidates } from "@/lib/agent/candidate-reviewer";
+import {
+  advanceAgentWorkflow,
+  improveAgentCompletionQuality,
+  recoverAgentCompletionGaps
+} from "@/lib/agent/workflow-runner";
 import { recoverAgentWorkflowForExecutor, recoverAgentWorkflows } from "@/lib/agent/workflow-recovery";
 import { applyCompletedRuntimeJob, applyFailedRuntimeJob, enqueueModuleSearchJob } from "@/lib/runtime/jobs";
 import { localRuntimeRepository, resetLocalRuntimeForTests } from "@/lib/runtime/local-repository";
@@ -306,6 +311,91 @@ describe("server-managed Agent workflow", () => {
     expect((await localRuntimeRepository.listEvents(sessionId, 0, device.user_id, 100)).some(
       (event) => event.event_type === "agent.completion.recovery_confirmed"
     )).toBe(true);
+  });
+
+  it("starts a confirmed incremental search for thin modules without deleting existing candidates", async () => {
+    const sessionId = `session-workflow-improve-thin-${Date.now()}`;
+    sessionFiles.add(sessionId);
+    const state = createSessionFixture({ session_id: sessionId });
+    const targetModule = state.shopping_plan.modules[0];
+
+    for (const module of state.shopping_plan.modules) {
+      state.module_candidates[module.module_id] = candidates(module.module_id, module.module_name);
+      state.module_reviews[module.module_id] = reviewModuleCandidates(
+        state,
+        module,
+        state.module_candidates[module.module_id]
+      );
+    }
+    const preservedCandidates = state.module_candidates[targetModule.module_id].slice(0, 1);
+    state.module_candidates[targetModule.module_id] = preservedCandidates;
+    state.module_reviews[targetModule.module_id] = reviewModuleCandidates(state, targetModule, preservedCandidates);
+    const primaryKeyword = targetModule.search_strategy?.primary_keyword || targetModule.search_keyword || targetModule.module_name;
+    state.module_search_traces[targetModule.module_id] = {
+      module_id: targetModule.module_id,
+      module_name: targetModule.module_name,
+      status: "thin",
+      primary_keyword: primaryKeyword,
+      searched_keywords: [primaryKeyword],
+      attempts: [{
+        keyword: primaryKeyword,
+        reason: "首轮候选偏薄",
+        result_count: 1,
+        status: "success",
+        created_at: new Date().toISOString()
+      }],
+      result_count: 1,
+      candidate_count: 1,
+      review_status: "thin",
+      review_summary: state.module_reviews[targetModule.module_id].summary,
+      recovery_keyword: state.module_reviews[targetModule.module_id].suggested_keyword,
+      ai_decision_summary: "首轮候选偏薄",
+      next_action: state.module_reviews[targetModule.module_id].next_action,
+      generated_at: new Date().toISOString(),
+      updated_at: new Date().toISOString()
+    };
+    state.agent_runtime.workflow_status = "completed";
+    state.agent_runtime.auto_continue = false;
+    state.shopping_plan.agent_directives.autonomy_level = "保守执行";
+    state.shopping_plan.agent_directives.search_depth = "轻量搜索";
+    state.completion_report = buildAgentCompletionReport(state);
+    expect(state.completion_report.thin_module_ids).toEqual([targetModule.module_id]);
+    await localRuntimeRepository.saveSession(state);
+
+    const improved = await improveAgentCompletionQuality(sessionId, device.user_id);
+    const restored = await localRuntimeRepository.getSession(sessionId, device.user_id);
+    const queuedJob = await localRuntimeRepository.claimJob(device, 30_000);
+
+    expect(improved.outcome).toBe("queued");
+    expect(improved.targeted_module_ids).toEqual([targetModule.module_id]);
+    expect(queuedJob?.payload.module_id).toBe(targetModule.module_id);
+    expect(queuedJob?.payload.keyword).not.toBe(primaryKeyword);
+    expect(restored?.module_candidates[targetModule.module_id]).toEqual(preservedCandidates);
+    expect(restored?.shopping_plan.agent_directives).toMatchObject({
+      autonomy_level: "保守执行",
+      search_depth: "轻量搜索"
+    });
+    expect(restored?.module_reviews[targetModule.module_id].user_confirmed_retry).toBe(true);
+    expect(restored?.completion_report).toBeUndefined();
+    expect((await localRuntimeRepository.listEvents(sessionId, 0, device.user_id, 100)).some(
+      (event) => event.event_type === "agent.completion.quality_improvement_confirmed"
+    )).toBe(true);
+
+    await applyCompletedRuntimeJob(queuedJob!.id, device, {
+      summary: "用户确认后完成增量补搜",
+      candidates: candidates(targetModule.module_id, targetModule.module_name)
+    });
+    const completed = await advanceAgentWorkflow(sessionId, device.user_id, {
+      trigger: "job_completed"
+    });
+    const finalState = await localRuntimeRepository.getSession(sessionId, device.user_id);
+    expect(completed.outcome).toBe("completed");
+    expect(finalState?.module_candidates[targetModule.module_id]).toHaveLength(3);
+    expect(finalState?.module_candidates[targetModule.module_id].some(
+      (candidate) => candidate.product_id === preservedCandidates[0].product_id
+    )).toBe(true);
+    expect(finalState?.module_reviews[targetModule.module_id].user_confirmed_retry).toBeUndefined();
+    expect(finalState?.completion_report?.thin_module_ids).not.toContain(targetModule.module_id);
   });
 
   it("starts a confirmed rerun with a fresh per-run tool budget", async () => {

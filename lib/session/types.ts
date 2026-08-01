@@ -143,6 +143,7 @@ export interface ModuleCandidateReview {
   caveats: string[];
   next_action: string;
   suggested_keyword?: string;
+  user_confirmed_retry?: boolean;
   generated_at: string;
 }
 

@@ -43,6 +43,7 @@ export function ResultsPage({
   onQuickAction,
   onApplyBudgetSuggestion,
   onRecoverCompletionGaps,
+  onImproveThinCandidates,
   onAddToCart,
   onProceedToCartReview,
   expandedLogs,
@@ -63,6 +64,7 @@ export function ResultsPage({
   onQuickAction: (action: QuickAction) => void;
   onApplyBudgetSuggestion: (suggestion: BudgetReallocationSuggestion) => void;
   onRecoverCompletionGaps: () => void;
+  onImproveThinCandidates: () => void;
   onAddToCart: (product: ProductCandidate) => void;
   onProceedToCartReview: () => void;
   expandedLogs: boolean;
@@ -303,6 +305,12 @@ export function ResultsPage({
                 <Button className="w-full" disabled={busy} onClick={onRecoverCompletionGaps}>
                   {busy ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Sparkles className="mr-2 h-4 w-4" />}
                   继续补齐 {completionReport.uncovered_module_ids.length} 个缺口模块
+                </Button>
+              ) : null}
+              {completionReport.thin_module_ids.length > 0 ? (
+                <Button className="w-full" variant="outline" disabled={busy} onClick={onImproveThinCandidates}>
+                  {busy ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Wand2 className="mr-2 h-4 w-4" />}
+                  继续优化 {completionReport.thin_module_ids.length} 个薄弱模块
                 </Button>
               ) : null}
             </CardContent>

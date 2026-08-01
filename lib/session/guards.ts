@@ -264,6 +264,7 @@ export function isModuleCandidateReview(value: unknown): value is ModuleCandidat
     isStringArray(value.caveats) &&
     typeof value.next_action === "string" &&
     (value.suggested_keyword === undefined || typeof value.suggested_keyword === "string") &&
+    (value.user_confirmed_retry === undefined || typeof value.user_confirmed_retry === "boolean") &&
     typeof value.generated_at === "string"
   );
 }

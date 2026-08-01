@@ -821,6 +821,8 @@ DeepSeek 目前承担六类结构化任务：
 
 完成报告不是只读终点。若存在未覆盖模块，用户可显式确认 `/api/agent/remediate`；服务端只重置报告列出的缺口模块及其旧失败决策，在 Session 锁保护下保留其他候选与购物清单，再交给同一 `workflow-runner` 续跑。这样恢复动作仍由用户授权，但后续模块选择、排队和停止判断继续由 Agent 完成。
 
+同一恢复入口还支持 `scope=thin`：它不删除薄弱模块已有候选，而是基于搜索轨迹选择一个未尝试关键词，在候选复盘上签发一次性 `user_confirmed_retry`。该授权只绕过本轮保守/轻量档位对自动补搜的限制，不修改用户长期 Agent 档位；工具回填后的新复盘不继承授权。结合跨轮次候选池，这使用户能够把更多搜索空间交给 Agent，同时仍保持明确确认、有限工具预算和可审计轨迹。
+
 在 PostgreSQL 模式下，`withWorkflowSessionLock` 使用 `pg_try_advisory_xact_lock` 对同一 Session 的一次推进加互斥；Executor 结果回填使用有超时的 blocking advisory lock，保证重复完成、失败和取消回执串行写入。数据库层通过 `AsyncLocalStorage` 将锁内所有 repository 查询绑定到同一个 `PoolClient`，因此状态读取、决策记录、任务幂等创建、回填和事件写入随事务一起提交或回滚。锁不包住淘宝工具执行；平衡/探索档位下只可能包含一次上限 8 秒的 DeepSeek 下一动作判断，避免数据库连接被桌面自动化长期占用。
 
 每次动作都会写入 session 的 `agent_decisions`，保存来源、置信度、理由和证据。规划顺序与候选复盘可以来自 DeepSeek，后端负责动作白名单、重复调用抑制、失败跳过和高风险确认，因此模型获得了真实的执行选择空间，但不能越过交易和隐私边界。

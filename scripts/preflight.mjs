@@ -411,13 +411,19 @@ function assertArchitectureContracts() {
         completionReview.includes("critical_coverage_ratio") &&
         workflowRunner.includes("buildAgentCompletionReport") &&
         workflowRunner.includes("recoverAgentCompletionGaps") &&
+        workflowRunner.includes("improveAgentCompletionQuality") &&
+        workflowRunner.includes("user_confirmed_retry = true") &&
         agentRemediateRoute.includes("body.confirmed !== true") &&
         agentRemediateRoute.includes("recoverAgentCompletionGaps") &&
+        agentRemediateRoute.includes('body.scope === "thin"') &&
         dashboardResults.includes("Agent 完成报告") &&
         dashboardResults.includes("继续补齐") &&
+        dashboardResults.includes("继续优化") &&
+        types.includes("user_confirmed_retry") &&
+        sessionGuards.includes("user_confirmed_retry") &&
         hostedConsole.includes("Agent 完成质量审计") &&
         sessionsRoute.includes("completion_report: session.completion_report"),
-      message: "Agent 结束搜索时必须生成可持久化的方案级完成报告，并在推荐页与执行台展示覆盖度和停止理由"
+      message: "Agent 结束搜索时必须生成可持久化的完成报告，并支持用户确认后补齐空白或增量优化薄弱候选池"
     },
     {
       ok:
