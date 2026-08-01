@@ -5,6 +5,7 @@ import {
   ShoppingPlanModule
 } from "@/lib/session/types";
 import { reviewCandidatePool } from "@/lib/llm/deepseek";
+import { appendSessionLlmCalls } from "@/lib/llm/session-evidence";
 
 function uniqueValues(values: string[]) {
   return Array.from(new Set(values.map((item) => item.trim()).filter(Boolean)));
@@ -159,6 +160,7 @@ export async function reviewModuleCandidatesWithAgent(
     candidates,
     fallbackReview
   });
+  appendSessionLlmCalls(state, result.call);
 
   return {
     review: result.data,

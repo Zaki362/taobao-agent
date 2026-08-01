@@ -247,6 +247,41 @@ describe("Agent Runtime 2.0", () => {
     expect(state.agent_runtime.model_rejections).toBe(0);
   });
 
+  it("persists privacy-safe model evidence for the current session", async () => {
+    const state = createSessionFixture();
+    state.shopping_plan.agent_directives.autonomy_level = "探索执行";
+    const target = state.shopping_plan.modules[0];
+    const now = new Date().toISOString();
+    await decideNextAgentActionV2(state, async () => ({
+      mode: "connected",
+      data: {
+        action: "search_module",
+        confidence: "high",
+        module_id: target.module_id,
+        reason: "优先完成高频模块",
+        evidence: ["预算和顺序允许"],
+        expected_gain: "形成候选池",
+        tool_cost: 1
+      },
+      call: {
+        id: "runtime-call-1",
+        task: "decide_next_action",
+        model: "deepseek-chat",
+        mode: "connected",
+        duration_ms: 90,
+        created_at: now
+      }
+    }));
+
+    expect(state.llm_calls).toEqual([
+      expect.objectContaining({
+        id: "runtime-call-1",
+        task: "decide_next_action",
+        mode: "connected"
+      })
+    ]);
+  });
+
   it("rejects a low-confidence model proposal and records the fallback", async () => {
     const state = createSessionFixture();
     state.shopping_plan.agent_directives.autonomy_level = "平衡执行";

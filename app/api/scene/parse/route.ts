@@ -13,7 +13,8 @@ export async function POST(request: NextRequest) {
     const parsed = await parseOnly(rawInput, scenarioId);
     return apiOk({
       scene_brief: parsed.data,
-      deepseek_mode: parsed.mode
+      deepseek_mode: parsed.mode,
+      llm_call: parsed.call
     });
   } catch (error) {
     return apiRouteError(error, "scene parse failed");

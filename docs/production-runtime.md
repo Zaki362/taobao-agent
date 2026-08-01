@@ -165,6 +165,8 @@ pending -> leased -> running -> completed
 
 模型路由按任务复杂度选择：没有候选或恢复证据的常规模块调度使用 `deepseek-chat`，候选偏薄补搜、模块失败恢复或真实价格产生预算压力时使用 `deepseek-reasoner`。两类决策分别受 `DEEPSEEK_AGENT_CHAT_TIMEOUT_MS` 和 `DEEPSEEK_AGENT_REASONER_TIMEOUT_MS` 约束，执行台会记录实际模型、fallback 原因和 P95 延迟。
 
+每个 Session 同时保留最多 120 条隐私安全模型调用凭证，Session 列表接口只返回最近 40 条。凭证不保存 Prompt、用户需求原文、商品摘要或模型输出，只记录能力任务、模型、真实成功/规则降级、耗时、降级原因和时间。执行台默认显示本次会话成功/降级摘要，详细时间线折叠展示；这与进程级 telemetry 互补，避免把其他用户或其他会话的成功调用误认为当前购物链路已经使用模型。
+
 `lib/agent/workflow-runner.ts` 是正式搜索阶段的推进器。它对单进程内同一 Session 做互斥，并依赖持久任务幂等键抵御重复入队；每次只允许一个淘宝模块任务处于等待执行状态。用户取消任务会关闭自动续跑，终态工具失败则记录错误、跳过当前模块并继续下一模块。`workflow-recovery.ts` 与受 `SCENECART_CRON_SECRET` 保护的 `/api/internal/workflow-recovery` 补偿“Job 已提交结果但续跑尚未触发”的进程中断窗口。
 
 候选回填采用增量证据池，而不是末次写入覆盖：每轮执行器结果会先与 Session 已有候选按 `product_id` 合并，保留更完整的价格、图片、店铺、链接、标签和风险字段，再对全部唯一商品重新生成稳妥 / 性价比 / 升级三档。候选池复盘读取的是合并后的最终池；轨迹分别记录本轮返回数、累计结果数和最终保留数。补搜失败时旧候选仍然可用，失败只写入本轮 attempt，不会把已有模块错误标记为空。

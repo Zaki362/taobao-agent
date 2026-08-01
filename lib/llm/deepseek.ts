@@ -11,6 +11,7 @@ import {
   RecommendationType,
   ScenarioId,
   SceneBrief,
+  SessionLlmCall,
   SessionState,
   ShoppingPlan,
   ShoppingPlanModule
@@ -83,6 +84,20 @@ const MAX_TIMEOUT_MS = 60_000;
 type StructuredTask = Exclude<LlmTaskName, "explain_product_fit">;
 type LlmMode = "connected" | "mock";
 type StructuredModelTier = "chat" | "reasoner";
+
+export interface StructuredLlmResult<T> {
+  data: T;
+  mode: LlmMode;
+  call: SessionLlmCall;
+}
+
+function fallbackCall(call: SessionLlmCall, reason: string): SessionLlmCall {
+  return {
+    ...call,
+    mode: "fallback",
+    reason
+  };
+}
 
 function getStructuredModel(task: StructuredTask, tier?: StructuredModelTier) {
   if (tier === "reasoner") {
@@ -602,15 +617,29 @@ async function deepseekJson<T>(
     modelTier?: StructuredModelTier;
     maxOutputTokens?: number;
   } = {}
-): Promise<{ data: T; mode: LlmMode }> {
+): Promise<StructuredLlmResult<T>> {
   const apiKey = process.env.DEEPSEEK_API_KEY;
   const startedAt = Date.now();
   const model = getStructuredModel(task, options.modelTier);
   const timeoutMs = options.timeoutMs ?? getDeepSeekTimeoutMs(task);
   const maxOutputTokens = options.maxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS[task];
-  const finish = (data: T, mode: LlmMode, reason?: string) => {
-    recordLlmCall({ task, model, mode, durationMs: Date.now() - startedAt, reason });
-    return { data, mode };
+  const finish = (data: T, mode: LlmMode, reason?: string): StructuredLlmResult<T> => {
+    const durationMs = Date.now() - startedAt;
+    const createdAt = new Date().toISOString();
+    recordLlmCall({ task, model, mode, durationMs, reason });
+    return {
+      data,
+      mode,
+      call: {
+        id: `llm-${task}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        task,
+        model,
+        mode: mode === "connected" ? "connected" : "fallback",
+        duration_ms: Math.max(0, durationMs),
+        reason,
+        created_at: createdAt
+      }
+    };
   };
   if (process.env.DEEPSEEK_DISABLED === "true") {
     return finish(fallback, "mock", "explicitly_disabled");
@@ -669,7 +698,7 @@ async function deepseekJson<T>(
   }
 }
 
-export async function parseScene(input: string, scenarioId: ScenarioId): Promise<{ data: SceneBrief; mode: "connected" | "mock" }> {
+export async function parseScene(input: string, scenarioId: ScenarioId): Promise<StructuredLlmResult<SceneBrief>> {
   const fallback = mockParseScene(input, scenarioId);
   const result = await deepseekJson<SceneBrief>("parse_scene", parseScenePrompt(input, scenarioId), fallback);
   const validation = result.mode === "connected" ? validateSceneBriefOutput(result.data) : { valid: true };
@@ -679,14 +708,17 @@ export async function parseScene(input: string, scenarioId: ScenarioId): Promise
   const data = validation.valid ? normalizeSceneBrief(result.data, fallback) : fallback;
   return {
     data,
-    mode: validation.valid ? result.mode : "mock"
+    mode: validation.valid ? result.mode : "mock",
+    call: validation.valid
+      ? result.call
+      : fallbackCall(result.call, `schema_validation_failed:${validation.reason ?? "unknown"}`)
   };
 }
 
 export async function personalizeTemplate(
   scene: SceneBrief,
   template: PlanningModule[]
-): Promise<{ data: ShoppingPlan; mode: "connected" | "mock" }> {
+): Promise<StructuredLlmResult<ShoppingPlan>> {
   const safeScene = sanitizeScene(scene);
   const safeTemplate = sanitizeTemplate(template);
   const fallback = mockPersonalizeTemplate(safeScene, template);
@@ -712,14 +744,17 @@ export async function personalizeTemplate(
   const data = validation.valid ? normalizedCandidate : fallback;
   return {
     data,
-    mode: validation.valid ? result.mode : "mock"
+    mode: validation.valid ? result.mode : "mock",
+    call: validation.valid
+      ? result.call
+      : fallbackCall(result.call, `schema_validation_failed:${validation.reason ?? "unknown"}`)
   };
 }
 
 export async function refinePlan(
   scene: SceneBrief,
   action: QuickAction
-): Promise<{ data: SceneBrief; mode: "connected" | "mock" }> {
+): Promise<StructuredLlmResult<SceneBrief>> {
   const safeScene = sanitizeScene(scene);
   const fallback = mockRefineScene(safeScene, action);
   const result = await deepseekJson<SceneBrief>("refine_plan", refinePlanPrompt(safeScene, action), fallback);
@@ -730,14 +765,17 @@ export async function refinePlan(
   const data = validation.valid ? normalizeSceneBrief(result.data, fallback) : fallback;
   return {
     data,
-    mode: validation.valid ? result.mode : "mock"
+    mode: validation.valid ? result.mode : "mock",
+    call: validation.valid
+      ? result.call
+      : fallbackCall(result.call, `schema_validation_failed:${validation.reason ?? "unknown"}`)
   };
 }
 
 export async function reviewShoppingPlan(
   scene: SceneBrief,
   plan: ShoppingPlan
-): Promise<{ data: PlanQualityReview; mode: LlmMode }> {
+): Promise<StructuredLlmResult<PlanQualityReview>> {
   const safeScene = sanitizeScene(scene);
   const fallback = mockReviewShoppingPlan(safeScene, plan);
   const result = await deepseekJson<Partial<PlanQualityReview>>(
@@ -751,7 +789,10 @@ export async function reviewShoppingPlan(
   }
   return {
     data: validation ? normalizePlanQualityReview(result.data, fallback) : fallback,
-    mode: validation ? result.mode : "mock"
+    mode: validation ? result.mode : "mock",
+    call: validation
+      ? result.call
+      : fallbackCall(result.call, "schema_validation_failed:plan_review_invalid")
   };
 }
 
@@ -829,7 +870,12 @@ export async function reviewCandidatePool({
   module: ShoppingPlan["modules"][number];
   candidates: ProductCandidate[];
   fallbackReview: ModuleCandidateReview;
-}): Promise<{ data: ModuleCandidateReview; fitReasons: Record<string, string>; mode: LlmMode }> {
+}): Promise<{
+  data: ModuleCandidateReview;
+  fitReasons: Record<string, string>;
+  mode: LlmMode;
+  call: SessionLlmCall;
+}> {
   type CandidateReviewModelOutput = Partial<ModuleCandidateReview> & {
     fit_reasons?: CandidateFitExplanation[];
   };
@@ -864,21 +910,25 @@ export async function reviewCandidatePool({
     return {
       data: fallbackReview,
       fitReasons: fallbackFitReasons,
-      mode: "mock"
+      mode: "mock",
+      call: result.mode === "connected" && !validation
+        ? fallbackCall(result.call, "schema_validation_failed:candidate_review_invalid")
+        : result.call
     };
   }
 
   return {
     data: normalizeCandidateReview(result.data, fallbackReview),
     fitReasons: candidateFitReasonMap(result.data.fit_reasons ?? [], candidates),
-    mode: result.mode
+    mode: result.mode,
+    call: result.call
   };
 }
 
 export async function decideAgentNextAction(
   state: SessionState,
   fallback: AgentDecisionProposal
-): Promise<{ data: AgentDecisionProposal; mode: LlmMode }> {
+): Promise<StructuredLlmResult<AgentDecisionProposal>> {
   const modelTier = selectAgentDecisionModelTier(state, fallback);
   const result = await deepseekJson<AgentDecisionProposal>(
     "decide_next_action",
@@ -894,7 +944,13 @@ export async function decideAgentNextAction(
     if (result.mode === "connected") {
       downgradeLastLlmCall("decide_next_action", "schema_validation_failed:agent_decision_invalid");
     }
-    return { data: fallback, mode: "mock" };
+    return {
+      data: fallback,
+      mode: "mock",
+      call: result.mode === "connected"
+        ? fallbackCall(result.call, "schema_validation_failed:agent_decision_invalid")
+        : result.call
+    };
   }
   return {
     data: {
@@ -909,14 +965,15 @@ export async function decideAgentNextAction(
       expected_gain: result.data.expected_gain.trim().slice(0, 220),
       tool_cost: Math.max(0, Math.min(Math.round(result.data.tool_cost), 1))
     },
-    mode: "connected"
+    mode: "connected",
+    call: result.call
   };
 }
 
 export async function composePurchaseBundle(
   state: SessionState,
   fallback: AgentPurchaseBundle
-): Promise<{ data: AgentPurchaseBundle; mode: LlmMode }> {
+): Promise<StructuredLlmResult<AgentPurchaseBundle>> {
   const fallbackProposal: PurchaseBundleProposal = {
     selected_product_ids: fallback.items.map((item) => item.product_id),
     summary: fallback.summary,
@@ -930,7 +987,7 @@ export async function composePurchaseBundle(
     fallbackProposal,
     { modelTier }
   );
-  if (result.mode !== "connected") return { data: fallback, mode: "mock" };
+  if (result.mode !== "connected") return { data: fallback, mode: "mock", call: result.call };
 
   const candidateIds = state.shopping_plan.modules.flatMap((module) =>
     (state.module_candidates[module.module_id] ?? []).map((candidate) => candidate.product_id)
@@ -942,13 +999,21 @@ export async function composePurchaseBundle(
   );
   if (!valid) {
     downgradeLastLlmCall("compose_purchase_bundle", "schema_validation_failed:purchase_bundle_invalid");
-    return { data: fallback, mode: "mock" };
+    return {
+      data: fallback,
+      mode: "mock",
+      call: fallbackCall(result.call, "schema_validation_failed:purchase_bundle_invalid")
+    };
   }
 
   const bundle = materializePurchaseBundleProposal(state, result.data, fallback);
   if (!bundle) {
     downgradeLastLlmCall("compose_purchase_bundle", "guardrail_rejected:purchase_bundle_unsafe");
-    return { data: fallback, mode: "mock" };
+    return {
+      data: fallback,
+      mode: "mock",
+      call: fallbackCall(result.call, "guardrail_rejected:purchase_bundle_unsafe")
+    };
   }
-  return { data: bundle, mode: "connected" };
+  return { data: bundle, mode: "connected", call: result.call };
 }

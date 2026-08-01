@@ -13,6 +13,7 @@ import { getRuntimeRepository } from "@/lib/runtime";
 import { withWorkflowSessionLock, withWorkflowSessionTransaction } from "@/lib/runtime/database";
 import { loadSession, persistSession } from "@/lib/session/repository";
 import { invalidateAgentCompletionArtifacts } from "@/lib/session/bundle-adoption";
+import { appendSessionLlmCalls } from "@/lib/llm/session-evidence";
 import type { AgentDecision, SessionState } from "@/lib/session/types";
 
 export type AgentWorkflowTrigger =
@@ -208,6 +209,7 @@ async function executeAdvance(
 
     const completionReport = buildAgentCompletionReport(state, decision);
     const bundleResult = await composePurchaseBundle(state, completionReport.purchase_bundle!);
+    appendSessionLlmCalls(state, bundleResult.call);
     completionReport.purchase_bundle = bundleResult.data;
     if (bundleResult.mode === "connected") {
       state.deepseek_status = "connected";

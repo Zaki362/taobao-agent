@@ -42,6 +42,7 @@ export function createSessionFixture(overrides: Partial<SessionState> = {}): Ses
       workflow_message: "等待开始",
       initialized_at: new Date().toISOString()
     },
+    llm_calls: [],
     selected_items: [],
     tool_logs: [],
     hosted_tasks: [],

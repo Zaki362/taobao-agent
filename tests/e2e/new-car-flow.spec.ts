@@ -507,7 +507,13 @@ test("authenticated new-car workflow reaches recommendations through the durable
     const sessionList = await sessionsResponse.json() as {
       sessions: Array<{
         session_id: string;
-        shopping_plan: { modules: Array<{ module_id: string }> };
+        shopping_plan: {
+          modules: Array<{
+            module_id: string;
+            module_name: string;
+            typical_item_types: string[];
+          }>;
+        };
         market_feedback: {
           observed_modules: number;
           total_modules: number;
@@ -521,7 +527,7 @@ test("authenticated new-car workflow reaches recommendations through the durable
     expect(currentSession.market_feedback.total_modules).toBe(currentSession.shopping_plan.modules.length);
     expect(currentSession.market_feedback.user_confirmation_required).toBe(true);
     const retryModule = currentSession.shopping_plan.modules[0];
-    const retryKeyword = `E2E 失败恢复 ${Date.now()}`;
+    const retryKeyword = `${retryModule.typical_item_types[0] ?? retryModule.module_name} E2E失败恢复 ${Date.now()}`;
     const queuedForFailure = await page.request.post("/api/modules/search", {
       headers: { Origin: "http://127.0.0.1:3100" },
       data: {

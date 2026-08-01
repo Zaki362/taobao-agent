@@ -13,6 +13,7 @@ import {
   ProductCandidate,
   RefinementImpactSummary,
   SelectedItem,
+  SessionLlmCall,
   SessionState
 } from "@/lib/session/types";
 
@@ -35,6 +36,30 @@ function isExecutionMode(value: unknown): value is ExecutionMode {
 
 function isMcpStatus(value: unknown): value is MCPStatus {
   return value === "hosted" || value === "connected" || value === "unavailable";
+}
+
+export function isSessionLlmCall(value: unknown): value is SessionLlmCall {
+  if (!isRecord(value)) return false;
+  const validTask =
+    value.task === "parse_scene" ||
+    value.task === "personalize_template" ||
+    value.task === "refine_plan" ||
+    value.task === "review_candidates" ||
+    value.task === "review_plan" ||
+    value.task === "decide_next_action" ||
+    value.task === "compose_purchase_bundle" ||
+    value.task === "explain_product_fit";
+  return (
+    typeof value.id === "string" &&
+    validTask &&
+    typeof value.model === "string" &&
+    (value.mode === "connected" || value.mode === "fallback") &&
+    typeof value.duration_ms === "number" &&
+    Number.isFinite(value.duration_ms) &&
+    value.duration_ms >= 0 &&
+    (value.reason === undefined || typeof value.reason === "string") &&
+    typeof value.created_at === "string"
+  );
 }
 
 export function isAgentDecision(value: unknown): value is AgentDecision {
@@ -520,6 +545,8 @@ export function isRenderableSessionState(value: unknown): value is SessionState 
     isMarketFeedback(value.market_feedback) &&
     Array.isArray(value.agent_decisions) &&
     isAgentRuntimeState(value.agent_runtime) &&
+    Array.isArray(value.llm_calls) &&
+    value.llm_calls.every(isSessionLlmCall) &&
     (value.completion_report === undefined || Boolean(completionReport)) &&
     (value.bundle_adoption === undefined || isAgentBundleAdoptionForReport(value.bundle_adoption, completionReport)) &&
     Array.isArray(value.hosted_tasks) &&

@@ -20,6 +20,26 @@ export type WorkflowStage =
   | "carting";
 export type QuickAction = string;
 
+export type SessionLlmTaskName =
+  | "parse_scene"
+  | "personalize_template"
+  | "refine_plan"
+  | "review_candidates"
+  | "review_plan"
+  | "decide_next_action"
+  | "compose_purchase_bundle"
+  | "explain_product_fit";
+
+export interface SessionLlmCall {
+  id: string;
+  task: SessionLlmTaskName;
+  model: string;
+  mode: "connected" | "fallback";
+  duration_ms: number;
+  reason?: string;
+  created_at: string;
+}
+
 export interface SceneBrief {
   scenario_id: ScenarioId;
   scene_type: string;
@@ -443,6 +463,7 @@ export interface SessionState {
   market_feedback: MarketFeedback;
   agent_decisions: AgentDecision[];
   agent_runtime: AgentRuntimeState;
+  llm_calls: SessionLlmCall[];
   completion_report?: AgentCompletionReport;
   bundle_adoption?: AgentBundleAdoption;
   selected_items: SelectedItem[];

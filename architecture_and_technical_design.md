@@ -430,6 +430,8 @@ DeepSeek 在系统中不做“自由 Agent”，而做“受约束的结构化�
 - [lib/llm/prompts.ts](./lib/llm/prompts.ts)
 - [lib/llm/mock.ts](./lib/llm/mock.ts)
 
+模型运行证据分成两层：`telemetry.ts` 提供当前服务进程级成功率、P95 延迟和最近 fallback 原因；`session-evidence.ts` 把当前购物链路内的能力调用写入 `SessionState.llm_calls`。后者只保存 `task / model / mode / duration_ms / reason / created_at`，不保存 Prompt、Scene Brief 原文、候选商品摘要或模型原始输出。规划、规划复核、方案调整、候选池复盘、Runtime 下一动作和购买组合均会追加凭证，执行台因此可以回答“这次购物的哪些步骤真实使用了 DeepSeek，哪些步骤使用了规则 fallback”，而不是只展示一个静态模型标签。
+
 ---
 
 ## 2.6 MCP / skill / 工具调用层

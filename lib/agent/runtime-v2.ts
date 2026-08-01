@@ -4,9 +4,11 @@ import {
 } from "@/lib/agent/decision-engine";
 import { decideAgentNextAction } from "@/lib/llm/deepseek";
 import { validateAutonomousSearchKeyword } from "@/lib/agent/search-strategy";
+import { appendSessionLlmCalls } from "@/lib/llm/session-evidence";
 import type {
   AgentDecision,
   AgentDecisionProposal,
+  SessionLlmCall,
   SessionState,
   ShoppingPlanModule
 } from "@/lib/session/types";
@@ -14,7 +16,11 @@ import type {
 export type AgentModelDecider = (
   state: SessionState,
   fallback: AgentDecisionProposal
-) => Promise<{ data: AgentDecisionProposal; mode: "connected" | "mock" }>;
+) => Promise<{
+  data: AgentDecisionProposal;
+  mode: "connected" | "mock";
+  call?: SessionLlmCall;
+}>;
 
 function proposalFromPolicy(decision: AgentDecision): AgentDecisionProposal {
   return {
@@ -191,6 +197,7 @@ export async function decideNextAgentActionV2(
   const startedAt = Date.now();
   state.agent_runtime.model_proposals += 1;
   const modeled = await modelDecider(state, policyProposal);
+  appendSessionLlmCalls(state, modeled.call);
   const decisionLatencyMs = Date.now() - startedAt;
   state.agent_runtime.total_decision_latency_ms += decisionLatencyMs;
   state.agent_runtime.last_decision_at = new Date().toISOString();

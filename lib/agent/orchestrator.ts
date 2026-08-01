@@ -21,7 +21,7 @@ import {
   acceptCurrentPurchaseBundle,
   invalidateAgentCompletionArtifacts
 } from "@/lib/session/bundle-adoption";
-import { ModuleSearchStrategy, PlanQualityReview, QuickAction, ScenarioId, SceneBrief, SessionState } from "@/lib/session/types";
+import { ModuleSearchStrategy, PlanQualityReview, QuickAction, ScenarioId, SceneBrief, SessionLlmCall, SessionState } from "@/lib/session/types";
 import { getScenarioConfig } from "@/lib/scenarios";
 
 function generateSessionId() {
@@ -35,6 +35,7 @@ function createBaseState(
   baseTemplate: Awaited<ReturnType<typeof runTemplatePlannerForScenario>>,
   shoppingPlan: Awaited<ReturnType<typeof runDeepSeekPlanner>>["data"],
   planReview: PlanQualityReview,
+  llmCalls: SessionLlmCall[],
   ownerId?: string
 ): SessionState {
   const backend = getExecutionBackend();
@@ -72,6 +73,7 @@ function createBaseState(
       workflow_message: "等待用户确认规划并开始搜索",
       initialized_at: new Date().toISOString()
     },
+    llm_calls: llmCalls,
     selected_items: [],
     tool_logs: [],
     hosted_tasks: [],
@@ -95,7 +97,16 @@ export async function initializeSession(
   const baseTemplate = await runTemplatePlannerForScenario(parsed.data);
   const planned = await runDeepSeekPlanner(parsed.data);
   const reviewed = await reviewPlanWithAgent(parsed.data, planned.data);
-  const state = createBaseState(rawInput, parsed.data, parsed.mode === "connected" || planned.mode === "connected" || reviewed.mode === "connected" ? "connected" : "mock", baseTemplate, planned.data, reviewed.data, ownerId);
+  const state = createBaseState(
+    rawInput,
+    parsed.data,
+    parsed.mode === "connected" || planned.mode === "connected" || reviewed.mode === "connected" ? "connected" : "mock",
+    baseTemplate,
+    planned.data,
+    reviewed.data,
+    [parsed.call, planned.call, reviewed.call],
+    ownerId
+  );
 
   await persistSession(state);
   return state;
@@ -110,7 +121,16 @@ export async function createSessionFromScene(
   const baseTemplate = await runTemplatePlannerForScenario(sceneBrief);
   const planned = await runDeepSeekPlanner(sceneBrief);
   const reviewed = await reviewPlanWithAgent(sceneBrief, planned.data);
-  const state = createBaseState(rawInput, sceneBrief, parseMode === "connected" || planned.mode === "connected" || reviewed.mode === "connected" ? "connected" : "mock", baseTemplate, planned.data, reviewed.data, ownerId);
+  const state = createBaseState(
+    rawInput,
+    sceneBrief,
+    parseMode === "connected" || planned.mode === "connected" || reviewed.mode === "connected" ? "connected" : "mock",
+    baseTemplate,
+    planned.data,
+    reviewed.data,
+    [planned.call, reviewed.call],
+    ownerId
+  );
   await persistSession(state);
   return state;
 }

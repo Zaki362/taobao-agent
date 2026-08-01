@@ -135,6 +135,7 @@ function llmTaskLabel(task: string) {
     review_plan: "规划复核",
     review_candidates: "候选复盘",
     decide_next_action: "Agent 下一步决策",
+    compose_purchase_bundle: "购买组合生成",
     explain_product_fit: "推荐理由"
   };
   return labels[task] ?? task;
@@ -150,6 +151,7 @@ function llmReasonLabel(reason?: string) {
   if (reason === "explicitly_disabled") return "模型已被显式禁用";
   if (reason.startsWith("http_")) return `上游接口 ${reason.slice(5)}`;
   if (reason.startsWith("schema_validation_failed")) return "结构化结果未通过校验";
+  if (reason.startsWith("guardrail_rejected")) return "模型提案未通过业务安全校验";
   return reason;
 }
 
@@ -186,6 +188,15 @@ export function HostedConsole() {
   const activeTaskCount = selectedSession?.hosted_tasks.filter(
     (task) => task.status === "pending" || task.status === "running"
   ).length ?? 0;
+  const sessionLlmStats = useMemo(() => {
+    const calls = selectedSession?.llm_calls ?? [];
+    return {
+      total: calls.length,
+      connected: calls.filter((call) => call.mode === "connected").length,
+      fallback: calls.filter((call) => call.mode === "fallback").length,
+      latest: calls.at(-1)
+    };
+  }, [selectedSession]);
 
   async function loadData() {
     setBusy(true);
@@ -633,6 +644,56 @@ export function HostedConsole() {
                     </CardContent>
                   </Card>
                 ) : null}
+
+                <Card className="section-card">
+                  <CardHeader>
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      <div>
+                        <CardTitle>本次会话模型凭证</CardTitle>
+                        <p className="mt-2 text-sm text-muted-foreground">只记录任务、模型、耗时和降级原因，不保存 Prompt、用户原文或模型原始输出。</p>
+                      </div>
+                      <Badge variant={sessionLlmStats.fallback > 0 ? "secondary" : sessionLlmStats.connected > 0 ? "success" : "outline"}>
+                        {sessionLlmStats.connected > 0
+                          ? `${sessionLlmStats.connected}/${sessionLlmStats.total} 次真实成功`
+                          : "尚无真实调用凭证"}
+                      </Badge>
+                    </div>
+                  </CardHeader>
+                  <CardContent className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                    <InfoBlock label="会话内调用" value={`${sessionLlmStats.total} 次`} />
+                    <InfoBlock label="DeepSeek 成功" value={`${sessionLlmStats.connected} 次`} />
+                    <InfoBlock label="规则 Fallback" value={`${sessionLlmStats.fallback} 次`} />
+                    <InfoBlock
+                      label="最近能力"
+                      value={sessionLlmStats.latest ? llmTaskLabel(sessionLlmStats.latest.task) : "尚未记录"}
+                    />
+                  </CardContent>
+                  {selectedSession.llm_calls.length > 0 ? (
+                    <CardContent className="pt-0">
+                      <details className="rounded-[20px] border border-border/70 bg-white px-4 py-3">
+                        <summary className="cursor-pointer text-sm font-medium">查看本次购物链路的模型调用</summary>
+                        <div className="mt-4 space-y-2">
+                          {[...selectedSession.llm_calls].reverse().slice(0, 24).map((call) => (
+                            <div key={call.id} className="rounded-[16px] border border-border/60 bg-muted/25 p-3 text-xs">
+                              <div className="flex flex-wrap items-center justify-between gap-2">
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <Badge variant={call.mode === "connected" ? "success" : "secondary"}>
+                                    {call.mode === "connected" ? "DeepSeek" : "规则 Fallback"}
+                                  </Badge>
+                                  <span className="font-medium text-foreground">{llmTaskLabel(call.task)}</span>
+                                </div>
+                                <span className="text-muted-foreground">{call.duration_ms}ms · {formatTime(call.created_at)}</span>
+                              </div>
+                              <p className="mt-2 text-muted-foreground">
+                                {call.model}{call.mode === "fallback" ? ` · ${llmReasonLabel(call.reason)}` : " · 结构化结果已通过校验"}
+                              </p>
+                            </div>
+                          ))}
+                        </div>
+                      </details>
+                    </CardContent>
+                  ) : null}
+                </Card>
 
                 <Card className="section-card">
                   <CardHeader>

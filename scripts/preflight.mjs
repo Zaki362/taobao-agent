@@ -317,6 +317,7 @@ function assertRequiredFiles() {
     "lib/llm/prompts.ts",
     "lib/llm/validation.ts",
     "lib/llm/telemetry.ts",
+    "lib/llm/session-evidence.ts",
     "lib/mcp/client.ts",
     "lib/mcp/local-executor.ts",
     "lib/runtime/executor-protocol.json",
@@ -392,6 +393,7 @@ function assertArchitectureContracts() {
   const prompts = tryReadText("lib/llm/prompts.ts");
   const validation = tryReadText("lib/llm/validation.ts");
   const llmTelemetry = tryReadText("lib/llm/telemetry.ts");
+  const llmSessionEvidence = tryReadText("lib/llm/session-evidence.ts");
   const runtimeReadiness = tryReadText("lib/runtime/readiness.ts");
   const types = tryReadText("lib/session/types.ts");
   const dashboard = tryReadText("components/dashboard.tsx");
@@ -462,6 +464,7 @@ function assertArchitectureContracts() {
     !prompts ||
     !validation ||
     !llmTelemetry ||
+    !llmSessionEvidence ||
     !runtimeReadiness ||
     !types ||
     !dashboard ||
@@ -643,7 +646,13 @@ function assertArchitectureContracts() {
         runtimeReadiness.includes('"deepseek_runtime"') &&
         runtimeReadiness.includes("summarizeLlmRuntimeStatus") &&
         executorSettings.includes("DeepSeek 已真实连接") &&
-        executorSettings.includes("DeepSeek 等待真实验证"),
+        executorSettings.includes("DeepSeek 等待真实验证") &&
+        types.includes("SessionLlmCall") &&
+        types.includes("llm_calls") &&
+        llmSessionEvidence.includes("appendSessionLlmCalls") &&
+        deepseek.includes("call: SessionLlmCall") &&
+        hostedConsole.includes("本次会话模型凭证") &&
+        sessionsRoute.includes("MAX_SESSION_LIST_LLM_CALLS"),
       message: "发布就绪度必须区分 DeepSeek 已配置与真实运行证据，且同毫秒调用不能误判最近状态"
     },
     {

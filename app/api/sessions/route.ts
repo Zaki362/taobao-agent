@@ -8,6 +8,7 @@ const MAX_SESSION_LIST_SELECTED_ITEMS = 30;
 const MAX_SESSION_LIST_MODULE_CANDIDATES = 6;
 const MAX_SESSION_LIST_SEARCH_TRACES = 12;
 const MAX_SESSION_LIST_AGENT_DECISIONS = 24;
+const MAX_SESSION_LIST_LLM_CALLS = 40;
 
 function sessionTimestamp(sessionId: string) {
   const match = sessionId.match(/^session-(\d+)/);
@@ -52,6 +53,7 @@ export async function GET() {
         market_feedback: session.market_feedback,
         agent_decisions: session.agent_decisions.slice(-MAX_SESSION_LIST_AGENT_DECISIONS),
         agent_runtime: session.agent_runtime,
+        llm_calls: session.llm_calls.slice(-MAX_SESSION_LIST_LLM_CALLS),
         completion_report: session.completion_report,
         bundle_adoption: session.bundle_adoption,
         tool_logs: session.tool_logs.slice(0, MAX_SESSION_LIST_TOOL_LOGS),

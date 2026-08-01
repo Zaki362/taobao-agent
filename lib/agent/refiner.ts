@@ -4,6 +4,7 @@ import { runDeepSeekPlanner } from "@/lib/agent/planner";
 import { reviewPlanWithAgent } from "@/lib/agent/plan-reviewer";
 import { removeModuleAgentDecisions } from "@/lib/agent/decision-engine";
 import { invalidateAgentCompletionArtifacts } from "@/lib/session/bundle-adoption";
+import { appendSessionLlmCalls } from "@/lib/llm/session-evidence";
 import { QuickAction, RefinementImpactSummary, RefinementModuleDecision, SessionState, ShoppingPlanModule } from "@/lib/session/types";
 
 function textSignature(value: string | undefined) {
@@ -139,6 +140,7 @@ export async function runRefiner(state: SessionState, action: QuickAction) {
   state.scene_brief = refined.data;
   const plan = await runDeepSeekPlanner(state.scene_brief);
   const reviewed = await reviewPlanWithAgent(state.scene_brief, plan.data);
+  appendSessionLlmCalls(state, refined.call, plan.call, reviewed.call);
   state.shopping_plan = plan.data;
   state.plan_review = reviewed.data;
   state.deepseek_status =
