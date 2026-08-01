@@ -246,13 +246,18 @@ npm run start
 
 用户登录后打开 `/settings/executor` 注册本机设备，再在运行淘宝桌面版与 Qoder 的机器启动：
 
-```bash
-SCENECART_API_URL=http://127.0.0.1:3000 \
-SCENECART_DEVICE_TOKEN=一次性设备令牌 \
-npm run executor:doctor
+先将设置页只展示一次的配置写入被 Git 忽略的 `.env.local`：
 
-SCENECART_API_URL=http://127.0.0.1:3000 \
-SCENECART_DEVICE_TOKEN=一次性设备令牌 \
+```dotenv
+SCENECART_API_URL=http://127.0.0.1:3000
+SCENECART_DEVICE_TOKEN=一次性设备令牌
+QODERCLI_PATH=/Users/你的用户名/.local/bin/qodercli
+```
+
+然后运行：
+
+```bash
+npm run executor:doctor
 npm run worker:local
 ```
 
@@ -265,7 +270,7 @@ npm run worker:local
 - 淘宝搜索依赖用户本机 Qoder/Taobao skill 和淘宝桌面版登录态；服务端已生产化，但第三方桌面执行能力仍是外部依赖。
 - 加购具备显式确认、后台执行、重试与结果账本，但淘宝客户端权限或账号策略仍可能拒绝动作；系统不会自动下单或支付。
 - 正式产品模式不会把真实加购失败写成成功；产品内演示购物车仅用于明确标注的开发预览。
-- `RUNTIME_STORE=local` 的用户与队列只存于开发进程内，不能替代 PostgreSQL 正式运行时。
+- `RUNTIME_STORE=local` 会把开发状态持久化到被 Git 忽略的本地快照，适合单机开发但不支持多实例事务一致性，不能替代 PostgreSQL 正式运行时。
 
 ## 项目文档
 

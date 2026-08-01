@@ -84,10 +84,17 @@ npm run start
 
 在已安装 Qoder CLI、淘宝 skill 和淘宝桌面版的机器执行：
 
+先将配置保存到项目根目录的 `.env.local`，避免 Token 进入 shell history：
+
+```dotenv
+SCENECART_API_URL=https://your-scenecart.example.com
+SCENECART_DEVICE_TOKEN=your-one-time-device-token
+QODERCLI_PATH=/Users/your-name/.local/bin/qodercli
+```
+
+再执行：
+
 ```bash
-SCENECART_API_URL=https://your-scenecart.example.com \
-SCENECART_DEVICE_TOKEN=your-one-time-device-token \
-QODERCLI_PATH="$HOME/.local/bin/qodercli" \
 npm run executor:doctor
 ```
 
@@ -96,9 +103,6 @@ Doctor 会额外执行一次不调用淘宝工具的 Qoder headless 请求，用
 Doctor 只检查服务端、设备令牌和 Qoder CLI，不触发淘宝页面或账号动作。全部通过后启动：
 
 ```bash
-SCENECART_API_URL=https://your-scenecart.example.com \
-SCENECART_DEVICE_TOKEN=your-one-time-device-token \
-QODERCLI_PATH="$HOME/.local/bin/qodercli" \
 npm run worker:local
 ```
 

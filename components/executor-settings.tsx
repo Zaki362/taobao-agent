@@ -73,8 +73,9 @@ export function ExecutorSettings() {
   const onlineDevices = activeDevices.filter((device) => deviceStatus(device) === "在线");
   const searchAvailable = readiness?.executor_capabilities.capabilities.module_search.available ?? false;
   const cartAvailable = readiness?.executor_capabilities.capabilities.add_to_cart.available ?? false;
-  const doctorCommand = `SCENECART_API_URL='${apiUrl}' SCENECART_DEVICE_TOKEN='${token || "你的设备令牌"}' npm run executor:doctor`;
-  const workerCommand = `SCENECART_API_URL='${apiUrl}' SCENECART_DEVICE_TOKEN='${token || "你的设备令牌"}' npm run worker:local`;
+  const environmentConfig = `SCENECART_API_URL=${apiUrl}\nSCENECART_DEVICE_TOKEN=${token || "你的设备令牌"}`;
+  const doctorCommand = "npm run executor:doctor";
+  const workerCommand = "npm run worker:local";
 
   async function load() {
     const [devicesResponse, readinessResponse] = await Promise.all([
@@ -423,15 +424,28 @@ export function ExecutorSettings() {
         <Card className="section-card border-primary/20">
           <CardHeader>
             <div className="flex flex-wrap items-center justify-between gap-3">
-              <CardTitle>启动命令</CardTitle>
-              <Button variant="outline" size="sm" onClick={() => copyCommand(workerCommand, "worker")}>
-                <Copy className="mr-2 h-4 w-4" />{copied === "worker" ? "已复制" : "复制启动命令"}
+              <CardTitle>保存一次性设备令牌</CardTitle>
+              <Button variant="outline" size="sm" onClick={() => copyCommand(environmentConfig, "environment")}>
+                <Copy className="mr-2 h-4 w-4" />{copied === "environment" ? "已复制" : "复制环境配置"}
               </Button>
             </div>
           </CardHeader>
           <CardContent className="space-y-3">
-            <p className="text-sm text-muted-foreground">请在项目终端执行。关闭页面后无法再次查看该令牌。</p>
-            <pre className="overflow-x-auto rounded-[18px] bg-foreground p-4 text-xs leading-6 text-white">{`${doctorCommand}\n${workerCommand}`}</pre>
+            <p className="text-sm leading-6 text-muted-foreground">
+              把下面两行加入项目根目录的 <code>.env.local</code>。关闭页面后无法再次查看原始令牌；本地开发服务重启后，已保存的令牌仍然有效。
+            </p>
+            <pre className="overflow-x-auto rounded-[18px] bg-foreground p-4 text-xs leading-6 text-white">{environmentConfig}</pre>
+            <div className="rounded-[16px] border border-amber-200 bg-amber-50 px-4 py-3 text-xs leading-5 text-amber-800">
+              不要把令牌提交到 Git、发送给模型或直接拼进终端命令，以免进入命令历史。
+            </div>
+            <div className="flex flex-wrap gap-2 pt-1">
+              <Button variant="outline" size="sm" onClick={() => copyCommand(doctorCommand, "doctor-after-save")}>
+                <Copy className="mr-2 h-4 w-4" />{copied === "doctor-after-save" ? "已复制" : "复制诊断命令"}
+              </Button>
+              <Button variant="outline" size="sm" onClick={() => copyCommand(workerCommand, "worker")}>
+                <Copy className="mr-2 h-4 w-4" />{copied === "worker" ? "已复制" : "复制启动命令"}
+              </Button>
+            </div>
           </CardContent>
         </Card>
       ) : null}
