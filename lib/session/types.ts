@@ -274,6 +274,13 @@ export interface AgentRuntimeState {
   last_fallback_reason?: string;
   last_decision_at?: string;
   last_decision_mode: "deepseek" | "policy" | "none";
+  workflow_status: "idle" | "running" | "waiting_for_tools" | "completed" | "paused" | "error";
+  auto_continue: boolean;
+  workflow_run_id?: string;
+  current_module_id?: string;
+  continuation_count: number;
+  workflow_message: string;
+  last_transition_at?: string;
   initialized_at: string;
 }
 

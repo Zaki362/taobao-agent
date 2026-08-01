@@ -55,6 +55,10 @@ function createBaseState(
       model_failures: 0,
       total_decision_latency_ms: 0,
       last_decision_mode: "none",
+      workflow_status: "idle",
+      auto_continue: false,
+      continuation_count: 0,
+      workflow_message: "等待用户确认规划并开始搜索",
       initialized_at: new Date().toISOString()
     },
     selected_items: [],
@@ -280,6 +284,11 @@ export async function updateModuleSearchStrategy(
   delete state.module_search_traces[moduleId];
   removeModuleAgentDecisions(state, moduleId);
   refreshMarketFeedback(state);
+  state.agent_runtime.workflow_status = "idle";
+  state.agent_runtime.auto_continue = false;
+  state.agent_runtime.current_module_id = undefined;
+  state.agent_runtime.workflow_message = "搜索策略已更新，等待用户确认后重新开始";
+  state.agent_runtime.last_transition_at = new Date().toISOString();
   state.tool_logs.push({
     id: `strategy_update-${Date.now()}`,
     timestamp: new Date().toISOString(),

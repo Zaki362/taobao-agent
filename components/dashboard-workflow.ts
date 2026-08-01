@@ -89,7 +89,14 @@ export function toRestorableStage({
     return hasParsedScene ? "confirm_scene" : "input_requirement";
   }
 
-  if (stage === "searching" || stage === "refining" || stage === "carting") {
+  if (stage === "searching") {
+    if (hasSession) {
+      return "searching";
+    }
+    return hasParsedScene ? "confirm_scene" : "input_requirement";
+  }
+
+  if (stage === "refining" || stage === "carting") {
     if (hasSession) {
       return "review_results";
     }

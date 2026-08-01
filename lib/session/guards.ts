@@ -104,6 +104,19 @@ function isAgentRuntimeState(value: unknown) {
     (value.last_decision_mode === "none" ||
       value.last_decision_mode === "deepseek" ||
       value.last_decision_mode === "policy") &&
+    (value.workflow_status === "idle" ||
+      value.workflow_status === "running" ||
+      value.workflow_status === "waiting_for_tools" ||
+      value.workflow_status === "completed" ||
+      value.workflow_status === "paused" ||
+      value.workflow_status === "error") &&
+    typeof value.auto_continue === "boolean" &&
+    (value.workflow_run_id === undefined || typeof value.workflow_run_id === "string") &&
+    (value.current_module_id === undefined || typeof value.current_module_id === "string") &&
+    typeof value.continuation_count === "number" &&
+    Number.isFinite(value.continuation_count) &&
+    typeof value.workflow_message === "string" &&
+    (value.last_transition_at === undefined || typeof value.last_transition_at === "string") &&
     typeof value.initialized_at === "string"
   );
 }

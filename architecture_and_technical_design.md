@@ -10,6 +10,7 @@ Browser / React workflow
   -> Agent Orchestrator
      -> Scene template + DeepSeek structured tasks
      -> Agent Runtime 2.0 (model proposal + guardrail + policy fallback)
+     -> Workflow Runner (durable state + one-module-at-a-time continuation)
   -> PostgreSQL
      -> shopping_sessions
      -> agent_jobs
@@ -29,7 +30,8 @@ Local Executor on user's device
 - Session 不再只依赖 Next.js 进程内 Map 或本地 JSON；`RUNTIME_STORE=postgres` 时按用户持久化到 PostgreSQL。
 - Qoder/Taobao 不再运行在 `/api/modules/search` 或 `/api/cart/add` 的长请求内；API 只创建任务并立即返回。
 - 本地执行器使用一次性设备令牌、15 秒心跳、任务租约、最大重试次数和结果账本。
-- 搜索、失败重试和加购结果以执行事件写入，并通过 SSE 自动刷新当前浏览器会话。
+- 搜索、失败重试、Agent 状态转换和加购结果以执行事件写入，并通过 SSE 自动刷新当前浏览器会话。
+- 用户确认规划后只启动一次服务端工作流；本地执行器每次回填后，服务端自动决定并排队下一模块，浏览器关闭不会中断搜索。
 - DeepSeek 可以在平衡/探索档位提议下一动作，但只能在动作白名单中选择；后端验证模块、重复任务、置信度和工具预算后才执行。
 - 保守档位、模型失败、低置信度、越界动作或预算耗尽时，确定性策略始终可接管。
 - 旧 Qoder 直连、Codex hosted 与 experimental bridge 仍保留为兼容路径，不再作为正式部署首选。
@@ -808,7 +810,9 @@ DeepSeek 目前承担六类结构化任务：
 
 当前实现中，用户可以在规划确认页选择“保守 / 平衡 / 探索”执行档位。前端调用 `/api/session/agent-directives`，后端通过 `lib/agent/directives.ts` 写回当前 session 的 `agent_directives`。随后 `product-matcher` 会读取这些字段决定搜索尝试次数、是否使用备用词、是否按候选池复盘建议补搜。
 
-在此基础上，`lib/agent/decision-engine.ts` 把搜索阶段升级为服务端 Agent 决策循环。前端不再自行遍历模块，而是调用 `/api/agent/next-action` 获取下一步动作。决策引擎会综合 `execution_strategy`、`agent_directives`、模块候选、`module_reviews`、`module_search_traces` 与工具任务状态，输出 `search_module`、`retry_module`、`skip_module`、`wait_for_tools` 或 `complete_workflow`。
+在此基础上，`lib/agent/decision-engine.ts` 与 `lib/agent/workflow-runner.ts` 把搜索阶段升级为服务端 Agent 决策循环。前端确认规划后调用一次 `/api/agent/run`；后续每次本地执行器回填，resolve API 都会触发工作流继续推进。决策引擎会综合 `execution_strategy`、`agent_directives`、模块候选、`module_reviews`、`module_search_traces`、市场反馈与工具任务状态，输出 `search_module`、`retry_module`、`skip_module`、`wait_for_tools` 或 `complete_workflow`。
+
+`workflow-runner` 把 `workflow_run_id`、`workflow_status`、`current_module_id`、`auto_continue`、`continuation_count` 和状态说明写入 Session。每轮最多排队一个外部工具任务；成功回填后继续下一模块，终态失败则形成失败轨迹并容错跳过，用户取消则暂停整轮自动推进。任务幂等键按会话、模块、搜索词和本轮运行 ID 构造，重复完成回执不会二次续跑。`workflow-recovery` 会在 Worker 空闲领取时恢复已经持久化但尚未写入 Session 的结果，再补排后续模块，不重新执行淘宝动作。浏览器只通过 SSE 和恢复轮询观察进度，并保留“查看推荐结果”的用户确认门槛。
 
 每次动作都会写入 session 的 `agent_decisions`，保存来源、置信度、理由和证据。规划顺序与候选复盘可以来自 DeepSeek，后端负责动作白名单、重复调用抑制、失败跳过和高风险确认，因此模型获得了真实的执行选择空间，但不能越过交易和隐私边界。
 
@@ -1484,7 +1488,7 @@ executor 不只负责转发工具调用，也负责把 adapter 输出归一化�
 
 ## 10. 当前架构的不足与后续可演进方向
 
-### 10.1 最大不足：真实执行层不稳定
+### 10.1 最大不足：真实执行层仍受外部宿主约束
 
 当前最薄弱的环节是淘宝执行层，尤其是：
 
@@ -1496,11 +1500,15 @@ executor 不只负责转发工具调用，也负责把 adapter 输出归一化�
 
 场景配置层已经开始建立，但前端与搜索层还未完全切换到配置驱动。
 
-### 10.3 前端大组件仍然偏重
+### 10.3 服务端工作流的跨实例互斥仍可加强
+
+当前单进程使用内存锁抑制同一 Session 的并发推进，持久任务幂等键能阻止重复工具任务，但多服务实例同时计算下一动作时还缺少数据库级 Session 版本锁。正式横向扩容应增加 optimistic version 或 PostgreSQL advisory lock。
+
+### 10.4 前端大组件仍然偏重
 
 `dashboard.tsx` 承担了过多页面状态和渲染职责，未来应继续拆分。
 
-### 10.4 执行方案并存导致复杂度高
+### 10.5 执行方案并存导致复杂度高
 
 当前同时存在：
 
@@ -1510,15 +1518,16 @@ executor 不只负责转发工具调用，也负责把 adapter 输出归一化�
 
 未来需要明确主路径。
 
-### 10.5 下一步理想演进方向
+### 10.6 下一步理想演进方向
 
 从架构角度看，下一步更理想的演进路径应该是：
 
 1. 完成 scenario config 全链路接入
 2. 统一执行策略，收敛主工具通道
 3. 增加真正稳定的商品详情 / SKU / 购物车能力
-4. 拆分 dashboard 的页面级状态
-5. 增加更完整的类型校验和集成测试
+4. 为服务端工作流增加数据库级并发租约与定时恢复扫描器
+5. 拆分 dashboard 的页面级状态
+6. 增加真实设备验收、故障注入和长时间运行测试
 
 ---
 

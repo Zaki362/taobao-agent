@@ -405,7 +405,7 @@ export function ResultsPage({
             <div className="panel-muted p-4 text-sm text-muted-foreground">
               <div className="flex items-center gap-2 font-medium text-foreground">
                 <Settings2 className="h-4 w-4" />
-                {hostedMode ? "已切换到 Codex 宿主代理执行" : "已切换到 Qoder CLI 直连执行"}
+                当前使用：{getExecutionModeLabel(mcpStatus)}
               </div>
               <p className="mt-2 leading-6">{mcpStatus?.message ?? "正在检测 MCP 工具状态"}</p>
             </div>

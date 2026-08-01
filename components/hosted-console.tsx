@@ -104,6 +104,15 @@ function marketPressureLabel(pressure: SessionState["market_feedback"]["module_s
   return "未观察";
 }
 
+function workflowStatusLabel(status: SessionState["agent_runtime"]["workflow_status"]) {
+  if (status === "running") return "服务端推进中";
+  if (status === "waiting_for_tools") return "等待本地执行器";
+  if (status === "completed") return "本轮已完成";
+  if (status === "paused") return "已暂停";
+  if (status === "error") return "需要处理";
+  return "等待用户开始";
+}
+
 function InfoBlock({ label, value }: { label: string; value: string }) {
   return (
     <div className="info-grid-card">
@@ -431,6 +440,23 @@ export function HostedConsole() {
                     <InfoBlock label="模型提议" value={`${selectedSession.agent_runtime.model_proposals} 次`} />
                     <InfoBlock label="Guardrail 拒绝" value={`${selectedSession.agent_runtime.model_rejections} 次`} />
                     <InfoBlock label="模型 Fallback" value={`${selectedSession.agent_runtime.model_failures} 次`} />
+                    <InfoBlock label="自动推进" value={workflowStatusLabel(selectedSession.agent_runtime.workflow_status)} />
+                    <InfoBlock label="服务端续跑" value={`${selectedSession.agent_runtime.continuation_count} 次状态转换`} />
+                    <InfoBlock
+                      label="当前模块"
+                      value={selectedSession.shopping_plan.modules.find((module) => module.module_id === selectedSession.agent_runtime.current_module_id)?.module_name ?? "无"}
+                    />
+                    <InfoBlock label="页面关闭后" value={selectedSession.agent_runtime.auto_continue ? "仍会继续" : "不会继续执行"} />
+                  </CardContent>
+                  <CardContent className="pt-0">
+                    <div className="rounded-[20px] border border-primary/10 bg-primary/[0.035] p-4 text-sm">
+                      <p className="font-medium">{selectedSession.agent_runtime.workflow_message}</p>
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        {selectedSession.agent_runtime.workflow_run_id
+                          ? `运行 ID：${selectedSession.agent_runtime.workflow_run_id.slice(0, 8)} · 最近更新：${formatTime(selectedSession.agent_runtime.last_transition_at)}`
+                          : "尚未创建服务端运行实例"}
+                      </p>
+                    </div>
                   </CardContent>
                   {selectedSession.agent_runtime.last_fallback_reason ? (
                     <CardContent className="pt-0">

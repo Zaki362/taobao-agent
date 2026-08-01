@@ -154,6 +154,11 @@ export async function runRefiner(state: SessionState, action: QuickAction) {
     removeModuleAgentDecisions(state, moduleId);
   }
   refreshMarketFeedback(state);
+  state.agent_runtime.workflow_status = "idle";
+  state.agent_runtime.auto_continue = false;
+  state.agent_runtime.current_module_id = undefined;
+  state.agent_runtime.workflow_message = "方案已调整，等待用户确认后重新开始搜索";
+  state.agent_runtime.last_transition_at = new Date().toISOString();
 
   return {
     state,

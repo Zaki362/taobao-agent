@@ -12,7 +12,7 @@ describe("new-car workflow persistence", () => {
       hasSession: true,
       hasParsedScene: true,
       hasScenario: true
-    })).toBe("review_results");
+    })).toBe("searching");
   });
 
   it("persists and restores the active new-car session", () => {

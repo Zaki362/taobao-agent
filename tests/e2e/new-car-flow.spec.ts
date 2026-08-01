@@ -171,12 +171,55 @@ test("authenticated new-car workflow reaches recommendations through the durable
     await expect(page.getByText("确认购物规划")).toBeVisible();
     await expect(page.getByText("儿童安全出行", { exact: true })).toBeVisible();
     await expect(page.getByText("AI 新增", { exact: true }).first()).toBeVisible();
+    const persistedSessionId = await page.evaluate(() => {
+      const raw = window.localStorage.getItem("scenecart-dashboard-state");
+      if (!raw) return "";
+      return String((JSON.parse(raw) as { sessionId?: string }).sessionId ?? "");
+    });
+    expect(persistedSessionId).not.toBe("");
     await page.getByRole("button", { name: "确认规划，开始搜索推荐商品" }).click();
 
-    await expect(page.getByRole("button", { name: "查看推荐结果" })).toBeEnabled({ timeout: 120_000 });
+    await expect(page.getByText("搜索执行摘要")).toBeVisible();
+    await expect.poll(async () => {
+      const response = await page.request.get(`/api/session/state?session_id=${persistedSessionId}`);
+      const state = await response.json() as {
+        agent_runtime: { workflow_status: string };
+      };
+      return state.agent_runtime.workflow_status;
+    }, { timeout: 30_000 }).toBe("waiting_for_tools");
+
+    // Leave the product page after the first task is queued. The server and local executor
+    // must continue the remaining modules without a browser-driven action loop.
+    await page.goto("/settings/executor");
+    await expect(page.getByText("正式运行就绪度")).toBeVisible();
+    await expect.poll(async () => {
+      const response = await page.request.get(`/api/session/state?session_id=${persistedSessionId}`);
+      const state = await response.json() as {
+        agent_runtime: { workflow_status: string };
+      };
+      return state.agent_runtime.workflow_status;
+    }, { timeout: 120_000, intervals: [250, 500, 1_000] }).toBe("completed");
+
+    const completedStateResponse = await page.request.get(`/api/session/state?session_id=${persistedSessionId}`);
+    const completedState = await completedStateResponse.json() as {
+      agent_runtime: { continuation_count: number; auto_continue: boolean };
+      shopping_plan: { modules: Array<{ module_id: string }> };
+      module_candidates: Record<string, unknown[]>;
+    };
+    expect(completedState.agent_runtime.auto_continue).toBe(false);
+    expect(completedState.agent_runtime.continuation_count).toBeGreaterThanOrEqual(
+      completedState.shopping_plan.modules.length
+    );
+    expect(Object.keys(completedState.module_candidates)).toHaveLength(completedState.shopping_plan.modules.length);
+
+    await page.goto("/?resume=1");
+    await expect(page.getByText("搜索执行摘要")).toBeVisible();
+    await expect(page.getByRole("button", { name: "查看推荐结果" })).toBeEnabled();
     await page.getByRole("button", { name: "查看推荐结果" }).click();
     await expect(page.getByText(/E2E 真实链路候选/).first()).toBeVisible();
     await expect(page.getByText("本地执行器", { exact: false }).first()).toBeVisible();
+    await expect(page.getByText(/\[[^\]]+\] local_executor/).first()).toBeVisible();
+    await expect(page.getByText(/SUCCESS · 0ms/).first()).toBeVisible();
 
     page.once("dialog", (dialog) => dialog.accept());
     await page.getByRole("button", { name: "加入购物车" }).first().click();
@@ -205,12 +248,6 @@ test("authenticated new-car workflow reaches recommendations through the durable
 
     stopExecutor = true;
     await executor;
-    const persistedSessionId = await page.evaluate(() => {
-      const raw = window.localStorage.getItem("scenecart-dashboard-state");
-      if (!raw) return "";
-      return String((JSON.parse(raw) as { sessionId?: string }).sessionId ?? "");
-    });
-    expect(persistedSessionId).not.toBe("");
     const sessionsResponse = await page.request.get("/api/sessions");
     const sessionList = await sessionsResponse.json() as {
       sessions: Array<{

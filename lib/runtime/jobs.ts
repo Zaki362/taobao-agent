@@ -120,8 +120,22 @@ export async function enqueueModuleSearchJob(
   input: { moduleId: string; moduleName: string; keyword: string }
 ) {
   const repository = getRuntimeRepository();
-  const decisionId = state.agent_decisions.at(-1)?.decision_id ?? "manual";
-  const idempotencyKey = `module-search:${state.session_id}:${input.moduleId}:${stableDigest(input.keyword)}:${decisionId}`;
+  const existingTask = state.hosted_tasks.find(
+    (task) =>
+      task.task_type === "module_search" &&
+      task.module_id === input.moduleId &&
+      task.payload.keyword === input.keyword &&
+      (task.status === "pending" || task.status === "running")
+  );
+  if (existingTask?.runtime_job_id) {
+    const existingJob = await repository.getJob(existingTask.runtime_job_id);
+    if (existingJob && existingJob.status !== "failed" && existingJob.status !== "cancelled") {
+      return existingJob;
+    }
+  }
+
+  const workflowRunId = state.agent_runtime.workflow_run_id ?? "manual";
+  const idempotencyKey = `module-search:${state.session_id}:${input.moduleId}:${stableDigest(input.keyword)}:${workflowRunId}`;
   const jobId = randomUUID();
   const payload = {
     scene_brief: state.scene_brief,
@@ -318,27 +332,37 @@ export async function applyCompletedRuntimeJob(jobId: string, device: ExecutorDe
     }
   }
   const completion = await repository.completeJob(jobId, device.id, result);
-  if (completion.alreadyCompleted) return completion;
   const job = completion.job;
   const state = await repository.getSession(job.session_id, job.user_id);
   if (!state) throw new Error("session not found for completed job");
   const task = state.hosted_tasks.find((item) => item.task_id === job.id);
   if (!task) throw new Error("execution task not found for completed job");
+  if (completion.alreadyCompleted && task.status === "completed") return completion;
+
+  const effectiveResult = completion.alreadyCompleted && job.result ? job.result : result;
 
   if (job.job_type === "module_search") {
-    const candidates = resultCandidates(result);
+    const candidates = resultCandidates(effectiveResult);
     resolveHostedModuleSearchTask(state, {
       task_id: task.task_id,
       status: "completed",
       candidates,
-      result_summary: typeof result.summary === "string" ? result.summary : "本地执行器已完成淘宝搜索"
+      result_summary: typeof effectiveResult.summary === "string"
+        ? effectiveResult.summary
+        : completion.alreadyCompleted
+          ? "已从持久化结果恢复淘宝搜索候选"
+          : "本地执行器已完成淘宝搜索"
     });
     updateRuntimeSearchTrace(state, job, candidates);
   } else {
     resolveHostedAddToCartTask(state, {
       task_id: task.task_id,
-      status: result.success === false ? "failed" : "completed",
-      result_summary: typeof result.message === "string" ? result.message : "本地执行器已完成加购"
+      status: effectiveResult.success === false ? "failed" : "completed",
+      result_summary: typeof effectiveResult.message === "string"
+        ? effectiveResult.message
+        : completion.alreadyCompleted
+          ? "已从持久化结果恢复加购状态"
+          : "本地执行器已完成加购"
     });
   }
   await persistSession(state);
@@ -346,10 +370,59 @@ export async function applyCompletedRuntimeJob(jobId: string, device: ExecutorDe
     user_id: job.user_id,
     session_id: job.session_id,
     job_id: job.id,
-    event_type: "job.completed",
-    payload: { job_type: job.job_type, result_summary: task.result_summary ?? "执行完成" }
+    event_type: completion.alreadyCompleted ? "job.result_reconciled" : "job.completed",
+    payload: {
+      job_type: job.job_type,
+      result_summary: task.result_summary ?? "执行完成",
+      recovered: completion.alreadyCompleted
+    }
   });
   return completion;
+}
+
+export async function reconcileTerminalRuntimeJob(jobId: string) {
+  const repository = getRuntimeRepository();
+  const job = await repository.getJob(jobId);
+  if (!job || (job.status !== "failed" && job.status !== "cancelled")) return false;
+  const state = await repository.getSession(job.session_id, job.user_id);
+  const task = state?.hosted_tasks.find((item) => item.task_id === job.id);
+  if (!state || !task || task.status === job.status) return false;
+
+  const message = job.error_message || (job.status === "cancelled" ? "用户已取消任务" : "本地执行器执行失败");
+  if (job.status === "failed") {
+    if (job.job_type === "module_search") {
+      resolveHostedModuleSearchTask(state, {
+        task_id: task.task_id,
+        status: "failed",
+        error_message: message
+      });
+      markRuntimeSearchFailure(state, job, message);
+    } else {
+      resolveHostedAddToCartTask(state, {
+        task_id: task.task_id,
+        status: "failed",
+        error_message: message
+      });
+    }
+  } else {
+    task.status = "cancelled";
+    task.error_message = message.slice(0, 500);
+    task.updated_at = new Date().toISOString();
+    state.agent_runtime.workflow_status = "paused";
+    state.agent_runtime.auto_continue = false;
+    state.agent_runtime.workflow_message = "检测到已取消任务，自动推进保持暂停";
+    state.agent_runtime.last_transition_at = new Date().toISOString();
+  }
+
+  await persistSession(state);
+  await repository.appendEvent({
+    user_id: job.user_id,
+    session_id: job.session_id,
+    job_id: job.id,
+    event_type: "job.state_reconciled",
+    payload: { job_type: job.job_type, status: job.status }
+  });
+  return true;
 }
 
 export async function applyFailedRuntimeJob(
@@ -369,11 +442,25 @@ export async function applyFailedRuntimeJob(
   const state = await repository.getSession(job.session_id, job.user_id);
   const task = state?.hosted_tasks.find((item) => item.task_id === job.id);
   if (state && task) {
-    task.status = job.status === "failed" ? "failed" : "pending";
-    task.error_message = errorMessage.slice(0, 500);
-    task.updated_at = new Date().toISOString();
-    if (job.status === "failed" && job.job_type === "module_search") {
-      markRuntimeSearchFailure(state, job, errorMessage);
+    if (job.status === "failed") {
+      if (job.job_type === "module_search") {
+        resolveHostedModuleSearchTask(state, {
+          task_id: task.task_id,
+          status: "failed",
+          error_message: errorMessage
+        });
+        markRuntimeSearchFailure(state, job, errorMessage);
+      } else {
+        resolveHostedAddToCartTask(state, {
+          task_id: task.task_id,
+          status: "failed",
+          error_message: errorMessage
+        });
+      }
+    } else {
+      task.status = "pending";
+      task.error_message = errorMessage.slice(0, 500);
+      task.updated_at = new Date().toISOString();
     }
     await persistSession(state);
   }
@@ -400,6 +487,12 @@ export async function cancelPendingRuntimeJob(jobId: string, userId?: string) {
     task.updated_at = new Date().toISOString();
     if (job.job_type === "module_search") {
       markRuntimeSearchFailure(state, job, "用户取消了本轮搜索任务");
+      state.agent_runtime.workflow_status = "paused";
+      state.agent_runtime.auto_continue = false;
+      state.agent_runtime.current_module_id =
+        typeof job.payload.module_id === "string" ? job.payload.module_id : undefined;
+      state.agent_runtime.workflow_message = "用户取消了当前搜索，自动推进已暂停";
+      state.agent_runtime.last_transition_at = new Date().toISOString();
     }
     await persistSession(state);
   }

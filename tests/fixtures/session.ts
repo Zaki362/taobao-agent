@@ -36,6 +36,10 @@ export function createSessionFixture(overrides: Partial<SessionState> = {}): Ses
       model_failures: 0,
       total_decision_latency_ms: 0,
       last_decision_mode: "none",
+      workflow_status: "idle",
+      auto_continue: false,
+      continuation_count: 0,
+      workflow_message: "等待开始",
       initialized_at: new Date().toISOString()
     },
     selected_items: [],

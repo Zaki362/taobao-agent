@@ -86,7 +86,13 @@ export function TopHeader({ currentStage }: { currentStage: string }) {
   );
 }
 
-export function LandingPage({ onEnterScenario }: { onEnterScenario: () => void }) {
+export function LandingPage({
+  onEnterScenario,
+  interactiveReady
+}: {
+  onEnterScenario: () => void;
+  interactiveReady: boolean;
+}) {
   return (
     <Card className="section-card">
       <CardContent className="space-y-8 px-6 py-8 md:px-8 md:py-9">
@@ -103,18 +109,28 @@ export function LandingPage({ onEnterScenario }: { onEnterScenario: () => void }
             <button
               key={scenario.id}
               className={`min-h-[168px] rounded-[28px] border p-5 text-left transition ${
-                scenario.enabled
+                scenario.enabled && interactiveReady
                   ? "border-primary/15 bg-white hover:-translate-y-0.5 hover:border-primary/35 hover:shadow-card"
                   : "cursor-not-allowed border-border/70 bg-muted/45 opacity-70"
               }`}
-              onClick={scenario.enabled ? onEnterScenario : undefined}
-              disabled={!scenario.enabled}
+              onClick={scenario.enabled && interactiveReady ? onEnterScenario : undefined}
+              disabled={!scenario.enabled || !interactiveReady}
             >
               <div className="flex items-center justify-between">
                 <p className="text-lg font-semibold">{scenario.label}</p>
-                {scenario.enabled ? <ChevronRight className="h-4 w-4 text-primary" /> : <Badge variant="outline">即将支持</Badge>}
+                {scenario.enabled ? (
+                  interactiveReady ? (
+                    <ChevronRight className="h-4 w-4 text-primary" />
+                  ) : (
+                    <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+                  )
+                ) : (
+                  <Badge variant="outline">即将支持</Badge>
+                )}
               </div>
-              <p className="mt-8 text-sm text-muted-foreground">{scenario.description}</p>
+              <p className="mt-8 text-sm text-muted-foreground">
+                {scenario.enabled && !interactiveReady ? "正在准备交互..." : scenario.description}
+              </p>
             </button>
           ))}
         </div>

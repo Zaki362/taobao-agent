@@ -7,6 +7,19 @@ import {
   bearerToken
 } from "@/lib/runtime/jobs";
 import { assertExecutorProtocol, EXECUTOR_PROTOCOL_VERSION } from "@/lib/runtime/executor-protocol";
+import { advanceAgentWorkflow } from "@/lib/agent/workflow-runner";
+
+async function continueWorkflow(sessionId: string, userId: string | undefined, trigger: "job_completed" | "job_failed") {
+  try {
+    const result = await advanceAgentWorkflow(sessionId, userId, { trigger });
+    return { outcome: result.outcome, error: null };
+  } catch (error) {
+    return {
+      outcome: "error",
+      error: error instanceof Error ? error.message : "agent continuation failed"
+    };
+  }
+}
 
 export async function POST(
   request: NextRequest,
@@ -25,15 +38,28 @@ export async function POST(
         typeof body.error === "string" ? body.error : "local executor failed",
         { retryable: body.retryable !== false }
       );
-      return apiOk({ job, retry_scheduled: job.status === "pending", protocol_version: EXECUTOR_PROTOCOL_VERSION });
+      const continuation =
+        job.job_type === "module_search" && job.status === "failed"
+          ? await continueWorkflow(job.session_id, job.user_id, "job_failed")
+          : null;
+      return apiOk({
+        job,
+        retry_scheduled: job.status === "pending",
+        continuation,
+        protocol_version: EXECUTOR_PROTOCOL_VERSION
+      });
     }
     const result = body.result && typeof body.result === "object" && !Array.isArray(body.result)
       ? body.result as Record<string, unknown>
       : {};
     const completion = await applyCompletedRuntimeJob(jobId, device, result);
+    const continuation = completion.job.job_type === "module_search" && !completion.alreadyCompleted
+      ? await continueWorkflow(completion.job.session_id, completion.job.user_id, "job_completed")
+      : null;
     return apiOk({
       job: completion.job,
       already_completed: completion.alreadyCompleted,
+      continuation,
       protocol_version: EXECUTOR_PROTOCOL_VERSION
     });
   } catch (error) {

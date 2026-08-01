@@ -436,6 +436,34 @@ export function normalizeSessionState(state: SessionState): SessionState {
         (state as Partial<SessionState>).agent_runtime?.last_decision_mode === "policy"
           ? (state as Partial<SessionState>).agent_runtime!.last_decision_mode
           : "none",
+      workflow_status:
+        (state as Partial<SessionState>).agent_runtime?.workflow_status === "running" ||
+        (state as Partial<SessionState>).agent_runtime?.workflow_status === "waiting_for_tools" ||
+        (state as Partial<SessionState>).agent_runtime?.workflow_status === "completed" ||
+        (state as Partial<SessionState>).agent_runtime?.workflow_status === "paused" ||
+        (state as Partial<SessionState>).agent_runtime?.workflow_status === "error"
+          ? (state as Partial<SessionState>).agent_runtime!.workflow_status
+          : "idle",
+      auto_continue: (state as Partial<SessionState>).agent_runtime?.auto_continue === true,
+      workflow_run_id:
+        typeof (state as Partial<SessionState>).agent_runtime?.workflow_run_id === "string"
+          ? (state as Partial<SessionState>).agent_runtime?.workflow_run_id
+          : undefined,
+      current_module_id:
+        typeof (state as Partial<SessionState>).agent_runtime?.current_module_id === "string"
+          ? (state as Partial<SessionState>).agent_runtime?.current_module_id
+          : undefined,
+      continuation_count: Number.isFinite((state as Partial<SessionState>).agent_runtime?.continuation_count)
+        ? Math.max(0, Math.round((state as Partial<SessionState>).agent_runtime?.continuation_count ?? 0))
+        : 0,
+      workflow_message:
+        typeof (state as Partial<SessionState>).agent_runtime?.workflow_message === "string"
+          ? (state as Partial<SessionState>).agent_runtime!.workflow_message
+          : "等待用户开始搜索",
+      last_transition_at:
+        typeof (state as Partial<SessionState>).agent_runtime?.last_transition_at === "string"
+          ? (state as Partial<SessionState>).agent_runtime?.last_transition_at
+          : undefined,
       initialized_at:
         (state as Partial<SessionState>).agent_runtime?.initialized_at ?? new Date().toISOString()
     },

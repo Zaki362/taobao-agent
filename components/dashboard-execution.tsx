@@ -39,6 +39,10 @@ export function SearchSummaryPage({
 }) {
   const hostedMode = isHostedMode(mcpStatus);
   const queuedMode = isQueuedExecutionMode(mcpStatus);
+  const serverWorkflowActive =
+    mcpStatus?.mode === "local_executor" &&
+    (session.agent_runtime.workflow_status === "running" ||
+      session.agent_runtime.workflow_status === "waiting_for_tools");
   const traceCount = Object.keys(session.module_search_traces ?? {}).length;
   const recentDecisions = [...session.agent_decisions].reverse().slice(0, 8);
 
@@ -199,7 +203,9 @@ export function SearchSummaryPage({
         <div className="flex gap-3">
           <Button variant="outline" onClick={onRefresh}>{hostedMode ? "刷新宿主结果" : "刷新执行结果"}</Button>
           <Button variant="outline" onClick={() => setExpandedLogs(!expandedLogs)}>查看执行过程</Button>
-          <Button onClick={onViewResults} disabled={busy}>查看推荐结果</Button>
+          <Button onClick={onViewResults} disabled={busy || serverWorkflowActive}>
+            {serverWorkflowActive ? "后台仍在搜索" : "查看推荐结果"}
+          </Button>
         </div>
       </CardContent>
     </Card>

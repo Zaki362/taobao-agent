@@ -44,10 +44,23 @@ type AgentNextActionResponse = {
   agent_decisions: AgentDecision[];
 };
 
+type AgentRunResponse = {
+  outcome: "queued" | "waiting" | "completed" | "paused" | "no_op";
+  agent_runtime: SessionState["agent_runtime"];
+};
+
+const SESSION_REQUIRED_STAGES: WorkflowStage[] = [
+  "confirm_plan",
+  "searching",
+  "review_results",
+  "cart_review"
+];
+
 export function Dashboard() {
   const hasRestoredRef = useRef(false);
   const autoResumeHandledRef = useRef(false);
   const searchParams = useSearchParams();
+  const [interactiveReady, setInteractiveReady] = useState(false);
   const [stage, setStage] = useState<WorkflowStage>("landing");
   const [selectedScenario, setSelectedScenario] = useState<SelectedScenario>(null);
   const [sceneInput, setSceneInput] = useState(defaultInput);
@@ -171,6 +184,10 @@ export function Dashboard() {
   }
 
   useEffect(() => {
+    setInteractiveReady(true);
+  }, []);
+
+  useEffect(() => {
     if (hasRestoredRef.current || typeof window === "undefined") {
       return;
     }
@@ -251,6 +268,33 @@ export function Dashboard() {
     statusMessage,
     resumeSnapshot
   ]);
+
+  useEffect(() => {
+    if (busy) {
+      return;
+    }
+
+    if (stage === "confirm_scene" && !parsedScene) {
+      setErrorMessage("场景理解结果暂不可用，请重新提交需求。");
+      setStatusMessage("请重新提交需求");
+      setStage(selectedScenario ? "input_requirement" : "landing");
+      return;
+    }
+
+    if (SESSION_REQUIRED_STAGES.includes(stage) && !session) {
+      setErrorMessage("当前步骤所需的会话数据暂不可用，已返回最近可继续的步骤。");
+      if (parsedScene) {
+        setStatusMessage("请重新确认需求并生成购物规划");
+        setStage("confirm_scene");
+      } else if (selectedScenario) {
+        setStatusMessage("请重新提交需求");
+        setStage("input_requirement");
+      } else {
+        setStatusMessage("等待开始");
+        setStage("landing");
+      }
+    }
+  }, [busy, parsedScene, selectedScenario, session, stage]);
 
   async function resumeWorkflow() {
     if (!resumeSnapshot) {
@@ -356,6 +400,8 @@ export function Dashboard() {
           eventType = payload.payload?.job_type === "add_to_cart"
             ? "后台加购已完成"
             : "后台搜索已完成";
+        } else if (payload.event_type === "agent.workflow.updated") {
+          eventType = "服务端 Agent 已推进到下一状态";
         } else if (payload.event_type === "job.failed") {
           eventType = "后台任务执行失败，可在执行台查看原因";
         } else if (payload.event_type === "job.retry_scheduled") {
@@ -384,7 +430,8 @@ export function Dashboard() {
       "job.completed",
       "job.failed",
       "job.retry_scheduled",
-      "job.cancelled"
+      "job.cancelled",
+      "agent.workflow.updated"
     ]) {
       stream.addEventListener(eventName, refreshFromEvent);
     }
@@ -411,6 +458,14 @@ export function Dashboard() {
         method: "POST",
         body: JSON.stringify({ raw_input: sceneInput })
       });
+      if (
+        !parsed.scene_brief ||
+        typeof parsed.scene_brief.budget !== "number" ||
+        !Array.isArray(parsed.scene_brief.already_have) ||
+        !Array.isArray(parsed.scene_brief.avoid_items)
+      ) {
+        throw new Error("需求解析结果不完整，请重新尝试。");
+      }
       setParsedScene(parsed.scene_brief);
       setParseDeepSeekMode(parsed.deepseek_mode);
       setStage("confirm_scene");
@@ -461,12 +516,32 @@ export function Dashboard() {
     setErrorMessage("");
     setStage("searching");
     const executionLabel = getExecutionModeLabel(mcpStatus);
+    const serverManagedWorkflow = mcpStatus?.mode === "local_executor";
     setStatusMessage(`正在通过${executionLabel}串行搜索优先模块，并先返回商品摘要`);
     try {
       const summary: string[] = [];
       const modules = session.shopping_plan.modules;
       if (modules.length === 0) {
         throw new Error("当前规划中没有可搜索模块");
+      }
+
+      if (serverManagedWorkflow) {
+        await jsonFetch<AgentRunResponse>("/api/agent/run", {
+          method: "POST",
+          body: JSON.stringify({ session_id: session.session_id })
+        });
+        const latestSession = await waitForServerWorkflow(session.session_id, modules.length);
+        const completedModules = modules.filter(
+          (module) => (latestSession.module_candidates[module.module_id]?.length ?? 0) > 0
+        );
+        setSelectedModuleId(completedModules[0]?.module_id ?? modules[0]?.module_id ?? "");
+        setSearchSummary([
+          `服务端 Agent 已完成 ${completedModules.length}/${modules.length} 个模块的候选整理`,
+          latestSession.market_feedback.summary,
+          latestSession.agent_runtime.workflow_message
+        ]);
+        setStatusMessage("后台 Agent 搜索流程已完成。你可以直接查看推荐结果。");
+        return;
       }
 
       let latestSession = session;
@@ -588,6 +663,40 @@ export function Dashboard() {
     } finally {
       setBusy(false);
     }
+  }
+
+  async function waitForServerWorkflow(sessionId: string, moduleCount: number) {
+    const deadline = Date.now() + 6 * 60 * 1000;
+    let latest = await hydrateSession(sessionId);
+
+    while (Date.now() < deadline) {
+      const runtime = latest.agent_runtime;
+      const completedCount = latest.shopping_plan.modules.filter(
+        (module) => (latest.module_candidates[module.module_id]?.length ?? 0) > 0
+      ).length;
+      const currentModule = latest.shopping_plan.modules.find(
+        (module) => module.module_id === runtime.current_module_id
+      );
+      setSearchSummary([
+        `服务端 Agent 已整理 ${completedCount}/${moduleCount} 个模块`,
+        runtime.workflow_message
+      ]);
+      setStatusMessage(
+        runtime.workflow_status === "waiting_for_tools"
+          ? `本地执行器正在处理「${currentModule?.module_name ?? "当前模块"}」，页面关闭后服务端仍会继续`
+          : runtime.workflow_message
+      );
+
+      if (runtime.workflow_status === "completed") return latest;
+      if (runtime.workflow_status === "paused" || runtime.workflow_status === "error") {
+        throw new Error(runtime.workflow_message || "服务端 Agent 已暂停");
+      }
+
+      await new Promise((resolve) => window.setTimeout(resolve, 1_200));
+      latest = await hydrateSession(sessionId);
+    }
+
+    throw new Error("搜索仍在后台执行。你可以关闭页面，稍后通过当前进度继续查看。");
   }
 
   function waitForRuntimeJob(sessionId: string, jobId: string) {
@@ -803,6 +912,10 @@ export function Dashboard() {
     }
   }
 
+  const missingStageData =
+    (stage === "confirm_scene" && !parsedScene) ||
+    (SESSION_REQUIRED_STAGES.includes(stage) && !session);
+
   return (
     <main className="min-h-screen">
       <div className="page-shell">
@@ -816,8 +929,8 @@ export function Dashboard() {
           />
         ) : null}
 
-        {stage === "landing" ? (
-          <LandingPage onEnterScenario={enterScenario} />
+        {stage === "landing" || stage === "scenario_select" ? (
+          <LandingPage onEnterScenario={enterScenario} interactiveReady={interactiveReady} />
         ) : null}
 
         {stage === "input_requirement" ? (
@@ -920,6 +1033,14 @@ export function Dashboard() {
         {stage === "refining" ? <StatusPage title="正在调整推荐" description={statusMessage} loading /> : null}
 
         {stage === "carting" ? <StatusPage title="正在加入购物车" description={statusMessage} loading /> : null}
+
+        {missingStageData ? (
+          <StatusPage
+            title="正在恢复当前步骤"
+            description="页面状态正在校准，将自动返回最近可继续的步骤。"
+            loading
+          />
+        ) : null}
 
         {errorMessage ? (
           <div className="rounded-[24px] border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">

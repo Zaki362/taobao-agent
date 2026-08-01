@@ -16,17 +16,23 @@ function createTaskLog(
   outputSummary: string,
   moduleId?: string,
   moduleName?: string,
-  mode: SessionState["execution_mode"] = "codex_hosted"
+  mode: SessionState["execution_mode"] = "codex_hosted",
+  status: "success" | "error" | "blocked" = "blocked"
 ) {
+  const toolName = mode === "local_executor"
+    ? "local_executor"
+    : mode === "qoder_cli"
+      ? "qoder_async_executor"
+      : "codex_hosted_executor";
   state.tool_logs.unshift({
     id: `hosted-log-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
     timestamp: new Date().toISOString(),
-    tool_name: mode === "qoder_cli" ? "qoder_async_executor" : "codex_hosted_executor",
+    tool_name: toolName,
     module_id: moduleId,
     module_name: moduleName,
     input_summary: summarizeLogText(title, 180),
     output_summary: summarizeLogText(outputSummary, 220),
-    status: "blocked",
+    status,
     duration_ms: 0,
     mode
   });
@@ -202,7 +208,8 @@ export function resolveHostedModuleSearchTask(
       resultSummary ?? `Codex 宿主已完成搜索，返回 ${candidates.length} 个候选商品。`,
       task.module_id,
       task.module_name,
-      executionModeForTask(task)
+      executionModeForTask(task),
+      "success"
     );
     return task;
   }
@@ -213,7 +220,8 @@ export function resolveHostedModuleSearchTask(
     errorMessage ?? "Codex 宿主执行失败。",
     task.module_id,
     task.module_name,
-    executionModeForTask(task)
+    executionModeForTask(task),
+    "error"
   );
   return task;
 }
@@ -264,7 +272,8 @@ export function resolveHostedAddToCartTask(
       resultSummary ?? "Codex 宿主已完成加购。",
       task.module_id,
       task.module_name,
-      executionModeForTask(task)
+      executionModeForTask(task),
+      "success"
     );
     return task;
   }
@@ -275,7 +284,8 @@ export function resolveHostedAddToCartTask(
     errorMessage ?? "Codex 宿主加购失败。",
     task.module_id,
     task.module_name,
-    executionModeForTask(task)
+    executionModeForTask(task),
+    "error"
   );
   return task;
 }

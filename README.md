@@ -16,13 +16,14 @@ SceneCart AI 是一个正在按正式产品架构推进的“场景化购物 Age
 - AI 搜索策略 + 候选排序：搜索结果会经过 Candidate Ranker，根据 AI 生成的主搜索词、备用搜索词、包含词、排除词、排序关注点、验收信号、拒绝信号、预算、偏好、已有/排除项和店铺信号选出稳妥 / 性价比 / 升级三档
 - 搜索后 Agent 复盘：每个模块搜索后会生成 `module_reviews`，评估候选池是否足够、风险点是什么、下一步建议是什么；有 DeepSeek 时会尝试短超时复盘，无 key 或失败时使用启发式规则评估
 - Agent 搜索决策轨迹：每个模块搜索会写入 `module_search_traces`，记录首轮词、备用词、补搜原因、每次返回数、候选池复盘和下一步建议，让 AI 的执行判断可解释、可恢复
-- 服务端 Agent 决策循环：搜索阶段不再由前端硬编码遍历模块，后端会消费 AI 规划顺序、执行档位、候选池复盘和工具状态，逐轮决定搜索、补搜、容错跳过、等待工具或结束，并把动作写入 `agent_decisions`
+- 服务端 Agent 决策循环：用户确认规划后只需启动一次，后端会消费 AI 规划顺序、执行档位、候选池复盘和工具状态，逐轮决定搜索、补搜、容错跳过、等待工具或结束，并把动作写入 `agent_decisions`
+- 浏览器断线续跑：`workflow-runner` 持久化运行 ID、当前模块、自动续跑开关和状态转换；本地执行器每次回填后由服务端自动排队下一模块，关闭或切换页面不会中断整轮搜索
 - Agent Runtime 2.0：平衡/探索档位可由 DeepSeek `decide_next_action` 提议下一步动作，后端使用动作白名单、模块合法性、置信度、工具预算和重复调用检查做 guardrail，不合格时回退确定性策略
 - Agent 建议补搜：当候选偏少或质量不足时，推荐页会展示建议搜索词，用户可以一键按 Agent 建议补搜当前模块
 - 快捷调整影响说明：用户点击快捷调整后，系统会生成 `last_refinement`，说明哪些模块需要重搜、哪些候选可复用、哪些模块被移除以及原因
 - 生产运行时：支持 PostgreSQL 持久化、邮箱登录、HttpOnly 会话、按用户隔离的购物 Session、持久 Job Queue 和执行事件
 - 本地执行器：Qoder/Taobao skill 不再占用 Next.js 请求；设备通过一次性令牌注册，使用心跳、任务租约、自动恢复、结果账本和幂等回填完成本机真实执行
-- 实时回填：搜索、重试和加购事件通过 SSE 推送到当前会话，页面无需轮询等待长请求
+- 实时回填：搜索、重试、Agent 状态转换和加购事件通过 SSE 推送到当前会话，并以短轮询作为断线恢复兜底；页面不占用淘宝执行长请求
 - 可恢复事件流：SSE 使用事件游标与 `Last-Event-ID` 续传，浏览器短暂断线后不会重复丢失执行进度
 - 运行时可观测性：执行台展示队列积压、在线设备、失败/取消任务、最久等待时间与模型 guardrail fallback
 - 可操作运行告警：执行台根据队列等待、执行器在线状态、任务失败率、模型 fallback 和 guardrail 拒绝率生成分级告警与修复建议
@@ -140,6 +141,8 @@ components/
 
 lib/agent/
   orchestrator.ts                  Agent 主编排
+  workflow-runner.ts               服务端自主续跑、状态转换与模块串行编排
+  workflow-recovery.ts             Worker 空闲时恢复中断的回填与后续模块
   decision-engine.ts               Agent 下一步动作决策与审计记录
   runtime-v2.ts                    模型提议 + guardrail + 规则兜底
   scene.ts                         场景解析入口
@@ -193,6 +196,7 @@ lib/scenarios/
 - `POST /api/scene/refine`：根据快捷操作重算方案
 - `POST /api/modules/search`：为指定模块搜索候选商品；可选 `keyword_override` 用于按 Agent 建议补搜
 - `POST /api/agent/next-action`：根据当前 session 决定搜索、补搜、跳过、等待或结束
+- `POST /api/agent/run`：用户确认规划后启动一次服务端工作流；工具回填会自动续跑后续模块
 - `POST /api/cart/add`：尝试加购，要求 `confirmed: true`；开发预览可配置演示回退，正式产品模式只接受真实淘宝执行结果
 - `POST /api/session/agent-directives`：用户确认规划前切换 AI 执行档位，写回当前 session 的 `agent_directives`
 - `POST /api/session/search-strategy`：用户确认规划前微调模块搜索任务包，写回当前 session 的主搜索词和备用词

@@ -5,6 +5,7 @@ import { resolveHostedAddToCartTask, resolveHostedModuleSearchTask } from "@/lib
 import { persistSession } from "@/lib/session/repository";
 import { isHostedExecutionTask, isProductCandidate } from "@/lib/session/guards";
 import { getLegacyHostedAccess } from "@/lib/auth/hosted-worker";
+import { advanceAgentWorkflow } from "@/lib/agent/workflow-runner";
 
 function optionalString(value: unknown) {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
@@ -47,13 +48,22 @@ export async function POST(request: NextRequest) {
     }
 
     await persistSession(session);
+    const continuation = task.task_type === "module_search" && session.agent_runtime.auto_continue
+      ? await advanceAgentWorkflow(session.session_id, access.userId, {
+          trigger: "legacy_task_resolved"
+        }).then((result) => ({ outcome: result.outcome, error: null })).catch((error) => ({
+            outcome: "paused" as const,
+            error: error instanceof Error ? error.message : "agent continuation failed"
+          }))
+      : null;
     return apiOk({
       session_id: session.session_id,
       task,
       hosted_tasks: session.hosted_tasks,
       module_candidates: session.module_candidates,
       module_reviews: session.module_reviews,
-      selected_items: session.selected_items
+      selected_items: session.selected_items,
+      continuation
     });
   } catch (error) {
     return apiRouteError(error, "failed to resolve hosted task");
