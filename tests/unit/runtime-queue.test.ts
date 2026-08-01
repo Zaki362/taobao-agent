@@ -93,6 +93,36 @@ describe("durable job queue contract", () => {
     expect((await localRuntimeRepository.getJob("job-expiring"))?.status).toBe("pending");
   });
 
+  it("rejects a stale executor after an expired lease is reassigned", async () => {
+    const replacementDevice = {
+      ...device,
+      id: "device-replacement",
+      token_hash: "replacement-digest"
+    };
+    await localRuntimeRepository.createDevice(device);
+    await localRuntimeRepository.createDevice(replacementDevice);
+    await localRuntimeRepository.createJob({
+      id: "job-reassigned",
+      user_id: device.user_id,
+      session_id: "session-test",
+      job_type: "module_search",
+      idempotency_key: "reassigned-job",
+      payload: {},
+      max_attempts: 3
+    });
+
+    await localRuntimeRepository.claimJob(device, 1);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    const reassigned = await localRuntimeRepository.claimJob(replacementDevice, 30_000);
+
+    expect(reassigned?.id).toBe("job-reassigned");
+    expect(await localRuntimeRepository.renewJobLease("job-reassigned", device.id, 30_000)).toBeNull();
+    await expect(localRuntimeRepository.completeJob("job-reassigned", device.id, { results: [] }))
+      .rejects.toThrow("job lease owner mismatch");
+    await expect(localRuntimeRepository.completeJob("job-reassigned", replacementDevice.id, { results: [] }))
+      .resolves.toMatchObject({ alreadyCompleted: false });
+  });
+
   it("only cancels work before an executor has claimed it", async () => {
     await localRuntimeRepository.createDevice(device);
     const pending = await localRuntimeRepository.createJob({

@@ -111,7 +111,7 @@ EXECUTOR_POLL_MS=2500
 EXECUTOR_QODER_TIMEOUT_MS=180000
 ```
 
-执行器每 15 秒发送心跳，并在有运行任务时续租。任务完成结果会先写入 `.data/local-executor/results`，再回填服务端；若回执失败，租约恢复后会重放结果，不重复执行淘宝动作。
+执行器每 15 秒发送心跳，并在有运行任务时续租。服务端明确拒绝续租时，Worker 会立即中止 Qoder 子进程；连续心跳失败达到 `EXECUTOR_LEASE_FAILURE_LIMIT`（默认 3）时也会 fail closed，避免失去任务所有权后继续执行真实淘宝动作或回填旧结果。任务完成结果会先写入 `.data/local-executor/results`，再回填服务端；若回执失败，租约恢复后会重放结果，不重复执行淘宝动作。
 
 ## 5. 任务生命周期
 

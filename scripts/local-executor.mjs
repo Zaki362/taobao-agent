@@ -7,6 +7,7 @@ import os from "node:os";
 import process from "node:process";
 import nextEnv from "@next/env";
 import protocol from "../lib/runtime/executor-protocol.json" with { type: "json" };
+import { ExecutorLeaseGuard } from "./executor-lease-guard.mjs";
 
 nextEnv.loadEnvConfig(process.cwd());
 
@@ -16,6 +17,8 @@ const deviceToken = process.env.SCENECART_DEVICE_TOKEN;
 const qoderPath = process.env.QODERCLI_PATH || `${os.homedir()}/.local/bin/qodercli`;
 const pollMs = Math.max(Number(process.env.EXECUTOR_POLL_MS || 2500), 500);
 const qoderTimeoutMs = Math.max(Number(process.env.EXECUTOR_QODER_TIMEOUT_MS || 180000), 30000);
+const apiTimeoutMs = Math.max(Number(process.env.EXECUTOR_API_TIMEOUT_MS || 20000), 5000);
+const leaseFailureLimit = Math.max(Number(process.env.EXECUTOR_LEASE_FAILURE_LIMIT || 3), 1);
 const resultDir = path.join(process.cwd(), ".data", "local-executor", "results");
 const executorProtocolVersion = protocol.version;
 
@@ -23,8 +26,14 @@ if (!deviceToken) {
   throw new Error("SCENECART_DEVICE_TOKEN is required. Register a device at /settings/executor first.");
 }
 
-let currentJobId = null;
+let heartbeatInFlight = false;
 let stopped = false;
+const leaseGuard = new ExecutorLeaseGuard({
+  failureLimit: leaseFailureLimit,
+  onLeaseLost: ({ jobId, reason }) => {
+    process.stderr.write(`[local-executor] lease lost for ${jobId}: ${reason}; stopping local execution\n`);
+  }
+});
 
 class ExecutorJobError extends Error {
   constructor(message, retryable = true) {
@@ -41,6 +50,7 @@ function sleep(ms) {
 async function api(path, options = {}) {
   const response = await fetch(`${apiBaseUrl}${path}`, {
     ...options,
+    signal: options.signal ?? AbortSignal.timeout(apiTimeoutMs),
     headers: {
       Authorization: `Bearer ${deviceToken}`,
       "Content-Type": "application/json",
@@ -81,7 +91,9 @@ async function verifyStartup() {
     if (error instanceof ExecutorJobError) throw error;
     throw qoderJobError(error);
   }
-  const response = await fetch(`${apiBaseUrl}/api/runtime/health`);
+  const response = await fetch(`${apiBaseUrl}/api/runtime/health`, {
+    signal: AbortSignal.timeout(apiTimeoutMs)
+  });
   const payload = await response.json().catch(() => ({}));
   if (!response.ok || payload.status !== "healthy") {
     throw new Error(payload.error || `SceneCart API health check failed with ${response.status}`);
@@ -231,7 +243,7 @@ function cartPrompt(job) {
   ].join("\n");
 }
 
-async function executeJob(job) {
+async function executeJob(job, signal) {
   const prompt = job.job_type === "module_search" ? searchPrompt(job) : cartPrompt(job);
   let stdout = "";
   let stderr = "";
@@ -246,7 +258,8 @@ async function executeJob(job) {
     ], {
       env: process.env,
       timeout: qoderTimeoutMs,
-      maxBuffer: 8 * 1024 * 1024
+      maxBuffer: 8 * 1024 * 1024,
+      signal
     });
     stdout = output.stdout ?? "";
     stderr = output.stderr ?? "";
@@ -265,13 +278,20 @@ async function executeJob(job) {
 }
 
 async function heartbeat() {
+  if (heartbeatInFlight) return;
+  heartbeatInFlight = true;
+  const jobId = leaseGuard.currentJobId;
   try {
-    await api("/api/executor/heartbeat", {
+    const payload = await api("/api/executor/heartbeat", {
       method: "POST",
-      body: JSON.stringify({ current_job_id: currentJobId })
+      body: JSON.stringify({ current_job_id: jobId })
     });
+    leaseGuard.acceptHeartbeat(jobId, payload.lease_renewed === true);
   } catch (error) {
     process.stderr.write(`[local-executor] heartbeat failed: ${error.message}\n`);
+    leaseGuard.rejectHeartbeat(jobId);
+  } finally {
+    heartbeatInFlight = false;
   }
 }
 
@@ -281,7 +301,9 @@ try {
   process.stderr.write(`[local-executor] startup failed: ${error instanceof Error ? error.message : String(error)}\n`);
   process.exit(1);
 }
-const heartbeatTimer = setInterval(heartbeat, 15000);
+const heartbeatTimer = setInterval(() => {
+  heartbeat().catch(() => undefined);
+}, 15000);
 
 async function loop() {
   process.stdout.write(`[local-executor] connected to ${apiBaseUrl}; polling every ${pollMs}ms\n`);
@@ -293,14 +315,23 @@ async function loop() {
         await sleep(pollMs);
         continue;
       }
-      currentJobId = job.id;
+      const jobSignal = leaseGuard.start(job.id);
       process.stdout.write(`[local-executor] claimed ${job.job_type} ${job.id} (attempt ${job.attempts}/${job.max_attempts})\n`);
       let result;
       try {
+        await heartbeat();
+        if (leaseGuard.lossReason) throw new Error(leaseGuard.lossReason);
         const cached = await readCachedResult(job.id);
-        result = cached ?? await executeJob(job);
+        result = cached ?? await executeJob(job, jobSignal);
         if (!cached) await cacheResult(job.id, result);
       } catch (error) {
+        if (leaseGuard.lossReason) {
+          process.stderr.write(
+            `[local-executor] abandoned ${job.id} without callback because its lease is no longer owned: ${leaseGuard.lossReason}\n`
+          );
+          leaseGuard.clear(job.id);
+          continue;
+        }
         await reportResult(job.id, {
           status: "failed",
           error: error.message,
@@ -309,7 +340,7 @@ async function loop() {
           process.stderr.write(`[local-executor] failed to report ${job.id}: ${resolveError.message}\n`);
         });
         process.stderr.write(`[local-executor] job ${job.id} failed: ${error.message}\n`);
-        currentJobId = null;
+        leaseGuard.clear(job.id);
         continue;
       }
 
@@ -332,7 +363,7 @@ async function loop() {
         }
       }
       // Keep the result ledger: an expired lease can replay acknowledgement without repeating Taobao actions.
-      currentJobId = null;
+      leaseGuard.clear(job.id);
     } catch (error) {
       process.stderr.write(`[local-executor] polling failed: ${error.message}\n`);
       await sleep(Math.max(pollMs, 3000));
@@ -344,6 +375,7 @@ for (const signal of ["SIGINT", "SIGTERM"]) {
   process.on(signal, () => {
     stopped = true;
     clearInterval(heartbeatTimer);
+    leaseGuard.stop(`worker received ${signal}`);
   });
 }
 

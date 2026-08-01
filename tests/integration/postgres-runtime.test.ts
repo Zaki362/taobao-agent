@@ -140,6 +140,45 @@ describeWithDatabase("PostgreSQL production runtime contract", () => {
     expect(await postgresRuntimeRepository.listEvents(sessionId, 0, otherUserId)).toHaveLength(0);
   });
 
+  it("rejects the previous executor after an expired PostgreSQL lease is reassigned", async () => {
+    const oldDevice: ExecutorDevice = {
+      ...device,
+      id: randomUUID(),
+      name: "Expired lease owner",
+      token_hash: `token-${randomUUID()}`
+    };
+    const replacementDevice: ExecutorDevice = {
+      ...device,
+      id: randomUUID(),
+      name: "Replacement lease owner",
+      token_hash: `token-${randomUUID()}`
+    };
+    await postgresRuntimeRepository.createDevice(oldDevice);
+    await postgresRuntimeRepository.createDevice(replacementDevice);
+    const reassignedJobId = randomUUID();
+    await postgresRuntimeRepository.createJob({
+      id: reassignedJobId,
+      user_id: userId,
+      session_id: sessionId,
+      job_type: "module_search",
+      idempotency_key: `integration:${sessionId}:lease-reassignment`,
+      payload: {},
+      max_attempts: 3
+    });
+    expect((await postgresRuntimeRepository.claimJob(oldDevice, 30_000))?.id).toBe(reassignedJobId);
+    await query(
+      "UPDATE agent_jobs SET lease_expires_at = NOW() - INTERVAL '1 second' WHERE id = $1",
+      [reassignedJobId]
+    );
+
+    expect((await postgresRuntimeRepository.claimJob(replacementDevice, 30_000))?.id).toBe(reassignedJobId);
+    expect(await postgresRuntimeRepository.renewJobLease(reassignedJobId, oldDevice.id, 30_000)).toBeNull();
+    await expect(postgresRuntimeRepository.completeJob(reassignedJobId, oldDevice.id, { results: [] }))
+      .rejects.toThrow("job lease owner mismatch");
+    await expect(postgresRuntimeRepository.completeJob(reassignedJobId, replacementDevice.id, { results: [] }))
+      .resolves.toMatchObject({ alreadyCompleted: false });
+  });
+
   it("cancels only pending jobs owned by the current user", async () => {
     const cancellableId = randomUUID();
     await postgresRuntimeRepository.createJob({
