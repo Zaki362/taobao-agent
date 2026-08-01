@@ -164,6 +164,22 @@ export function isAgentPurchaseBundle(value: unknown): value is AgentPurchaseBun
     value.guardrails
   ];
   if (!listFields.every(isStringArray) || !Array.isArray(value.items)) return false;
+  if (value.refinement_suggestions !== undefined) {
+    if (!Array.isArray(value.refinement_suggestions) || value.refinement_suggestions.length > 3) return false;
+    const actions = new Set<string>();
+    for (const suggestion of value.refinement_suggestions) {
+      if (
+        !isRecord(suggestion) ||
+        typeof suggestion.action !== "string" ||
+        typeof suggestion.reason !== "string" ||
+        !isStringArray(suggestion.target_module_ids) ||
+        actions.has(suggestion.action)
+      ) {
+        return false;
+      }
+      actions.add(suggestion.action);
+    }
+  }
 
   const selectedModuleIds = value.selected_module_ids as string[];
   const criticalModuleIds = value.critical_module_ids as string[];

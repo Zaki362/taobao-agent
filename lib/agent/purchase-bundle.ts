@@ -1,12 +1,14 @@
 import type {
   AgentPurchaseBundle,
   AgentPurchaseBundleItem,
+  AgentRefinementSuggestion,
   ProductCandidate,
   PurchaseBundleProposal,
   SceneBrief,
   SessionState,
   ShoppingPlanModule
 } from "@/lib/session/types";
+import { getScenarioConfig } from "@/lib/scenarios";
 
 type BundleChoice = {
   candidate: ProductCandidate;
@@ -77,13 +79,80 @@ function bundleReason(choice: BundleChoice) {
   return `${choice.candidate.fit_reason} ${budgetSignal}。`;
 }
 
+export function buildPolicyRefinementSuggestions(
+  state: SessionState,
+  omittedModuleIds: string[] = []
+): AgentRefinementSuggestion[] {
+  const allowedActions = getScenarioConfig(state.scene_brief.scenario_id).quick_actions;
+  const moduleIds = new Set(state.shopping_plan.modules.map((module) => module.module_id));
+  const suggestions: AgentRefinementSuggestion[] = [];
+  const add = (action: string | undefined, reason: string, targetModuleIds: string[]) => {
+    if (!action || !allowedActions.includes(action) || suggestions.some((item) => item.action === action)) return;
+    suggestions.push({
+      action,
+      reason,
+      target_module_ids: [...new Set(targetModuleIds.filter((moduleId) => moduleIds.has(moduleId)))].slice(0, 6)
+    });
+  };
+  const pressureModules = state.market_feedback.pressure_modules.filter((moduleId) => moduleIds.has(moduleId));
+  const thinModules = state.shopping_plan.modules
+    .filter((module) => {
+      const review = state.module_reviews[module.module_id];
+      return review?.status === "thin" || review?.status === "needs_refine";
+    })
+    .map((module) => module.module_id);
+  const optionalModules = state.shopping_plan.modules
+    .filter((module) => module.optional)
+    .map((module) => module.module_id);
+  const refreshTargets = [...new Set([...omittedModuleIds, ...thinModules])];
+
+  if (pressureModules.length > 0) {
+    add(
+      allowedActions.find((action) => action.includes("性价比")),
+      "真实候选价格对部分模块预算形成压力，切换性价比优先可让下一轮搜索更聚焦预算内方案。",
+      pressureModules
+    );
+  }
+  if (refreshTargets.length > 0) {
+    add(
+      allowedActions.find((action) => action === "换一批推荐"),
+      "本轮仍有未覆盖或候选偏薄的模块，换一批时可以只重算这些薄弱模块。",
+      refreshTargets
+    );
+  }
+  if (optionalModules.length > 0) {
+    add(
+      allowedActions.find((action) => action.startsWith("只看")),
+      "如果希望更快收敛，可以暂时只保留必需模块，把预算优先留给当前阶段的高频需求。",
+      optionalModules
+    );
+  }
+  if (suggestions.length === 0) {
+    add(
+      allowedActions.find((action) => action === "换一批推荐"),
+      "当前方案已基本收敛；如果对商品不满意，可以保留规划并只刷新候选商品。",
+      state.shopping_plan.modules.map((module) => module.module_id)
+    );
+  }
+  if (suggestions.length < 3) {
+    add(
+      allowedActions.find((action) => action.startsWith("压缩预算")),
+      "可以进一步测试更紧预算下的取舍，Agent 会重新分配模块预算而不是直接删减全部结果。",
+      state.shopping_plan.modules.map((module) => module.module_id)
+    );
+  }
+
+  return suggestions.slice(0, 3);
+}
+
 function bundleFromChoices(
   state: SessionState,
   choices: BundleChoice[],
   source: AgentPurchaseBundle["source"],
   summary?: string,
   tradeoffs: string[] = [],
-  reasonOverrides: Record<string, string> = {}
+  reasonOverrides: Record<string, string> = {},
+  refinementSuggestions?: AgentRefinementSuggestion[]
 ): AgentPurchaseBundle {
   const selectedModuleIds = choices.map((choice) => choice.module.module_id);
   const selectedSet = new Set(selectedModuleIds);
@@ -146,6 +215,7 @@ function bundleFromChoices(
       ? `Agent 在 ${budget} 元总预算内优先覆盖全部必需模块，并保留 ${roundMoney(budget - total)} 元余量。`
       : `Agent 已在 ${budget} 元总预算内形成当前可行组合，但仍有必需模块需要补充候选或调整预算。`),
     caveats: [...new Set(caveats.map((item) => item.trim()).filter(Boolean))].slice(0, 4),
+    refinement_suggestions: refinementSuggestions?.slice(0, 3) ?? buildPolicyRefinementSuggestions(state, omittedModuleIds),
     guardrails: [
       "只允许选择当前搜索已返回的商品 ID",
       "每个规划模块最多选择一件商品",
@@ -241,12 +311,26 @@ export function materializePurchaseBundleProposal(
       .map((item) => [item.product_id, item.fit_reason.replace(/\s+/g, " ").trim().slice(0, 180)])
       .filter(([, reason]) => reason.length >= 6)
   );
+  const allowedActions = new Set(getScenarioConfig(state.scene_brief.scenario_id).quick_actions);
+  const moduleIds = new Set(state.shopping_plan.modules.map((module) => module.module_id));
+  const refinementSuggestions = proposal.suggested_refinements
+    .filter((item) => allowedActions.has(item.action))
+    .map((item) => ({
+      action: item.action,
+      reason: item.reason.replace(/\s+/g, " ").trim().slice(0, 180),
+      target_module_ids: [...new Set(item.target_module_ids.filter((moduleId) => moduleIds.has(moduleId)))].slice(0, 6)
+    }))
+    .filter((item, index, all) => item.reason.length >= 6 && all.findIndex((other) => other.action === item.action) === index)
+    .slice(0, 3);
   return bundleFromChoices(
     state,
     choices,
     "deepseek",
     proposal.summary.slice(0, 300),
     proposal.tradeoffs.slice(0, 4),
-    reasonOverrides
+    reasonOverrides,
+    refinementSuggestions.length > 0
+      ? refinementSuggestions
+      : buildPolicyRefinementSuggestions(state, fallback.omitted_module_ids)
   );
 }

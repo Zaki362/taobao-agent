@@ -323,11 +323,18 @@ export interface AgentPurchaseBundleItem {
   reason: string;
 }
 
+export interface AgentRefinementSuggestion {
+  action: QuickAction;
+  reason: string;
+  target_module_ids: string[];
+}
+
 export interface PurchaseBundleProposal {
   selected_product_ids: string[];
   summary: string;
   tradeoffs: string[];
   reasons: CandidateFitExplanation[];
+  suggested_refinements: AgentRefinementSuggestion[];
 }
 
 export interface AgentPurchaseBundle {
@@ -343,6 +350,7 @@ export interface AgentPurchaseBundle {
   items: AgentPurchaseBundleItem[];
   summary: string;
   caveats: string[];
+  refinement_suggestions?: AgentRefinementSuggestion[];
   guardrails: string[];
   generated_at: string;
 }

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   buildPolicyPurchaseBundle,
+  buildPolicyRefinementSuggestions,
   materializePurchaseBundleProposal
 } from "@/lib/agent/purchase-bundle";
 import type { ProductCandidate, SessionState } from "@/lib/session/types";
@@ -61,6 +62,8 @@ describe("Agent purchase bundle", () => {
     expect(bundle.items.map((item) => item.product_id)).not.toContain("already-owned");
     expect(bundle.critical_selected_module_ids).toHaveLength(bundle.critical_module_ids.length);
     expect(bundle.guardrails.join(" ")).toContain("不会自动加入购物车");
+    expect(bundle.refinement_suggestions?.length).toBeGreaterThan(0);
+    expect(bundle.refinement_suggestions?.every((item) => item.action !== "我已有行车记录仪")).toBe(true);
   });
 
   it("returns a partial bundle when the budget cannot cover every required module", () => {
@@ -85,7 +88,12 @@ describe("Agent purchase bundle", () => {
       reasons: fallback.items.map((item) => ({
         product_id: item.product_id,
         fit_reason: `模型建议保留${item.module_name}，用于覆盖当前阶段的高频需求。`
-      }))
+      })),
+      suggested_refinements: [{
+        action: "换一批推荐",
+        reason: "当前组合已覆盖必需模块，如不满意可以只刷新候选商品。",
+        target_module_ids: [state.shopping_plan.modules[0].module_id]
+      }]
     };
 
     const bundle = materializePurchaseBundleProposal(state, proposal, fallback);
@@ -95,6 +103,7 @@ describe("Agent purchase bundle", () => {
     expect(bundle?.source).toBe("deepseek");
     expect(bundle?.summary).toBe(proposal.summary);
     expect(bundle?.estimated_total).toBe(fallback.estimated_total);
+    expect(bundle.refinement_suggestions).toEqual(proposal.suggested_refinements);
     expect(bundle?.items[0].title).toBe(
       state.module_candidates[bundle.items[0].module_id].find(
         (item) => item.product_id === bundle.items[0].product_id
@@ -111,12 +120,14 @@ describe("Agent purchase bundle", () => {
     }));
     const firstModule = state.shopping_plan.modules[0];
     const firstPool = state.module_candidates[firstModule.module_id];
+    const suggestedRefinements = fallback.refinement_suggestions ?? [];
 
     expect(materializePurchaseBundleProposal(state, {
       selected_product_ids: ["unknown"],
       summary: "未知商品。",
       tradeoffs: [],
-      reasons: baseReasons(["unknown"])
+      reasons: baseReasons(["unknown"]),
+      suggested_refinements: suggestedRefinements
     }, fallback)).toBeNull();
 
     const duplicateModuleIds = firstPool.map((item) => item.product_id);
@@ -124,7 +135,8 @@ describe("Agent purchase bundle", () => {
       selected_product_ids: duplicateModuleIds,
       summary: "同一模块重复。",
       tradeoffs: [],
-      reasons: baseReasons(duplicateModuleIds)
+      reasons: baseReasons(duplicateModuleIds),
+      suggested_refinements: suggestedRefinements
     }, fallback)).toBeNull();
 
     const expensiveIds = state.shopping_plan.modules.map((module) => `${module.module_id}-upgrade`);
@@ -132,7 +144,8 @@ describe("Agent purchase bundle", () => {
       selected_product_ids: expensiveIds,
       summary: "超出预算。",
       tradeoffs: [],
-      reasons: baseReasons(expensiveIds)
+      reasons: baseReasons(expensiveIds),
+      suggested_refinements: suggestedRefinements
     }, fallback)).toBeNull();
 
     const oneRequiredId = fallback.items.find((item) => !item.optional)!.product_id;
@@ -140,7 +153,8 @@ describe("Agent purchase bundle", () => {
       selected_product_ids: [oneRequiredId],
       summary: "降低了必需模块覆盖。",
       tradeoffs: [],
-      reasons: baseReasons([oneRequiredId])
+      reasons: baseReasons([oneRequiredId]),
+      suggested_refinements: suggestedRefinements
     }, fallback)).toBeNull();
   });
 
@@ -163,13 +177,15 @@ describe("Agent purchase bundle", () => {
     state.module_candidates[second.module_id] = [candidate(second.module_id, "shared-product", 10)];
 
     const bundle = buildPolicyPurchaseBundle(state);
+    const suggestedRefinements = buildPolicyRefinementSuggestions(state);
 
     expect(bundle.items.filter((item) => item.product_id === "shared-product")).toHaveLength(1);
     expect(materializePurchaseBundleProposal(state, {
       selected_product_ids: ["shared-product"],
       summary: "商品归属模块存在歧义。",
       tradeoffs: [],
-      reasons: [{ product_id: "shared-product", fit_reason: "该商品不应被模型跨模块绑定。" }]
+      reasons: [{ product_id: "shared-product", fit_reason: "该商品不应被模型跨模块绑定。" }],
+      suggested_refinements: suggestedRefinements
     }, bundle)).toBeNull();
   });
 });

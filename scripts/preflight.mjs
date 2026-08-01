@@ -577,18 +577,24 @@ function assertArchitectureContracts() {
     {
       ok:
         types.includes("AgentPurchaseBundle") &&
+        types.includes("AgentRefinementSuggestion") &&
         types.includes("purchase_bundle") &&
+        types.includes("refinement_suggestions") &&
         purchaseBundle.includes("buildPolicyPurchaseBundle") &&
+        purchaseBundle.includes("buildPolicyRefinementSuggestions") &&
         purchaseBundle.includes("materializePurchaseBundleProposal") &&
         deepseek.includes("composePurchaseBundle") &&
         deepseek.includes("selectPurchaseBundleModelTier") &&
         prompts.includes("composePurchaseBundlePrompt") &&
+        prompts.includes("suggested_refinements") &&
         validation.includes("validatePurchaseBundleProposalOutput") &&
+        validation.includes("allowedRefinements") &&
         workflowRunner.includes('event_type: "agent.purchase_bundle.composed"') &&
         sessionGuards.includes("isAgentPurchaseBundle") &&
         dashboardResults.includes("Agent 建议购买组合") &&
+        dashboardResults.includes("AI 上下文建议") &&
         hostedConsole.includes("预算安全购买组合"),
-      message: "Agent 完成搜索后必须生成经预算、候选白名单与必需覆盖 guardrail 校验的可审计购买组合"
+      message: "Agent 完成搜索后必须生成经预算、候选白名单与必需覆盖 guardrail 校验的购买组合，并提供白名单内的上下文调整建议"
     },
     {
       ok:

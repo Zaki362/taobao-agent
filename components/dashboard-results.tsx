@@ -118,6 +118,8 @@ export function ResultsPage({
   const bundleAdoption = session.bundle_adoption?.bundle_generated_at === purchaseBundle?.generated_at
     ? session.bundle_adoption
     : undefined;
+  const refinementSuggestions = purchaseBundle?.refinement_suggestions ?? [];
+  const suggestedActions = new Set(refinementSuggestions.map((suggestion) => suggestion.action));
   const sceneLabel = session.current_scene_label || session.scene_brief.scene_type || "当前场景";
   const aiPlanningLabel =
     session.deepseek_status === "connected"
@@ -582,15 +584,50 @@ export function ResultsPage({
 
         <Card className="section-card">
           <CardHeader>
-            <CardTitle>快捷调整</CardTitle>
+            <div className="flex items-center justify-between gap-3">
+              <CardTitle>快捷调整</CardTitle>
+              {refinementSuggestions.length > 0 ? <Badge variant="secondary">AI 上下文建议</Badge> : null}
+            </div>
           </CardHeader>
-          <CardContent className="flex flex-wrap gap-2">
-            {quickActions.map((action) => (
-              <Button key={action} variant="outline" size="sm" disabled={busy} onClick={() => onQuickAction(action)}>
-                <Wand2 className="mr-2 h-4 w-4" />
-                {action}
-              </Button>
-            ))}
+          <CardContent className="space-y-3">
+            {refinementSuggestions.map((suggestion) => {
+              const targetNames = suggestion.target_module_ids
+                .map((moduleId) => session.shopping_plan.modules.find((module) => module.module_id === moduleId)?.module_name)
+                .filter(Boolean);
+              return (
+                <button
+                  key={suggestion.action}
+                  type="button"
+                  disabled={busy}
+                  onClick={() => onQuickAction(suggestion.action)}
+                  className="w-full rounded-[18px] border border-primary/15 bg-primary/[0.04] p-3 text-left transition hover:border-primary/30 hover:bg-primary/[0.07] disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  <div className="flex items-center gap-2 text-sm font-semibold text-foreground">
+                    <Wand2 className="h-4 w-4 text-primary" />
+                    {suggestion.action}
+                  </div>
+                  <p className="mt-1.5 text-xs leading-5 text-muted-foreground">{suggestion.reason}</p>
+                  {targetNames.length > 0 ? (
+                    <p className="mt-1 text-[11px] leading-5 text-foreground/65">预计影响：{targetNames.join("、")}</p>
+                  ) : null}
+                </button>
+              );
+            })}
+            <details className="rounded-[18px] border border-border/80 bg-white px-4 py-3">
+              <summary className="cursor-pointer text-sm font-medium text-foreground">
+                {refinementSuggestions.length > 0 ? "查看全部调整方式" : "选择调整方式"}
+              </summary>
+              <div className="mt-3 flex flex-wrap gap-2">
+                {quickActions
+                  .filter((action) => !suggestedActions.has(action))
+                  .map((action) => (
+                    <Button key={action} variant="outline" size="sm" disabled={busy} onClick={() => onQuickAction(action)}>
+                      <Wand2 className="mr-2 h-4 w-4" />
+                      {action}
+                    </Button>
+                  ))}
+              </div>
+            </details>
           </CardContent>
         </Card>
 

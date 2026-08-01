@@ -10,6 +10,7 @@ import {
 } from "@/lib/llm/telemetry";
 import { createSessionFixture } from "@/tests/fixtures/session";
 import { buildPolicyPurchaseBundle } from "@/lib/agent/purchase-bundle";
+import { getScenarioConfig } from "@/lib/scenarios";
 
 const liveEvaluation = process.env.AGENT_EVAL_LIVE === "true";
 
@@ -104,12 +105,21 @@ describe(`new-car Agent quality gate (${liveEvaluation ? "live DeepSeek" : "dete
 
     const bundle = buildPolicyPurchaseBundle(state);
     const knownIds = new Set(Object.values(state.module_candidates).flat().map((item) => item.product_id));
+    const knownModuleIds = new Set(state.shopping_plan.modules.map((module) => module.module_id));
+    const allowedActions = new Set(getScenarioConfig(state.scene_brief.scenario_id).quick_actions);
 
     expect(bundle.estimated_total).toBeLessThanOrEqual(state.scene_brief.budget);
     expect(new Set(bundle.items.map((item) => item.module_id)).size).toBe(bundle.items.length);
     expect(new Set(bundle.items.map((item) => item.product_id)).size).toBe(bundle.items.length);
     expect(bundle.items.every((item) => knownIds.has(item.product_id))).toBe(true);
     expect(bundle.critical_selected_module_ids.length).toBe(bundle.critical_module_ids.length);
+    expect(bundle.refinement_suggestions?.length).toBeGreaterThan(0);
+    expect(bundle.refinement_suggestions?.length).toBeLessThanOrEqual(3);
+    expect(bundle.refinement_suggestions?.every((item) =>
+      allowedActions.has(item.action) &&
+      item.action !== "我已有行车记录仪" &&
+      item.target_module_ids.every((moduleId) => knownModuleIds.has(moduleId))
+    )).toBe(true);
   });
 
   it.runIf(liveEvaluation)("uses DeepSeek chat for a routine guarded runtime decision", async () => {

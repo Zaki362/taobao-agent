@@ -376,7 +376,12 @@ describe("DeepSeek client reliability", () => {
       reasons: selectedIds.map((productId) => ({
         product_id: productId,
         fit_reason: "该候选处于当前预算范围内，并与所属模块的首购目标一致。"
-      }))
+      })),
+      suggested_refinements: [{
+        action: "换一批推荐",
+        reason: "如果对当前商品不满意，可以保留规划并只刷新候选结果。",
+        target_module_ids: [state.shopping_plan.modules[0].module_id]
+      }]
     }))));
 
     const result = await composePurchaseBundle(state, fallback);
@@ -400,7 +405,45 @@ describe("DeepSeek client reliability", () => {
       selected_product_ids: ["invented-product"],
       summary: "这份提案包含伪造商品。",
       tradeoffs: [],
-      reasons: [{ product_id: "invented-product", fit_reason: "这条理由不应被系统接受。" }]
+      reasons: [{ product_id: "invented-product", fit_reason: "这条理由不应被系统接受。" }],
+      suggested_refinements: [{
+        action: "换一批推荐",
+        reason: "这是一条结构合法但不影响商品白名单校验的调整建议。",
+        target_module_ids: [module.module_id]
+      }]
+    }))));
+
+    const result = await composePurchaseBundle(state, fallback);
+
+    expect(result.mode).toBe("mock");
+    expect(result.data).toBe(fallback);
+    expect(taskTelemetry("compose_purchase_bundle")).toMatchObject({
+      connected: 0,
+      fallback: 1,
+      last_reason: "schema_validation_failed:purchase_bundle_invalid"
+    });
+  });
+
+  it("rejects invented refinement actions and modules in a purchase bundle proposal", async () => {
+    const state = createSessionFixture();
+    const module = state.shopping_plan.modules[0];
+    state.module_candidates[module.module_id] = [{
+      ...candidate("known-product", "已知候选", "稳妥推荐", "规则推荐理由。"),
+      module_id: module.module_id,
+      price: 80
+    }];
+    const fallback = buildPolicyPurchaseBundle(state);
+    const selectedId = fallback.items[0].product_id;
+    vi.stubGlobal("fetch", vi.fn(async () => responseForContent(JSON.stringify({
+      selected_product_ids: [selectedId],
+      summary: "商品选择本身合法，但调整动作越过了服务端白名单。",
+      tradeoffs: [],
+      reasons: [{ product_id: selectedId, fit_reason: "该商品属于当前候选池并位于预算范围内。" }],
+      suggested_refinements: [{
+        action: "直接下单付款",
+        reason: "这条建议不应通过高风险动作边界。",
+        target_module_ids: ["invented-module"]
+      }]
     }))));
 
     const result = await composePurchaseBundle(state, fallback);

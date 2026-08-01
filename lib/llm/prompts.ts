@@ -270,6 +270,8 @@ export function composePurchaseBundlePrompt(
   state: SessionState,
   fallback: AgentPurchaseBundle
 ) {
+  const allowedRefinements = getScenarioConfig(state.scene_brief.scenario_id).quick_actions
+    .filter((action) => !action.startsWith("我已有"));
   const modules = state.shopping_plan.modules.map((module) => ({
     module_id: module.module_id,
     module_name: module.module_name,
@@ -296,17 +298,29 @@ export function composePurchaseBundlePrompt(
     "硬约束：只能原样使用候选中的 product_id；每个模块最多选择一件；总价不得超过用户总预算；优先覆盖所有非 optional 模块；排除已有物品和不想买的类别。",
     "如果无法覆盖全部模块，应主动做取舍，并在 tradeoffs 中说明；不得编造价格、规格、评价、销量、店铺资质或商品 ID。",
     "规则组合只是安全参考，你可以在不降低必需模块覆盖率且不突破预算的前提下，依据用户偏好、风险和跨模块价值选择更合理的组合。",
-    "输出必须是严格 JSON，只包含 selected_product_ids、summary、tradeoffs、reasons。",
+    "同时从 Allowed Refinements 中选择 1-3 个最适合本轮结果的后续调整建议。只能原样使用 action，不得发明新动作；target_module_ids 只能引用当前规划模块。",
+    "不要建议用户声明并未提供的事实，例如不要无依据推荐‘我已有某物品’；建议只在用户点击确认后才会执行。",
+    "输出必须是严格 JSON，只包含 selected_product_ids、summary、tradeoffs、reasons、suggested_refinements。",
     "selected_product_ids 为商品 ID 数组；summary 为一句组合结论；tradeoffs 为 0-4 条短句；reasons 必须为每个已选商品各返回一项 {product_id, fit_reason}，不得遗漏、重复或新增。",
+    "suggested_refinements 每项必须为 {action, reason, target_module_ids}；action 不得重复，reason 为具体短句。",
     dataBoundaryNotice(),
     `Scene Brief: ${JSON.stringify(state.scene_brief)}`,
+    `Allowed Refinements: ${JSON.stringify(allowedRefinements)}`,
+    `Market Feedback: ${JSON.stringify({
+      status: state.market_feedback.status,
+      summary: state.market_feedback.summary,
+      pressure_modules: state.market_feedback.pressure_modules,
+      opportunity_modules: state.market_feedback.opportunity_modules,
+      reallocation_suggestions: state.market_feedback.reallocation_suggestions
+    })}`,
     `Planning Modules And Candidates: ${JSON.stringify(modules)}`,
     `Safe Policy Reference: ${JSON.stringify({
       selected_product_ids: fallback.items.map((item) => item.product_id),
       estimated_total: fallback.estimated_total,
       critical_selected_module_ids: fallback.critical_selected_module_ids,
       summary: fallback.summary,
-      caveats: fallback.caveats
+      caveats: fallback.caveats,
+      refinement_suggestions: fallback.refinement_suggestions
     })}`
   ].join("\n");
 }

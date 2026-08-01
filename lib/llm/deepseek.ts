@@ -974,11 +974,14 @@ export async function composePurchaseBundle(
   state: SessionState,
   fallback: AgentPurchaseBundle
 ): Promise<StructuredLlmResult<AgentPurchaseBundle>> {
+  const allowedRefinements = getScenarioConfig(state.scene_brief.scenario_id).quick_actions
+    .filter((action) => !action.startsWith("我已有"));
   const fallbackProposal: PurchaseBundleProposal = {
     selected_product_ids: fallback.items.map((item) => item.product_id),
     summary: fallback.summary,
     tradeoffs: fallback.caveats,
-    reasons: fallback.items.map((item) => ({ product_id: item.product_id, fit_reason: item.reason }))
+    reasons: fallback.items.map((item) => ({ product_id: item.product_id, fit_reason: item.reason })),
+    suggested_refinements: fallback.refinement_suggestions ?? []
   };
   const modelTier = selectPurchaseBundleModelTier(state, fallback);
   const result = await deepseekJson<PurchaseBundleProposal>(
@@ -995,7 +998,9 @@ export async function composePurchaseBundle(
   const valid = validatePurchaseBundleProposalOutput(
     result.data,
     candidateIds,
-    state.shopping_plan.modules.length
+    state.shopping_plan.modules.length,
+    allowedRefinements,
+    state.shopping_plan.modules.map((module) => module.module_id)
   );
   if (!valid) {
     downgradeLastLlmCall("compose_purchase_bundle", "schema_validation_failed:purchase_bundle_invalid");

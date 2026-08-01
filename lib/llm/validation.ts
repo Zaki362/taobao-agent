@@ -328,7 +328,9 @@ export function validateCandidateReviewOutput(
 export function validatePurchaseBundleProposalOutput(
   value: unknown,
   candidateIds: string[],
-  maxItems: number
+  maxItems: number,
+  allowedRefinements: string[],
+  moduleIds: string[]
 ): value is PurchaseBundleProposal {
   if (!isRecord(value) || !Array.isArray(value.selected_product_ids)) return false;
   if (!hasBoundedText(value.summary, 300)) return false;
@@ -358,5 +360,39 @@ export function validatePurchaseBundleProposalOutput(
     if (!selectedSet.has(productId) || reasonIds.has(productId) || reason.length < 6) return false;
     reasonIds.add(productId);
   }
-  return reasonIds.size === selectedSet.size;
+  if (reasonIds.size !== selectedSet.size) return false;
+
+  if (
+    !Array.isArray(value.suggested_refinements) ||
+    value.suggested_refinements.length < 1 ||
+    value.suggested_refinements.length > 3
+  ) {
+    return false;
+  }
+  const allowedActions = new Set(allowedRefinements);
+  const allowedModuleIds = new Set(moduleIds);
+  const seenActions = new Set<string>();
+  for (const item of value.suggested_refinements) {
+    if (
+      !isRecord(item) ||
+      !hasBoundedText(item.action, 80) ||
+      !hasBoundedText(item.reason, 180) ||
+      !Array.isArray(item.target_module_ids) ||
+      item.target_module_ids.length > 6
+    ) {
+      return false;
+    }
+    const action = String(item.action).trim();
+    const reason = String(item.reason).trim();
+    if (!allowedActions.has(action) || seenActions.has(action) || reason.length < 6) return false;
+    seenActions.add(action);
+    const seenModuleIds = new Set<string>();
+    for (const moduleIdValue of item.target_module_ids) {
+      if (!hasBoundedText(moduleIdValue, 100)) return false;
+      const moduleId = String(moduleIdValue).trim();
+      if (!allowedModuleIds.has(moduleId) || seenModuleIds.has(moduleId)) return false;
+      seenModuleIds.add(moduleId);
+    }
+  }
+  return true;
 }
