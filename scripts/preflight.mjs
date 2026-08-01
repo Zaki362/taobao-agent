@@ -235,6 +235,42 @@ function assertDevelopmentLauncher() {
   }
 }
 
+function assertDeploymentAssets() {
+  const dockerfile = tryReadText("Dockerfile");
+  const compose = tryReadText("docker-compose.yml");
+  const dockerignore = tryReadText(".dockerignore");
+  const dbCheck = tryReadText("scripts/db-check.mjs");
+  if (!dockerfile || !compose || !dockerignore || !dbCheck) return;
+
+  if (
+    !dockerfile.includes('COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./') ||
+    !dockerfile.includes("/app/db ./db") ||
+    !dockerfile.includes("scripts/workflow-recovery-worker.mjs") ||
+    !dockerfile.includes("USER nextjs")
+  ) {
+    fail("Docker 镜像必须使用非 root standalone 运行时，并包含 migration 与恢复 Worker 资产");
+  }
+
+  if (
+    !compose.includes("postgres:") ||
+    !compose.includes("app:") ||
+    !compose.includes("recovery:") ||
+    !compose.includes("node scripts/db-migrate.mjs && node scripts/db-check.mjs && node server.js") ||
+    !compose.includes("TAOBAO_EXECUTION_BACKEND: local_executor") ||
+    compose.includes("SCENECART_DEVICE_TOKEN:")
+  ) {
+    fail("Compose 必须启动 PostgreSQL、Web 与恢复服务，且不能把用户设备令牌注入云端容器");
+  }
+
+  if (!dockerignore.includes(".env*") || !dockerignore.includes(".data") || !dockerignore.includes("node_modules")) {
+    fail(".dockerignore 必须排除本地密钥、运行数据和依赖目录");
+  }
+
+  if (!dbCheck.includes('"runtime_service_heartbeats"')) {
+    fail("db:check 必须验证恢复调度心跳表存在，不能只依赖 migration 记录");
+  }
+}
+
 function assertRequiredFiles() {
   const requiredFiles = [
     "app/api/scene/parse/route.ts",
@@ -301,6 +337,7 @@ function assertRequiredFiles() {
     ".github/workflows/quality.yml",
     "Dockerfile",
     "docker-compose.yml",
+    ".dockerignore",
     "docs/deployment.md",
     "vitest.evaluation.config.ts",
     "tests/evaluation/new-car-agent-quality.test.ts",
@@ -1059,6 +1096,7 @@ function run() {
   assertGitignore();
   assertExecutorConfigurator();
   assertDevelopmentLauncher();
+  assertDeploymentAssets();
   assertRequiredFiles();
   assertRemovedLegacyFiles();
   assertArchitectureContracts();

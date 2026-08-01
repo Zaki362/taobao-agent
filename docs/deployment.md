@@ -49,6 +49,8 @@ SCENECART_RECOVERY_STALE_MS=180000
 
 `health` 只回答进程和数据库是否存活；`readiness` 才会检查正式产品模式、演示加购回退、数据库持久化、认证、服务端恢复心跳、安全 Cookie、正式 HTTPS Origin、DeepSeek、`local_executor`、手动 MCP 调试端点、旧 Mock 标志和当前账号执行器状态，不能用前者代替发布验收。应用启动后应等待至少一次恢复 Worker/Cron 心跳，再把实例加入正式流量。
 
+`db:check` 会同时核对 migration checksum 与运行时实体表，包括恢复调度依赖的 `runtime_service_heartbeats`。Docker 镜像只包含 Web、数据库迁移和恢复 Worker；用户设备令牌、Qoder CLI、淘宝 skill 与淘宝登录态不得进入镜像或 Compose 环境。
+
 `SCENECART_PRODUCT_MODE=production` 会强制关闭演示购物车回退，即使误设 `ALLOW_DEMO_CART_FALLBACK=true` 也不会把真实加购失败伪装成成功。开发预览仍可保留该回退，但 UI 与购物清单必须明确标记“演示购物车”。
 
 正式模式也会阻断旧的 `qoder_cli`、`codex_hosted` 与 `experimental_local` 直连路径。误配置时 effective backend 会安全收敛为 `local_executor`，但 readiness 仍保持失败，直到部署环境显式配置正确。

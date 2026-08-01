@@ -23,7 +23,8 @@ const requiredTables = [
   "executor_devices",
   "agent_jobs",
   "execution_events",
-  "security_rate_limits"
+  "security_rate_limits",
+  "runtime_service_heartbeats"
 ];
 const migrationsDir = path.join(process.cwd(), "db", "migrations");
 

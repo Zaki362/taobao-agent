@@ -65,7 +65,7 @@ npm run start
 - `agent_jobs`
 - `execution_events`
 
-`db/migrations/002_security_rate_limits.sql` 创建不保存邮箱或 IP 明文的认证限流表。migration runner 会保存每个 SQL 文件的 SHA-256 checksum；已执行 migration 被修改时会拒绝继续，必须新增 migration。
+`db/migrations/002_security_rate_limits.sql` 创建不保存邮箱或 IP 明文的认证限流表；`003_workflow_recovery_index.sql` 增加工作流恢复扫描索引；`004_runtime_service_heartbeats.sql` 保存恢复 Worker / Cron 心跳。migration runner 会保存每个 SQL 文件的 SHA-256 checksum；已执行 migration 被修改时会拒绝继续，必须新增 migration。`db:check` 除了校验所有 migration checksum，还会直接检查包括 `runtime_service_heartbeats` 在内的运行时实体表，防止表被意外删除但 migration 记录仍存在时产生假健康。
 
 任务领取使用 PostgreSQL 事务和 `FOR UPDATE SKIP LOCKED`，支持多个执行器并发但不会重复领取同一任务。
 
