@@ -3,7 +3,10 @@ import { ApiRouteError, apiOk, apiRouteError } from "@/lib/api/responses";
 import { getRuntimeRepository } from "@/lib/runtime";
 import { authenticateExecutorToken, bearerToken, DEFAULT_JOB_LEASE_MS } from "@/lib/runtime/jobs";
 import { assertExecutorProtocol, EXECUTOR_PROTOCOL_VERSION } from "@/lib/runtime/executor-protocol";
-import { recoverAgentWorkflowForExecutor } from "@/lib/agent/workflow-recovery";
+import {
+  recoverAgentWorkflowForExecutor,
+  type WorkflowRecoveryResult
+} from "@/lib/agent/workflow-recovery";
 
 export async function POST(request: NextRequest) {
   try {
@@ -13,19 +16,15 @@ export async function POST(request: NextRequest) {
     const repository = getRuntimeRepository();
     await repository.heartbeatDevice(device.id);
     let job = await repository.claimJob(device, DEFAULT_JOB_LEASE_MS);
-    let recovery: {
-      recovered: boolean;
-      session_id?: string;
-      reason?: "completed_result" | "terminal_state" | "missing_continuation";
-      error?: string;
-    } = { recovered: false };
+    let recovery: WorkflowRecoveryResult = { recovered: false };
     if (!job) {
       try {
         recovery = await recoverAgentWorkflowForExecutor(device);
       } catch (error) {
         recovery = {
           recovered: false,
-          error: error instanceof Error ? error.message.slice(0, 300) : "workflow recovery failed"
+          reason: "recovery_failed",
+          error_message: error instanceof Error ? error.message.slice(0, 300) : "workflow recovery failed"
         };
       }
     }

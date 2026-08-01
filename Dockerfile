@@ -24,6 +24,7 @@ COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
 COPY --from=builder --chown=nextjs:nodejs /app/db ./db
 COPY --from=builder --chown=nextjs:nodejs /app/scripts/db-migrate.mjs ./scripts/db-migrate.mjs
 COPY --from=builder --chown=nextjs:nodejs /app/scripts/db-check.mjs ./scripts/db-check.mjs
+COPY --from=builder --chown=nextjs:nodejs /app/scripts/workflow-recovery-worker.mjs ./scripts/workflow-recovery-worker.mjs
 
 USER nextjs
 EXPOSE 3000

@@ -36,6 +36,7 @@ DATABASE_SSL=true
 DATABASE_POOL_SIZE=10
 AUTH_REQUIRED=true
 AUTH_SESSION_TTL_DAYS=30
+SCENECART_CRON_SECRET=at-least-32-random-characters
 TAOBAO_EXECUTION_BACKEND=local_executor
 DEEPSEEK_API_KEY=your-secret
 DEEPSEEK_CHAT_MODEL=deepseek-chat
@@ -129,7 +130,7 @@ pending -> leased -> running -> completed
 - `agent_runtime.workflow_status` 保存 `running / waiting_for_tools / completed / paused / error`，同时记录运行 ID、当前模块和状态转换次数。
 - 本地执行器完成或终态失败一个模块后，回填 API 会调用服务端 `workflow-runner`；即使浏览器已关闭，后续模块仍会串行入队。
 - 重复提交已完成任务只返回 `already_completed=true`，不会再次触发 Agent 续跑。
-- Worker 领取不到新任务时会检查本账号仍处于自动续跑状态的会话；若发现 Job 结果已持久化但 Session 尚未回填，系统会重放结果并补排下一模块，不会再次执行淘宝动作。
+- Worker 领取不到新任务时会检查本账号仍处于自动续跑状态的会话；独立 `worker:recovery` 或云端 Cron 也会扫描所有持久会话。若发现 Job 结果已持久化但 Session 尚未回填，系统只重放数据库结果并补排下一模块，不会再次执行淘宝动作。
 
 ## 6. Agent Runtime 2.0
 
@@ -143,7 +144,7 @@ pending -> leased -> running -> completed
 
 后端在执行前验证模块 ID、活跃任务、重复搜索、补搜关键词、可跳过条件、置信度和剩余工具预算。模型输出无效、低置信度、超时或超过预算时，系统自动使用确定性规则决策。工具调用权不直接交给模型。
 
-`lib/agent/workflow-runner.ts` 是正式搜索阶段的推进器。它对单进程内同一 Session 做互斥，并依赖持久任务幂等键抵御重复入队；每次只允许一个淘宝模块任务处于等待执行状态。用户取消任务会关闭自动续跑，终态工具失败则记录错误、跳过当前模块并继续下一模块。`workflow-recovery.ts` 在 Worker 空闲领取时补偿“Job 已提交结果但 Session/续跑尚未完成”的进程中断窗口。
+`lib/agent/workflow-runner.ts` 是正式搜索阶段的推进器。它对单进程内同一 Session 做互斥，并依赖持久任务幂等键抵御重复入队；每次只允许一个淘宝模块任务处于等待执行状态。用户取消任务会关闭自动续跑，终态工具失败则记录错误、跳过当前模块并继续下一模块。`workflow-recovery.ts` 与受 `SCENECART_CRON_SECRET` 保护的 `/api/internal/workflow-recovery` 补偿“Job 已提交结果但续跑尚未触发”的进程中断窗口。
 
 `RUNTIME_STORE=postgres` 时，每次推进还会获取基于 Session ID 的 PostgreSQL transaction-level advisory lock。锁内的 Session 读取、Agent 决策落盘、Job 创建和事件写入通过 `AsyncLocalStorage` 复用同一数据库 client，并在同一事务提交；竞争实例立即返回等待状态，不会重复创建下一模块。Executor 的成功、失败和取消回填也使用同一把锁，避免重复回执用旧 Session 快照覆盖下一步任务。锁不覆盖 Qoder/Taobao 的长时间执行；平衡/探索档位下只可能额外包含一次上限 8 秒的 DeepSeek 下一动作判断。
 
@@ -155,10 +156,13 @@ pending -> leased -> running -> completed
 - `GET /api/runtime/jobs?session_id=...`：查看当前会话任务。
 - `GET /api/runtime/events/stream?session_id=...`：检查 SSE 事件。
 - `GET /api/runtime/metrics?session_id=...`：检查积压、耗时、失败/取消数量、在线设备和分级运行告警。
+- `GET|POST /api/internal/workflow-recovery`：内部恢复扫描端点，仅接受 `Authorization: Bearer $SCENECART_CRON_SECRET`。
 - `/settings/executor`：查看设备、最后心跳和撤销令牌。
 - `/hosted`：查看会话需求、Agent 决策、工具日志和候选回填状态。
 
 应用已经对“有任务但无执行器”、队列等待过久、任务失败率、DeepSeek fallback 和 Guardrail 拒绝率生成会话级告警。正式环境仍应增加进程守护（systemd、launchd 或容器 supervisor），并把这些告警接入外部监控与通知渠道。
+
+自托管环境运行 `npm run worker:recovery`，默认每 30 秒处理最多 5 个可恢复会话；云平台可每分钟调用一次内部恢复端点。PostgreSQL 会通过活动工作流部分索引定位扫描范围，先排除仍有健康运行 Job 的会话，再按最旧更新时间选出真正需要补偿的候选，避免普通会话数量超过 100 或健康任务长期占位造成扫描饥饿。单个异常 Session 的恢复失败会被隔离并计入 `failed`，不会阻塞同批其他会话。两种方式都不会调用淘宝，只处理服务端持久状态。可用 `SCENECART_RECOVERY_INTERVAL_MS` 调整常驻 Worker 间隔，最小 10 秒。
 
 仓库 `.github/workflows/quality.yml` 已提供 PostgreSQL 16 集成验证、migration 检查、advisory lock 竞争测试、单元测试、生产构建和端到端测试。正式发布应将该 workflow 设为主分支必需检查。
 

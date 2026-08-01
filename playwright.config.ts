@@ -36,6 +36,7 @@ export default defineConfig({
       AUTH_REQUIRED: "true",
       RUNTIME_STORE: "local",
       TAOBAO_EXECUTION_BACKEND: "local_executor",
+      SCENECART_CRON_SECRET: "playwright-recovery-secret-with-at-least-32-characters",
       DEEPSEEK_API_KEY: "",
       DEEPSEEK_DISABLED: "true"
     }

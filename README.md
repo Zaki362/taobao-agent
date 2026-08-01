@@ -19,6 +19,7 @@ SceneCart AI 是一个正在按正式产品架构推进的“场景化购物 Age
 - 服务端 Agent 决策循环：用户确认规划后只需启动一次，后端会消费 AI 规划顺序、执行档位、候选池复盘和工具状态，逐轮决定搜索、补搜、容错跳过、等待工具或结束，并把动作写入 `agent_decisions`
 - 浏览器断线续跑：`workflow-runner` 持久化运行 ID、当前模块、自动续跑开关和状态转换；本地执行器每次回填后由服务端自动排队下一模块，关闭或切换页面不会中断整轮搜索
 - 多实例并发保护：PostgreSQL 正式运行时使用事务级 advisory lock，同一 Session 同一时刻只允许一个 Web 实例计算下一动作、回填工具结果并入队
+- 服务端中断恢复：独立 `worker:recovery` 或云端 Cron 会扫描持久化 Job/Session，重放已提交结果并补排下一模块，不依赖浏览器或某台执行器恰好空闲
 - Agent Runtime 2.0：平衡/探索档位可由 DeepSeek `decide_next_action` 提议下一步动作，后端使用动作白名单、模块合法性、置信度、工具预算和重复调用检查做 guardrail，不合格时回退确定性策略
 - Agent 建议补搜：当候选偏少或质量不足时，推荐页会展示建议搜索词，用户可以一键按 Agent 建议补搜当前模块
 - 快捷调整影响说明：用户点击快捷调整后，系统会生成 `last_refinement`，说明哪些模块需要重搜、哪些候选可复用、哪些模块被移除以及原因
@@ -105,6 +106,7 @@ AUTH_REQUIRED=true
 APP_ORIGIN=https://your-scenecart.example.com
 SCENECART_API_URL=http://127.0.0.1:3000
 SCENECART_DEVICE_TOKEN=
+SCENECART_CRON_SECRET=
 ```
 
 说明：
@@ -120,6 +122,7 @@ SCENECART_DEVICE_TOKEN=
 - `AUTH_REQUIRED=true`：正式部署必须开启，确保 Session、设备与任务按用户隔离。
 - `APP_ORIGIN`：正式产品允许发起写请求的网页 Origin；多个地址使用逗号分隔。
 - `SCENECART_DEVICE_TOKEN`：在 `/settings/executor` 注册设备后一次性获得，配置在运行 Qoder/Taobao 的本机，不应写入仓库。
+- `SCENECART_CRON_SECRET`：至少 32 字符的独立高熵密钥，只用于保护服务端恢复扫描端点；不能复用设备 Token、DeepSeek Key 或用户密码。
 - `executor:doctor` 和 `worker:local` 会直接读取 `.env.local`；也可以使用临时环境变量覆盖本地配置。Token 生成后无需把它写入命令历史。
 - `QODERCLI_PATH`：可选，指定本机 qodercli 路径；默认会尝试读取当前用户目录下的 `~/.local/bin/qodercli`。
 - `TAOBAO_NATIVE_BIN`：仅 experimental local bridge 使用，可选，指定 `taobao-native` 命令名或可执行文件路径。

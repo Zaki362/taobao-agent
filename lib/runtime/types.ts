@@ -85,6 +85,7 @@ export interface RuntimeRepository {
   getSession(sessionId: string, userId?: string): Promise<SessionState | null>;
   saveSession(state: SessionState): Promise<void>;
   listSessions(userId?: string): Promise<SessionState[]>;
+  listWorkflowRecoveryCandidates(userId?: string, limit?: number): Promise<SessionState[]>;
 
   createUser(user: RuntimeUser): Promise<RuntimeUser>;
   findUserById(userId: string): Promise<RuntimeUser | null>;

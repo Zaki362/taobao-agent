@@ -3,8 +3,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { createAgentDecision } from "@/lib/agent/decision-engine";
 import { advanceAgentWorkflow } from "@/lib/agent/workflow-runner";
-import { recoverAgentWorkflowForExecutor } from "@/lib/agent/workflow-recovery";
-import { applyCompletedRuntimeJob, applyFailedRuntimeJob } from "@/lib/runtime/jobs";
+import { recoverAgentWorkflowForExecutor, recoverAgentWorkflows } from "@/lib/agent/workflow-recovery";
+import { applyCompletedRuntimeJob, applyFailedRuntimeJob, enqueueModuleSearchJob } from "@/lib/runtime/jobs";
 import { localRuntimeRepository, resetLocalRuntimeForTests } from "@/lib/runtime/local-repository";
 import type { ExecutorDevice } from "@/lib/runtime/types";
 import type { ProductCandidate } from "@/lib/session/types";
@@ -230,5 +230,96 @@ describe("server-managed Agent workflow", () => {
     expect(restored?.hosted_tasks.find((task) => task.task_id === firstJob!.id)?.status).toBe("completed");
     expect(nextJob?.payload.module_id).not.toBe(firstModuleId);
     expect(restored?.agent_runtime.workflow_status).toBe("waiting_for_tools");
+  });
+
+  it("recovers a persisted result from a server scan without an executor callback", async () => {
+    const sessionId = `session-workflow-cron-recovery-${Date.now()}`;
+    sessionFiles.add(sessionId);
+    const state = createSessionFixture({ session_id: sessionId });
+    await localRuntimeRepository.saveSession(state);
+
+    const started = await advanceAgentWorkflow(sessionId, device.user_id, {
+      start: true,
+      trigger: "user_start"
+    });
+    expect(started.outcome).toBe("queued");
+    const firstJob = await localRuntimeRepository.claimJob(device, 30_000);
+    expect(firstJob).not.toBeNull();
+    const firstModuleId = String(firstJob!.payload.module_id);
+    const firstModuleName = String(firstJob!.payload.module_name);
+    await localRuntimeRepository.completeJob(firstJob!.id, device.id, {
+      summary: "等待服务端扫描恢复",
+      candidates: candidates(firstModuleId, firstModuleName)
+    });
+    const interrupted = await localRuntimeRepository.getSession(sessionId, device.user_id);
+    interrupted!.hosted_tasks = interrupted!.hosted_tasks.filter((task) => task.task_id !== firstJob!.id);
+    await localRuntimeRepository.saveSession(interrupted!);
+
+    const healthySessionId = `session-workflow-healthy-${Date.now()}`;
+    sessionFiles.add(healthySessionId);
+    const healthy = createSessionFixture({ session_id: healthySessionId });
+    const healthyModule = healthy.shopping_plan.modules[0];
+    await enqueueModuleSearchJob(healthy, {
+      moduleId: healthyModule.module_id,
+      moduleName: healthyModule.module_name,
+      keyword: healthyModule.search_keyword ?? healthyModule.module_name
+    });
+    healthy.agent_runtime.auto_continue = true;
+    healthy.agent_runtime.workflow_status = "waiting_for_tools";
+    healthy.agent_runtime.last_transition_at = "2020-01-01T00:00:00.000Z";
+    await localRuntimeRepository.saveSession(healthy);
+
+    const recovery = await recoverAgentWorkflows({ limit: 1 });
+    const restored = await localRuntimeRepository.getSession(sessionId, device.user_id);
+    const nextJob = (await localRuntimeRepository.listJobs(sessionId, device.user_id))
+      .find((job) => job.status === "pending");
+
+    expect(recovery.scanned).toBe(1);
+    expect(recovery.recovered).toBe(1);
+    expect(recovery.items.find((item) => item.session_id === sessionId)).toMatchObject({
+      session_id: sessionId,
+      reason: "completed_result"
+    });
+    expect(restored?.module_candidates[firstModuleId]).toHaveLength(3);
+    expect(restored?.hosted_tasks.find((task) => task.task_id === firstJob!.id)?.status).toBe("completed");
+    expect(nextJob?.payload.module_id).not.toBe(firstModuleId);
+  });
+
+  it("continues scanning when one recoverable session is malformed", async () => {
+    const brokenSessionId = `session-workflow-broken-recovery-${Date.now()}`;
+    const validSessionId = `session-workflow-valid-recovery-${Date.now()}`;
+    sessionFiles.add(brokenSessionId);
+    sessionFiles.add(validSessionId);
+
+    const broken = createSessionFixture({ session_id: brokenSessionId });
+    broken.agent_runtime.auto_continue = true;
+    broken.agent_runtime.workflow_status = "running";
+    broken.agent_runtime.last_transition_at = "2020-01-01T00:00:00.000Z";
+    broken.agent_decisions = [createAgentDecision({
+      action: "search_module",
+      source: "plan_strategy",
+      confidence: "high",
+      reason: "malformed recovery decision",
+      evidence: []
+    })];
+    await localRuntimeRepository.saveSession(broken);
+
+    const valid = createSessionFixture({ session_id: validSessionId });
+    valid.agent_runtime.auto_continue = true;
+    valid.agent_runtime.workflow_status = "running";
+    valid.agent_runtime.last_transition_at = "2021-01-01T00:00:00.000Z";
+    await localRuntimeRepository.saveSession(valid);
+
+    const recovery = await recoverAgentWorkflows({ limit: 2, maxRecoveries: 2 });
+    const brokenResult = recovery.items.find((item) => item.session_id === brokenSessionId);
+    const validResult = recovery.items.find((item) => item.session_id === validSessionId);
+
+    expect(brokenResult).toMatchObject({ recovered: false, reason: "recovery_failed" });
+    expect(brokenResult?.error_message).toContain("缺少 module_id");
+    expect(validResult).toMatchObject({ recovered: true, reason: "missing_continuation" });
+    expect((await localRuntimeRepository.getSession(brokenSessionId, device.user_id))
+      ?.agent_runtime.workflow_status).toBe("error");
+    expect((await localRuntimeRepository.listJobs(validSessionId, device.user_id))
+      .some((job) => job.status === "pending")).toBe(true);
   });
 });

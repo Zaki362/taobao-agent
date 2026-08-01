@@ -2,6 +2,7 @@ import { expect, test, type APIRequestContext } from "@playwright/test";
 import protocol from "../../lib/runtime/executor-protocol.json";
 
 const recommendationTypes = ["稳妥推荐", "性价比推荐", "升级推荐"] as const;
+const recoverySecret = "playwright-recovery-secret-with-at-least-32-characters";
 const executorHeaders = (token: string) => ({
   Authorization: `Bearer ${token}`,
   "X-SceneCart-Executor-Protocol": protocol.version
@@ -79,6 +80,15 @@ test("authenticated new-car workflow reaches recommendations through the durable
   await page.getByLabel("密码").fill("e2e-secure-password");
   await page.getByRole("button", { name: "注册并登录" }).click();
   await expect(page).toHaveURL(/\/$/);
+
+  const blockedRecovery = await page.request.get("/api/internal/workflow-recovery");
+  expect(blockedRecovery.status()).toBe(401);
+  const authorizedRecovery = await page.request.get("/api/internal/workflow-recovery", {
+    headers: { Authorization: `Bearer ${recoverySecret}` }
+  });
+  const authorizedRecoveryPayload = await authorizedRecovery.json();
+  expect(authorizedRecovery.ok(), JSON.stringify(authorizedRecoveryPayload)).toBeTruthy();
+  expect(authorizedRecoveryPayload).toMatchObject({ scanned: 0, recovered: 0 });
 
   const deviceResponse = await page.request.post("/api/executor/devices", {
     headers: { Origin: "http://127.0.0.1:3100" },

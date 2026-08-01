@@ -50,6 +50,7 @@ export async function inspectRuntimeReadiness(userId?: string) {
   const deepSeekConfigured = configured(process.env.DEEPSEEK_API_KEY) && process.env.DEEPSEEK_DISABLED !== "true";
   const productMode = getProductMode();
   const demoCartFallback = allowDemoCartFallback();
+  const workflowRecoveryConfigured = (process.env.SCENECART_CRON_SECRET?.trim().length ?? 0) >= 32;
 
   checks.push(check(
     "product_mode",
@@ -112,6 +113,16 @@ export async function inspectRuntimeReadiness(userId?: string) {
     true,
     authRequired ? "AUTH_REQUIRED 已开启" : "当前允许匿名使用",
     "正式环境设置 AUTH_REQUIRED=true"
+  ));
+  checks.push(check(
+    "workflow_recovery",
+    "服务端工作流恢复",
+    workflowRecoveryConfigured ? "pass" : "fail",
+    true,
+    workflowRecoveryConfigured
+      ? "恢复扫描端点已配置独立的高熵访问密钥"
+      : "未配置服务端恢复扫描密钥，进程中断后的续跑仍可能依赖本地执行器",
+    "设置至少 32 字符的 SCENECART_CRON_SECRET，并启动 worker:recovery 或配置云端 Cron"
   ));
   checks.push(check(
     "secure_cookie",

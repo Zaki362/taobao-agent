@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createAgentDecision } from "@/lib/agent/decision-engine";
 import { advanceAgentWorkflow } from "@/lib/agent/workflow-runner";
+import { recoverAgentWorkflows } from "@/lib/agent/workflow-recovery";
 import { closeDatabasePoolForTests, query, withWorkflowSessionLock } from "@/lib/runtime/database";
 import { applyCompletedRuntimeJob, enqueueModuleSearchJob } from "@/lib/runtime/jobs";
 import { postgresRuntimeRepository } from "@/lib/runtime/postgres-repository";
@@ -279,5 +280,87 @@ describeWithDatabase("PostgreSQL production runtime contract", () => {
     expect(restored?.tool_logs.filter((log) =>
       log.tool_name === "local_executor" && log.module_id === module.module_id
     )).toHaveLength(1);
+  });
+
+  it("recovers an orphaned completed job without re-executing the external tool", async () => {
+    const recoverySessionId = `session-pg-cron-recovery-${randomUUID()}`;
+    const recoveryDevice: ExecutorDevice = {
+      ...device,
+      id: randomUUID(),
+      name: "PostgreSQL recovery executor",
+      token_hash: `token-${randomUUID()}`
+    };
+    await postgresRuntimeRepository.createDevice(recoveryDevice);
+    await postgresRuntimeRepository.saveSession(createSessionFixture({
+      session_id: recoverySessionId,
+      owner_id: userId
+    }));
+
+    const started = await advanceAgentWorkflow(recoverySessionId, userId, {
+      start: true,
+      trigger: "user_start"
+    });
+    expect(started.outcome).toBe("queued");
+    const firstJob = await postgresRuntimeRepository.claimJob(recoveryDevice, 30_000);
+    expect(firstJob?.session_id).toBe(recoverySessionId);
+    const moduleId = String(firstJob!.payload.module_id);
+    await postgresRuntimeRepository.completeJob(firstJob!.id, recoveryDevice.id, {
+      summary: "PostgreSQL orphan recovery",
+      candidates: [{
+        product_id: "pg-recovery-product",
+        title: "PostgreSQL 恢复候选",
+        price: 88,
+        source: "淘宝本地执行器测试",
+        shop_name: "恢复测试旗舰店",
+        image_url: "https://example.com/recovery.jpg",
+        detail_url: "https://item.taobao.com/item.htm?id=pg-recovery-product",
+        shop_badges: ["旗舰店"],
+        highlights: ["恢复测试"],
+        risk_notes: ["集成测试数据"],
+        fit_reason: "用于验证服务端恢复",
+        recommendation_type: "性价比推荐",
+        module_id: moduleId
+      }]
+    });
+    const interrupted = await postgresRuntimeRepository.getSession(recoverySessionId, userId);
+    interrupted!.hosted_tasks = interrupted!.hosted_tasks.filter((task) => task.task_id !== firstJob!.id);
+    await postgresRuntimeRepository.saveSession(interrupted!);
+
+    const recovery = await recoverAgentWorkflows({ userId, limit: 25, maxRecoveries: 25 });
+    const restored = await postgresRuntimeRepository.getSession(recoverySessionId, userId);
+    const jobs = await postgresRuntimeRepository.listJobs(recoverySessionId, userId);
+
+    expect(recovery.items.find((item) => item.session_id === recoverySessionId)).toMatchObject({
+      recovered: true,
+      reason: "completed_result"
+    });
+    expect(restored?.module_candidates[moduleId]).toHaveLength(1);
+    expect(restored?.hosted_tasks.find((task) => task.task_id === firstJob!.id)?.status).toBe("completed");
+    expect(jobs.filter((job) => job.id === firstJob!.id)).toHaveLength(1);
+    expect(jobs.some((job) => job.status === "pending" && job.id !== firstJob!.id)).toBe(true);
+  });
+
+  it("finds an old recovery candidate beyond the general 100-session listing window", async () => {
+    const candidateId = `session-pg-old-recovery-${randomUUID()}`;
+    const candidate = createSessionFixture({ session_id: candidateId, owner_id: userId });
+    candidate.agent_runtime.auto_continue = true;
+    candidate.agent_runtime.workflow_status = "running";
+    candidate.agent_runtime.last_transition_at = "2020-01-01T00:00:00.000Z";
+    await postgresRuntimeRepository.saveSession(candidate);
+
+    const fillerIds = Array.from({ length: 105 }, () => `session-pg-filler-${randomUUID()}`);
+    await query(
+      `INSERT INTO shopping_sessions(id, user_id, state)
+       SELECT filler_id, $1, jsonb_set($2::jsonb, '{session_id}', to_jsonb(filler_id))
+       FROM unnest($3::text[]) AS filler_id`,
+      [
+        userId,
+        JSON.stringify(createSessionFixture({ session_id: "session-pg-filler-template", owner_id: userId })),
+        fillerIds
+      ]
+    );
+
+    const candidates = await postgresRuntimeRepository.listWorkflowRecoveryCandidates(userId, 1);
+    expect(candidates.map((state) => state.session_id)).toEqual([candidateId]);
   });
 });

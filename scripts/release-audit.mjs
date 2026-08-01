@@ -71,6 +71,15 @@ const checks = [
     "设置 AUTH_REQUIRED=true"
   ),
   check(
+    "workflow_recovery",
+    "服务端工作流恢复",
+    (process.env.SCENECART_CRON_SECRET?.trim().length ?? 0) >= 32,
+    (process.env.SCENECART_CRON_SECRET?.trim().length ?? 0) >= 32
+      ? "恢复扫描密钥已配置"
+      : "未配置至少 32 字符的恢复扫描密钥",
+    "配置 SCENECART_CRON_SECRET，并启动 worker:recovery 或云端 Cron"
+  ),
+  check(
     "secure_cookie",
     "安全会话 Cookie",
     process.env.AUTH_COOKIE_SECURE === "true",

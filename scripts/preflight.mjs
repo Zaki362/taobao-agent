@@ -151,7 +151,7 @@ function assertPackageScripts() {
   }
 
   const scripts = pkg.scripts ?? {};
-  const required = ["dev", "build", "typecheck", "preflight", "release:audit", "check", "db:migrate", "db:check", "test:unit", "test:integration", "test:e2e", "eval:agent", "worker:local", "executor:doctor"];
+  const required = ["dev", "build", "typecheck", "preflight", "release:audit", "check", "db:migrate", "db:check", "test:unit", "test:integration", "test:e2e", "eval:agent", "worker:local", "worker:recovery", "executor:doctor"];
 
   for (const scriptName of required) {
     if (typeof scripts[scriptName] !== "string") {

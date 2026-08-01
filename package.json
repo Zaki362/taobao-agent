@@ -23,6 +23,7 @@
     "bridge:taobao": "node scripts/taobao-native-bridge.mjs",
     "worker:codex": "node scripts/codex-hosted-worker.mjs",
     "worker:local": "node scripts/local-executor.mjs",
+    "worker:recovery": "node scripts/workflow-recovery-worker.mjs",
     "executor:doctor": "node scripts/executor-doctor.mjs"
   },
   "dependencies": {

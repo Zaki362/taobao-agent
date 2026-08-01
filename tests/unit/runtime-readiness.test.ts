@@ -28,6 +28,7 @@ describe("production readiness", () => {
     expect(checks.get("demo_cart_fallback")?.status).toBe("fail");
     expect(checks.get("runtime_store")?.status).toBe("fail");
     expect(checks.get("authentication")?.status).toBe("fail");
+    expect(checks.get("workflow_recovery")?.status).toBe("fail");
     expect(checks.get("executor_backend")?.status).toBe("pass");
     expect(checks.get("executor_online")?.status).toBe("warn");
   });

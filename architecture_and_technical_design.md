@@ -813,7 +813,7 @@ DeepSeek 目前承担六类结构化任务：
 
 在此基础上，`lib/agent/decision-engine.ts` 与 `lib/agent/workflow-runner.ts` 把搜索阶段升级为服务端 Agent 决策循环。前端确认规划后调用一次 `/api/agent/run`；后续每次本地执行器回填，resolve API 都会触发工作流继续推进。决策引擎会综合 `execution_strategy`、`agent_directives`、模块候选、`module_reviews`、`module_search_traces`、市场反馈与工具任务状态，输出 `search_module`、`retry_module`、`skip_module`、`wait_for_tools` 或 `complete_workflow`。
 
-`workflow-runner` 把 `workflow_run_id`、`workflow_status`、`current_module_id`、`auto_continue`、`continuation_count` 和状态说明写入 Session。每轮最多排队一个外部工具任务；成功回填后继续下一模块，终态失败则形成失败轨迹并容错跳过，用户取消则暂停整轮自动推进。任务幂等键按会话、模块、搜索词和本轮运行 ID 构造，重复完成回执不会二次续跑。`workflow-recovery` 会在 Worker 空闲领取时恢复已经持久化但尚未写入 Session 的结果，再补排后续模块，不重新执行淘宝动作。浏览器只通过 SSE 和恢复轮询观察进度，并保留“查看推荐结果”的用户确认门槛。
+`workflow-runner` 把 `workflow_run_id`、`workflow_status`、`current_module_id`、`auto_continue`、`continuation_count` 和状态说明写入 Session。每轮最多排队一个外部工具任务；成功回填后继续下一模块，终态失败则形成失败轨迹并容错跳过，用户取消则暂停整轮自动推进。任务幂等键按会话、模块、搜索词和本轮运行 ID 构造，重复完成回执不会二次续跑。`workflow-recovery` 可由 Worker 空闲轮询、独立恢复进程或云端 Cron 触发；Repository 直接筛选无活跃工具任务或关联 Job 已终态的候选，按旧会话优先恢复，并隔离单个 Session 的恢复失败。它只重放已经持久化但尚未续跑的结果，再补排后续模块，不重新执行淘宝动作。浏览器只通过 SSE 和恢复轮询观察进度，并保留“查看推荐结果”的用户确认门槛。
 
 在 PostgreSQL 模式下，`withWorkflowSessionLock` 使用 `pg_try_advisory_xact_lock` 对同一 Session 的一次推进加互斥；Executor 结果回填使用有超时的 blocking advisory lock，保证重复完成、失败和取消回执串行写入。数据库层通过 `AsyncLocalStorage` 将锁内所有 repository 查询绑定到同一个 `PoolClient`，因此状态读取、决策记录、任务幂等创建、回填和事件写入随事务一起提交或回滚。锁不包住淘宝工具执行；平衡/探索档位下只可能包含一次上限 8 秒的 DeepSeek 下一动作判断，避免数据库连接被桌面自动化长期占用。
 
@@ -1503,9 +1503,9 @@ executor 不只负责转发工具调用，也负责把 adapter 输出归一化�
 
 场景配置层已经开始建立，但前端与搜索层还未完全切换到配置驱动。
 
-### 10.3 工作流恢复仍是 Worker 拉动式
+### 10.3 工作流恢复调度仍需部署平台托管
 
-跨实例推进已经由 PostgreSQL advisory lock 保护，但进程中断补偿目前由本地 Worker 下一次空闲领取触发。如果某个账号长时间没有执行器在线，恢复会话会停留在等待状态。更完整的云端部署可增加周期性 recovery scheduler，并对长时间未恢复的会话发送用户通知。
+跨实例推进已经由 PostgreSQL advisory lock 保护，服务端也提供恢复扫描器、独立 Worker 与受保护的 Cron API。剩余边界是云端平台必须实际配置定时触发与告警；代码无法自行保证外部调度器持续运行。后续应为长时间未恢复会话增加主动用户通知和调度器心跳监控。
 
 ### 10.4 前端大组件仍然偏重
 
@@ -1528,7 +1528,7 @@ executor 不只负责转发工具调用，也负责把 adapter 输出归一化�
 1. 完成 scenario config 全链路接入
 2. 统一执行策略，收敛主工具通道
 3. 增加真正稳定的商品详情 / SKU / 购物车能力
-4. 增加独立的定时恢复扫描器与用户通知，不再只依赖 Worker 空闲轮询
+4. 为恢复调度增加心跳监控与用户通知，证明外部 Cron 持续运行
 5. 拆分 dashboard 的页面级状态
 6. 增加真实设备验收、故障注入和长时间运行测试
 
@@ -1557,9 +1557,13 @@ executor 不只负责转发工具调用，也负责把 adapter 输出归一化�
 - `POST /api/scene/refine`
 - `POST /api/modules/search`
 - `POST /api/cart/add`
+- `POST /api/agent/run`
 - `POST /api/mcp/run`
 - `GET /api/session/state`
 - `GET /api/mcp/status`
+- `GET /api/runtime/events/stream`
+- `GET /api/runtime/metrics`
+- `GET|POST /api/internal/workflow-recovery`
 
 #### Agent 层
 
@@ -1570,6 +1574,8 @@ executor 不只负责转发工具调用，也负责把 adapter 输出归一化�
 - `product-matcher`
 - `candidate-ranker`
 - `candidate-reviewer`
+- `workflow-runner`
+- `workflow-recovery`
 - `cart`
 
 #### 配置 / 模板层
@@ -1589,11 +1595,14 @@ executor 不只负责转发工具调用，也负责把 adapter 输出归一化�
 - MCP executor
 - MCP tool schema / risk policy
 - Qoder / taobao skill
+- local executor / durable job queue
 - mock MCP adapter
 
 #### 状态层
 
 - Session Store
+- PostgreSQL Runtime Repository
+- Agent Jobs / Execution Events
 - SessionState
 
 ### 11.2 必须画出的连接关系
@@ -1610,6 +1619,9 @@ executor 不只负责转发工具调用，也负责把 adapter 输出归一化�
 10. 推荐页 / 执行台 -> 同一个 SessionState
 11. product-matcher -> candidate-ranker -> candidate-reviewer -> module_reviews
 12. 推荐页 -> keyword_override -> `/api/modules/search` -> product-matcher
+13. workflow-runner -> Agent Job Queue -> local executor -> Qoder / taobao skill
+14. local executor -> result callback -> Session advisory lock -> workflow-runner
+15. recovery worker / cloud Cron -> internal recovery API -> workflow-recovery
 
 ### 11.3 建议在图中强调的关键数据对象
 
@@ -1631,6 +1643,9 @@ executor 不只负责转发工具调用，也负责把 adapter 输出归一化�
 - “搜索后 DeepSeek/规则复盘候选池”
 - “Agent 建议补搜，但由用户确认触发”
 - “工具调用由后端规则编排”
+- “浏览器只观察，服务端工作流自动续跑”
+- “PostgreSQL advisory lock 防止跨实例重复推进与旧快照覆盖”
+- “恢复扫描只重放持久结果，不重复执行淘宝动作”
 - “高风险工具动作服务端确认”
 - “搜索尽量真实执行”
 - “正式模式禁止演示加购伪成功”

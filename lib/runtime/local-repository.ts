@@ -51,6 +51,30 @@ function canAccessSession(session: SessionState, userId?: string) {
   return !session.owner_id || session.owner_id === userId;
 }
 
+function isActiveWorkflow(session: SessionState) {
+  return session.agent_runtime.auto_continue &&
+    (session.agent_runtime.workflow_status === "running" ||
+      session.agent_runtime.workflow_status === "waiting_for_tools");
+}
+
+function workflowTransitionTime(session: SessionState) {
+  return session.agent_runtime.last_transition_at ?? session.agent_runtime.initialized_at;
+}
+
+function isWorkflowRecoveryCandidate(session: SessionState) {
+  if (!isActiveWorkflow(session)) return false;
+
+  const activeTask = session.hosted_tasks.find((task) =>
+    task.task_type === "module_search" &&
+    (task.status === "pending" || task.status === "running")
+  );
+  if (!activeTask) return true;
+  if (!activeTask.runtime_job_id) return false;
+
+  const job = runtimeState().jobs.get(activeTask.runtime_job_id);
+  return job?.status === "completed" || job?.status === "failed" || job?.status === "cancelled";
+}
+
 export const localRuntimeRepository: RuntimeRepository = {
   async getSession(sessionId, userId) {
     const session = getSession(sessionId);
@@ -63,6 +87,14 @@ export const localRuntimeRepository: RuntimeRepository = {
 
   async listSessions(userId) {
     return listSessions().filter((session) => canAccessSession(session, userId));
+  },
+
+  async listWorkflowRecoveryCandidates(userId, limit = 25) {
+    const boundedLimit = Math.min(Math.max(limit, 1), 100);
+    return listSessions()
+      .filter((session) => canAccessSession(session, userId) && isWorkflowRecoveryCandidate(session))
+      .sort((a, b) => workflowTransitionTime(a).localeCompare(workflowTransitionTime(b)))
+      .slice(0, boundedLimit);
   },
 
   async createUser(user) {

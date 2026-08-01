@@ -129,6 +129,40 @@ export const postgresRuntimeRepository: RuntimeRepository = {
     return result.rows.map((row) => normalizeSessionState(row.state));
   },
 
+  async listWorkflowRecoveryCandidates(userId, limit = 25) {
+    const boundedLimit = Math.min(Math.max(limit, 1), 100);
+    const values: unknown[] = [];
+    const ownerClause = userId ? `AND sessions.user_id = $${values.push(userId)}` : "";
+    const limitParameter = `$${values.push(boundedLimit)}`;
+    const result = await query<{ state: SessionState }>(
+      `SELECT sessions.state
+       FROM shopping_sessions AS sessions
+       WHERE sessions.state #>> '{agent_runtime,auto_continue}' = 'true'
+         AND sessions.state #>> '{agent_runtime,workflow_status}' IN ('running', 'waiting_for_tools')
+         ${ownerClause}
+         AND (
+           NOT EXISTS (
+             SELECT 1
+             FROM jsonb_array_elements(COALESCE(sessions.state->'hosted_tasks', '[]'::jsonb)) AS task
+             WHERE task->>'task_type' = 'module_search'
+               AND task->>'status' IN ('pending', 'running')
+           )
+           OR EXISTS (
+             SELECT 1
+             FROM jsonb_array_elements(COALESCE(sessions.state->'hosted_tasks', '[]'::jsonb)) AS task
+             JOIN agent_jobs AS jobs ON jobs.id::text = task->>'runtime_job_id'
+             WHERE task->>'task_type' = 'module_search'
+               AND task->>'status' IN ('pending', 'running')
+               AND jobs.status IN ('completed', 'failed', 'cancelled')
+           )
+         )
+       ORDER BY sessions.updated_at ASC
+       LIMIT ${limitParameter}`,
+      values
+    );
+    return result.rows.map((row) => normalizeSessionState(row.state));
+  },
+
   async createUser(user) {
     const result = await query(
       `INSERT INTO app_users(id, email, password_hash, created_at, updated_at)

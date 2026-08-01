@@ -16,6 +16,7 @@ services:
 
   app:
     build: .
+    image: scenecart-ai:local
     restart: unless-stopped
     depends_on:
       postgres:
@@ -35,12 +36,25 @@ services:
       DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
       DEEPSEEK_CHAT_MODEL: ${DEEPSEEK_CHAT_MODEL:-deepseek-chat}
       DEEPSEEK_REASONER_MODEL: ${DEEPSEEK_REASONER_MODEL:-deepseek-reasoner}
+      SCENECART_CRON_SECRET: ${SCENECART_CRON_SECRET:?SCENECART_CRON_SECRET is required}
     command: ["sh", "-c", "node scripts/db-migrate.mjs && node scripts/db-check.mjs && node server.js"]
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/api/runtime/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
       interval: 10s
       timeout: 5s
       retries: 12
+
+  recovery:
+    image: scenecart-ai:local
+    restart: unless-stopped
+    depends_on:
+      app:
+        condition: service_healthy
+    environment:
+      SCENECART_API_URL: http://app:3000
+      SCENECART_CRON_SECRET: ${SCENECART_CRON_SECRET:?SCENECART_CRON_SECRET is required}
+      SCENECART_RECOVERY_INTERVAL_MS: ${SCENECART_RECOVERY_INTERVAL_MS:-30000}
+    command: ["node", "scripts/workflow-recovery-worker.mjs"]
 
 volumes:
   scenecart_postgres:
