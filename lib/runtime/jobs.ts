@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { createOpaqueToken, hashOpaqueToken } from "@/lib/auth/crypto";
 import { getRuntimeRepository } from "@/lib/runtime";
+import { withWorkflowSessionTransaction } from "@/lib/runtime/database";
 import type { ExecutorDevice, RuntimeJobType } from "@/lib/runtime/types";
 import type { HostedExecutionTask, SessionState } from "@/lib/session/types";
 import {
@@ -320,7 +321,11 @@ function markRuntimeSearchFailure(state: SessionState, job: { payload: Record<st
   };
 }
 
-export async function applyCompletedRuntimeJob(jobId: string, device: ExecutorDevice, result: Record<string, unknown>) {
+async function applyCompletedRuntimeJobLocked(
+  jobId: string,
+  device: ExecutorDevice,
+  result: Record<string, unknown>
+) {
   const repository = getRuntimeRepository();
   const pendingJob = await repository.getJob(jobId);
   if (!pendingJob) throw new Error("job not found");
@@ -380,7 +385,16 @@ export async function applyCompletedRuntimeJob(jobId: string, device: ExecutorDe
   return completion;
 }
 
-export async function reconcileTerminalRuntimeJob(jobId: string) {
+export async function applyCompletedRuntimeJob(jobId: string, device: ExecutorDevice, result: Record<string, unknown>) {
+  const job = await getRuntimeRepository().getJob(jobId);
+  if (!job) throw new Error("job not found");
+  return withWorkflowSessionTransaction(
+    job.session_id,
+    () => applyCompletedRuntimeJobLocked(jobId, device, result)
+  );
+}
+
+async function reconcileTerminalRuntimeJobLocked(jobId: string) {
   const repository = getRuntimeRepository();
   const job = await repository.getJob(jobId);
   if (!job || (job.status !== "failed" && job.status !== "cancelled")) return false;
@@ -425,13 +439,32 @@ export async function reconcileTerminalRuntimeJob(jobId: string) {
   return true;
 }
 
-export async function applyFailedRuntimeJob(
+export async function reconcileTerminalRuntimeJob(jobId: string) {
+  const job = await getRuntimeRepository().getJob(jobId);
+  if (!job) return false;
+  return withWorkflowSessionTransaction(
+    job.session_id,
+    () => reconcileTerminalRuntimeJobLocked(jobId)
+  );
+}
+
+async function applyFailedRuntimeJobLocked(
   jobId: string,
   device: ExecutorDevice,
   errorMessage: string,
   options: { retryable?: boolean } = {}
 ) {
   const repository = getRuntimeRepository();
+  const existing = await repository.getJob(jobId);
+  if (!existing) throw new Error("job not found");
+  if (
+    existing.status === "completed" ||
+    existing.status === "failed" ||
+    existing.status === "cancelled" ||
+    (existing.status === "pending" && existing.attempts > 0)
+  ) {
+    return existing;
+  }
   const job = await repository.failJob(
     jobId,
     device.id,
@@ -474,7 +507,21 @@ export async function applyFailedRuntimeJob(
   return job;
 }
 
-export async function cancelPendingRuntimeJob(jobId: string, userId?: string) {
+export async function applyFailedRuntimeJob(
+  jobId: string,
+  device: ExecutorDevice,
+  errorMessage: string,
+  options: { retryable?: boolean } = {}
+) {
+  const job = await getRuntimeRepository().getJob(jobId);
+  if (!job) throw new Error("job not found");
+  return withWorkflowSessionTransaction(
+    job.session_id,
+    () => applyFailedRuntimeJobLocked(jobId, device, errorMessage, options)
+  );
+}
+
+async function cancelPendingRuntimeJobLocked(jobId: string, userId?: string) {
   const repository = getRuntimeRepository();
   const job = await repository.cancelJob(jobId, userId);
   if (!job) return null;
@@ -505,4 +552,13 @@ export async function cancelPendingRuntimeJob(jobId: string, userId?: string) {
     payload: { job_type: job.job_type, reason: "cancelled_before_claim" }
   });
   return job;
+}
+
+export async function cancelPendingRuntimeJob(jobId: string, userId?: string) {
+  const job = await getRuntimeRepository().getJob(jobId);
+  if (!job) return null;
+  return withWorkflowSessionTransaction(
+    job.session_id,
+    () => cancelPendingRuntimeJobLocked(jobId, userId)
+  );
 }

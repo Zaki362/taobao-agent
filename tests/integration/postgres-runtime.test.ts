@@ -1,6 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { closeDatabasePoolForTests, query } from "@/lib/runtime/database";
+import { createAgentDecision } from "@/lib/agent/decision-engine";
+import { advanceAgentWorkflow } from "@/lib/agent/workflow-runner";
+import { closeDatabasePoolForTests, query, withWorkflowSessionLock } from "@/lib/runtime/database";
+import { applyCompletedRuntimeJob, enqueueModuleSearchJob } from "@/lib/runtime/jobs";
 import { postgresRuntimeRepository } from "@/lib/runtime/postgres-repository";
 import type { ExecutorDevice, RuntimeUser } from "@/lib/runtime/types";
 import { createSessionFixture } from "@/tests/fixtures/session";
@@ -166,5 +169,115 @@ describeWithDatabase("PostgreSQL production runtime contract", () => {
     expect(retried.status).toBe("pending");
     expect(retried.attempts).toBe(0);
     expect((await postgresRuntimeRepository.claimJob(device, 30_000))?.id).toBe(terminalJobId);
+  });
+
+  it("allows only one process to advance a workflow session at a time", async () => {
+    let enterFirst!: () => void;
+    let releaseFirst!: () => void;
+    const firstEntered = new Promise<void>((resolve) => {
+      enterFirst = resolve;
+    });
+    const firstRelease = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+
+    const first = withWorkflowSessionLock(sessionId, async () => {
+      await query("SELECT 1");
+      enterFirst();
+      await firstRelease;
+      return "first";
+    });
+    await firstEntered;
+
+    const competing = await withWorkflowSessionLock(sessionId, async () => "second");
+    expect(competing).toEqual({ acquired: false });
+
+    releaseFirst();
+    await expect(first).resolves.toEqual({ acquired: true, value: "first" });
+    await expect(withWorkflowSessionLock(sessionId, async () => "after-release"))
+      .resolves.toEqual({ acquired: true, value: "after-release" });
+  });
+
+  it("rolls back a broken transition and persists a terminal workflow error afterward", async () => {
+    const failingSessionId = `session-pg-workflow-failure-${randomUUID()}`;
+    const state = createSessionFixture({ session_id: failingSessionId, owner_id: userId });
+    state.agent_decisions = [createAgentDecision({
+      action: "search_module",
+      source: "plan_strategy",
+      confidence: "high",
+      reason: "integration test invalid decision",
+      evidence: []
+    })];
+    await postgresRuntimeRepository.saveSession(state);
+
+    await expect(advanceAgentWorkflow(failingSessionId, userId, {
+      start: true,
+      trigger: "user_start"
+    })).rejects.toThrow("Agent 搜索决策缺少 module_id");
+
+    const restored = await postgresRuntimeRepository.getSession(failingSessionId, userId);
+    expect(restored?.agent_runtime.workflow_status).toBe("error");
+    expect(restored?.agent_runtime.auto_continue).toBe(false);
+    expect(restored?.agent_runtime.workflow_message).toContain("缺少 module_id");
+    expect(restored?.agent_runtime.workflow_run_id).toBeUndefined();
+    expect((await postgresRuntimeRepository.listEvents(failingSessionId, 0, userId))
+      .some((event) =>
+        event.event_type === "agent.workflow.updated" &&
+        event.payload.workflow_status === "error"
+      )).toBe(true);
+  });
+
+  it("serializes duplicate executor callbacks without overwriting the Session snapshot", async () => {
+    const replaySessionId = `session-pg-result-replay-${randomUUID()}`;
+    const replayDevice: ExecutorDevice = {
+      ...device,
+      id: randomUUID(),
+      name: "PostgreSQL replay executor",
+      token_hash: `token-${randomUUID()}`
+    };
+    await postgresRuntimeRepository.createDevice(replayDevice);
+
+    const state = createSessionFixture({ session_id: replaySessionId, owner_id: userId });
+    const module = state.shopping_plan.modules[0];
+    const queued = await enqueueModuleSearchJob(state, {
+      moduleId: module.module_id,
+      moduleName: module.module_name,
+      keyword: module.search_keyword ?? module.search_strategy?.primary_keyword ?? module.module_name
+    });
+    await postgresRuntimeRepository.saveSession(state);
+    const claimed = await postgresRuntimeRepository.claimJob(replayDevice, 30_000);
+    expect(claimed?.id).toBe(queued.id);
+
+    const result = {
+      summary: "并发回填测试完成",
+      candidates: [{
+        product_id: "pg-replay-product",
+        title: "PostgreSQL 幂等候选商品",
+        price: 129,
+        source: "淘宝本地执行器测试",
+        shop_name: "并发测试旗舰店",
+        image_url: "https://example.com/product.jpg",
+        detail_url: "https://item.taobao.com/item.htm?id=pg-replay-product",
+        shop_badges: ["旗舰店"],
+        highlights: ["幂等回填"],
+        risk_notes: ["集成测试数据"],
+        fit_reason: "用于验证并发结果不会覆盖 Session",
+        recommendation_type: "稳妥推荐",
+        module_id: module.module_id
+      }]
+    };
+
+    const completions = await Promise.all([
+      applyCompletedRuntimeJob(queued.id, replayDevice, result),
+      applyCompletedRuntimeJob(queued.id, replayDevice, result)
+    ]);
+    const restored = await postgresRuntimeRepository.getSession(replaySessionId, userId);
+
+    expect(completions.filter((item) => item.alreadyCompleted)).toHaveLength(1);
+    expect(restored?.module_candidates[module.module_id]).toHaveLength(1);
+    expect(restored?.hosted_tasks.find((task) => task.task_id === queued.id)?.status).toBe("completed");
+    expect(restored?.tool_logs.filter((log) =>
+      log.tool_name === "local_executor" && log.module_id === module.module_id
+    )).toHaveLength(1);
   });
 });

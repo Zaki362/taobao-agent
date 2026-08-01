@@ -7,6 +7,7 @@ import {
 import { runModuleSearch } from "@/lib/agent/product-matcher";
 import { decideNextAgentActionV2 } from "@/lib/agent/runtime-v2";
 import { getRuntimeRepository } from "@/lib/runtime";
+import { withWorkflowSessionLock } from "@/lib/runtime/database";
 import { loadSession, persistSession } from "@/lib/session/repository";
 import type { AgentDecision, SessionState } from "@/lib/session/types";
 
@@ -110,97 +111,108 @@ async function executeAdvance(
     return { state, outcome: "no_op" };
   }
 
-  try {
-    for (let index = 0; index < MAX_NON_TOOL_TRANSITIONS; index += 1) {
-      const pending = pendingAgentDecision(state);
-      const decision = pending ?? recordAgentDecision(state, await decideNextAgentActionV2(state));
-      state.agent_runtime.continuation_count += 1;
+  for (let index = 0; index < MAX_NON_TOOL_TRANSITIONS; index += 1) {
+    const pending = pendingAgentDecision(state);
+    const decision = pending ?? recordAgentDecision(state, await decideNextAgentActionV2(state));
+    state.agent_runtime.continuation_count += 1;
 
-      if (decision.action === "search_module" || decision.action === "retry_module") {
-        if (!decision.module_id) throw new Error("Agent 搜索决策缺少 module_id");
-        await runModuleSearch(state, decision.module_id, {
-          keywordOverride: decision.keyword_override
-        });
-        consumeAgentDecision(state, decision.module_id);
-        const queuedTask = activeModuleTask(state, decision.module_id);
+    if (decision.action === "search_module" || decision.action === "retry_module") {
+      if (!decision.module_id) throw new Error("Agent 搜索决策缺少 module_id");
+      await runModuleSearch(state, decision.module_id, {
+        keywordOverride: decision.keyword_override
+      });
+      consumeAgentDecision(state, decision.module_id);
+      const queuedTask = activeModuleTask(state, decision.module_id);
 
-        if (queuedTask) {
-          transition(state, {
-            status: "waiting_for_tools",
-            moduleId: decision.module_id,
-            message: `已自动排队「${decision.module_name ?? queuedTask.module_name ?? "当前模块"}」，等待本地执行器回填`,
-            autoContinue: true
-          });
-          await persistSession(state);
-          await emitWorkflowEvent(state, options.trigger, "queued", decision);
-          return { state, decision, outcome: "queued" };
-        }
-
-        transition(state, {
-          status: "running",
-          moduleId: decision.module_id,
-          message: `「${decision.module_name ?? "当前模块"}」已同步完成，Agent 正在选择下一步`,
-          autoContinue: true
-        });
-        await persistSession(state);
-        continue;
-      }
-
-      if (decision.action === "skip_module") {
-        transition(state, {
-          status: "running",
-          moduleId: decision.module_id,
-          message: `已跳过「${decision.module_name ?? "当前模块"}」，继续处理后续模块`,
-          autoContinue: true
-        });
-        await persistSession(state);
-        continue;
-      }
-
-      if (decision.action === "wait_for_tools") {
-        const task = activeModuleTask(state);
+      if (queuedTask) {
         transition(state, {
           status: "waiting_for_tools",
-          moduleId: task?.module_id,
-          message: task
-            ? `本地执行器正在处理「${task.module_name ?? "当前模块"}」，完成后服务端会自动继续`
-            : "Agent 正在等待工具状态更新",
+          moduleId: decision.module_id,
+          message: `已自动排队「${decision.module_name ?? queuedTask.module_name ?? "当前模块"}」，等待本地执行器回填`,
           autoContinue: true
         });
         await persistSession(state);
-        await emitWorkflowEvent(state, options.trigger, "waiting", decision);
-        return { state, decision, outcome: "waiting" };
+        await emitWorkflowEvent(state, options.trigger, "queued", decision);
+        return { state, decision, outcome: "queued" };
       }
 
       transition(state, {
-        status: "completed",
-        message: decision.reason || "所有规划模块均已处理完成",
-        autoContinue: false
+        status: "running",
+        moduleId: decision.module_id,
+        message: `「${decision.module_name ?? "当前模块"}」已同步完成，Agent 正在选择下一步`,
+        autoContinue: true
       });
       await persistSession(state);
-      await emitWorkflowEvent(state, options.trigger, "completed", decision);
-      return { state, decision, outcome: "completed" };
+      continue;
+    }
+
+    if (decision.action === "skip_module") {
+      transition(state, {
+        status: "running",
+        moduleId: decision.module_id,
+        message: `已跳过「${decision.module_name ?? "当前模块"}」，继续处理后续模块`,
+        autoContinue: true
+      });
+      await persistSession(state);
+      continue;
+    }
+
+    if (decision.action === "wait_for_tools") {
+      const task = activeModuleTask(state);
+      transition(state, {
+        status: "waiting_for_tools",
+        moduleId: task?.module_id,
+        message: task
+          ? `本地执行器正在处理「${task.module_name ?? "当前模块"}」，完成后服务端会自动继续`
+          : "Agent 正在等待工具状态更新",
+        autoContinue: true
+      });
+      await persistSession(state);
+      await emitWorkflowEvent(state, options.trigger, "waiting", decision);
+      return { state, decision, outcome: "waiting" };
     }
 
     transition(state, {
-      status: "paused",
-      message: "Agent 连续状态转换达到安全上限，已暂停并等待人工继续",
+      status: "completed",
+      message: decision.reason || "所有规划模块均已处理完成",
       autoContinue: false
     });
     await persistSession(state);
-    await emitWorkflowEvent(state, options.trigger, "paused");
-    return { state, outcome: "paused" };
-  } catch (error) {
-    state = await loadSession(sessionId, userId) ?? state;
+    await emitWorkflowEvent(state, options.trigger, "completed", decision);
+    return { state, decision, outcome: "completed" };
+  }
+
+  transition(state, {
+    status: "paused",
+    message: "Agent 连续状态转换达到安全上限，已暂停并等待人工继续",
+    autoContinue: false
+  });
+  await persistSession(state);
+  await emitWorkflowEvent(state, options.trigger, "paused");
+  return { state, outcome: "paused" };
+}
+
+async function persistWorkflowFailure(
+  sessionId: string,
+  userId: string | undefined,
+  trigger: AgentWorkflowTrigger,
+  error: unknown
+) {
+  const locked = await withWorkflowSessionLock(sessionId, async () => {
+    const state = await loadSession(sessionId, userId);
+    if (!state) return;
     transition(state, {
       status: "error",
       message: error instanceof Error ? error.message.slice(0, 300) : "Agent 自动推进失败",
       autoContinue: false
     });
     await persistSession(state);
-    await emitWorkflowEvent(state, options.trigger, "paused").catch(() => undefined);
-    throw error;
-  }
+    await emitWorkflowEvent(state, trigger, "paused").catch(() => undefined);
+  });
+
+  // Another instance already owns the session and is making forward progress.
+  // Its committed transition should win over this stale failure.
+  return locked.acquired;
 }
 
 export async function advanceAgentWorkflow(
@@ -208,16 +220,31 @@ export async function advanceAgentWorkflow(
   userId: string | undefined,
   options: { start?: boolean; trigger: AgentWorkflowTrigger }
 ) {
-  const existing = activeRunners.get(sessionId);
+  const runnerKey = `${userId ?? "anonymous"}:${sessionId}`;
+  const existing = activeRunners.get(runnerKey);
   if (existing) return existing;
 
-  const runner = executeAdvance(sessionId, userId, options);
-  activeRunners.set(sessionId, runner);
+  const runner = withWorkflowSessionLock(
+    sessionId,
+    () => executeAdvance(sessionId, userId, options)
+  ).then(async (lock) => {
+    if (lock.acquired) return lock.value;
+    const state = await loadSession(sessionId, userId);
+    if (!state) throw new Error("session not found");
+    return {
+      state,
+      outcome: "waiting" as const
+    };
+  }).catch(async (error) => {
+    await persistWorkflowFailure(sessionId, userId, options.trigger, error).catch(() => undefined);
+    throw error;
+  });
+  activeRunners.set(runnerKey, runner);
   try {
     return await runner;
   } finally {
-    if (activeRunners.get(sessionId) === runner) {
-      activeRunners.delete(sessionId);
+    if (activeRunners.get(runnerKey) === runner) {
+      activeRunners.delete(runnerKey);
     }
   }
 }

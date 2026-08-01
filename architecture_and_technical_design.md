@@ -32,6 +32,7 @@ Local Executor on user's device
 - 本地执行器使用一次性设备令牌、15 秒心跳、任务租约、最大重试次数和结果账本。
 - 搜索、失败重试、Agent 状态转换和加购结果以执行事件写入，并通过 SSE 自动刷新当前浏览器会话。
 - 用户确认规划后只启动一次服务端工作流；本地执行器每次回填后，服务端自动决定并排队下一模块，浏览器关闭不会中断搜索。
+- PostgreSQL 正式运行时使用按 Session ID 派生的事务级 advisory lock，防止多个服务实例并发推进同一购物工作流。
 - DeepSeek 可以在平衡/探索档位提议下一动作，但只能在动作白名单中选择；后端验证模块、重复任务、置信度和工具预算后才执行。
 - 保守档位、模型失败、低置信度、越界动作或预算耗尽时，确定性策略始终可接管。
 - 旧 Qoder 直连、Codex hosted 与 experimental bridge 仍保留为兼容路径，不再作为正式部署首选。
@@ -814,6 +815,8 @@ DeepSeek 目前承担六类结构化任务：
 
 `workflow-runner` 把 `workflow_run_id`、`workflow_status`、`current_module_id`、`auto_continue`、`continuation_count` 和状态说明写入 Session。每轮最多排队一个外部工具任务；成功回填后继续下一模块，终态失败则形成失败轨迹并容错跳过，用户取消则暂停整轮自动推进。任务幂等键按会话、模块、搜索词和本轮运行 ID 构造，重复完成回执不会二次续跑。`workflow-recovery` 会在 Worker 空闲领取时恢复已经持久化但尚未写入 Session 的结果，再补排后续模块，不重新执行淘宝动作。浏览器只通过 SSE 和恢复轮询观察进度，并保留“查看推荐结果”的用户确认门槛。
 
+在 PostgreSQL 模式下，`withWorkflowSessionLock` 使用 `pg_try_advisory_xact_lock` 对同一 Session 的一次推进加互斥；Executor 结果回填使用有超时的 blocking advisory lock，保证重复完成、失败和取消回执串行写入。数据库层通过 `AsyncLocalStorage` 将锁内所有 repository 查询绑定到同一个 `PoolClient`，因此状态读取、决策记录、任务幂等创建、回填和事件写入随事务一起提交或回滚。锁不包住淘宝工具执行；平衡/探索档位下只可能包含一次上限 8 秒的 DeepSeek 下一动作判断，避免数据库连接被桌面自动化长期占用。
+
 每次动作都会写入 session 的 `agent_decisions`，保存来源、置信度、理由和证据。规划顺序与候选复盘可以来自 DeepSeek，后端负责动作白名单、重复调用抑制、失败跳过和高风险确认，因此模型获得了真实的执行选择空间，但不能越过交易和隐私边界。
 
 模块候选回填后，`lib/agent/market-feedback.ts` 会增加一层跨模块市场反馈。它只使用商品价格摘要，计算 `module_signals`、预算压力、预算余量和最多 15% 的总额守恒调拨建议。`decide_next_action` 会读取这些聚合信号，在平衡/探索档位中决定是否以未尝试过的性价比关键词补搜。该层不会直接修改 `ShoppingPlan`，所有预算调拨都保留为 `market_feedback.reallocation_suggestions` 并要求用户确认，从而把模型自主性用于“如何继续找”，而不是用于静默改变用户约束。
@@ -1500,9 +1503,9 @@ executor 不只负责转发工具调用，也负责把 adapter 输出归一化�
 
 场景配置层已经开始建立，但前端与搜索层还未完全切换到配置驱动。
 
-### 10.3 服务端工作流的跨实例互斥仍可加强
+### 10.3 工作流恢复仍是 Worker 拉动式
 
-当前单进程使用内存锁抑制同一 Session 的并发推进，持久任务幂等键能阻止重复工具任务，但多服务实例同时计算下一动作时还缺少数据库级 Session 版本锁。正式横向扩容应增加 optimistic version 或 PostgreSQL advisory lock。
+跨实例推进已经由 PostgreSQL advisory lock 保护，但进程中断补偿目前由本地 Worker 下一次空闲领取触发。如果某个账号长时间没有执行器在线，恢复会话会停留在等待状态。更完整的云端部署可增加周期性 recovery scheduler，并对长时间未恢复的会话发送用户通知。
 
 ### 10.4 前端大组件仍然偏重
 
@@ -1525,7 +1528,7 @@ executor 不只负责转发工具调用，也负责把 adapter 输出归一化�
 1. 完成 scenario config 全链路接入
 2. 统一执行策略，收敛主工具通道
 3. 增加真正稳定的商品详情 / SKU / 购物车能力
-4. 为服务端工作流增加数据库级并发租约与定时恢复扫描器
+4. 增加独立的定时恢复扫描器与用户通知，不再只依赖 Worker 空闲轮询
 5. 拆分 dashboard 的页面级状态
 6. 增加真实设备验收、故障注入和长时间运行测试
 

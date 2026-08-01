@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { createAgentDecision } from "@/lib/agent/decision-engine";
 import { advanceAgentWorkflow } from "@/lib/agent/workflow-runner";
 import { recoverAgentWorkflowForExecutor } from "@/lib/agent/workflow-recovery";
 import { applyCompletedRuntimeJob, applyFailedRuntimeJob } from "@/lib/runtime/jobs";
@@ -94,6 +95,72 @@ describe("server-managed Agent workflow", () => {
     expect((await localRuntimeRepository.listEvents(sessionId, 0, device.user_id, 100))
       .some((event) => event.event_type === "agent.workflow.updated" && event.payload.outcome === "completed"))
       .toBe(true);
+  });
+
+  it("coalesces concurrent start requests into one queued module", async () => {
+    const sessionId = `session-workflow-concurrent-${Date.now()}`;
+    sessionFiles.add(sessionId);
+    const state = createSessionFixture({ session_id: sessionId });
+    await localRuntimeRepository.saveSession(state);
+
+    const [first, second] = await Promise.all([
+      advanceAgentWorkflow(sessionId, device.user_id, { start: true, trigger: "user_start" }),
+      advanceAgentWorkflow(sessionId, device.user_id, { start: true, trigger: "user_start" })
+    ]);
+    const restored = await localRuntimeRepository.getSession(sessionId, device.user_id);
+    const activeTasks = restored?.hosted_tasks.filter(
+      (task) => task.task_type === "module_search" && (task.status === "pending" || task.status === "running")
+    ) ?? [];
+
+    expect(first.outcome).toBe("queued");
+    expect(second.outcome).toBe("queued");
+    expect(first.state.agent_runtime.workflow_run_id).toBe(second.state.agent_runtime.workflow_run_id);
+    expect(activeTasks).toHaveLength(1);
+    expect(await localRuntimeRepository.claimJob(device, 30_000)).not.toBeNull();
+    expect(await localRuntimeRepository.claimJob(device, 30_000)).toBeNull();
+  });
+
+  it("does not share an active workflow promise across user identities", async () => {
+    const sessionId = `session-workflow-owner-${Date.now()}`;
+    sessionFiles.add(sessionId);
+    await localRuntimeRepository.saveSession(createSessionFixture({ session_id: sessionId }));
+
+    const ownerAdvance = advanceAgentWorkflow(sessionId, device.user_id, {
+      start: true,
+      trigger: "user_start"
+    });
+    const foreignAdvance = advanceAgentWorkflow(sessionId, "different-user", {
+      start: true,
+      trigger: "user_start"
+    });
+    const foreignExpectation = expect(foreignAdvance).rejects.toThrow("session not found");
+
+    await expect(ownerAdvance).resolves.toMatchObject({ outcome: "queued" });
+    await foreignExpectation;
+  });
+
+  it("persists an observable error when an Agent transition is invalid", async () => {
+    const sessionId = `session-workflow-error-${Date.now()}`;
+    sessionFiles.add(sessionId);
+    const state = createSessionFixture({ session_id: sessionId });
+    state.agent_decisions = [createAgentDecision({
+      action: "search_module",
+      source: "plan_strategy",
+      confidence: "high",
+      reason: "unit test invalid decision",
+      evidence: []
+    })];
+    await localRuntimeRepository.saveSession(state);
+
+    await expect(advanceAgentWorkflow(sessionId, device.user_id, {
+      start: true,
+      trigger: "user_start"
+    })).rejects.toThrow("Agent 搜索决策缺少 module_id");
+
+    const restored = await localRuntimeRepository.getSession(sessionId, device.user_id);
+    expect(restored?.agent_runtime.workflow_status).toBe("error");
+    expect(restored?.agent_runtime.auto_continue).toBe(false);
+    expect(restored?.agent_runtime.workflow_message).toContain("缺少 module_id");
   });
 
   it("skips a terminal failed module and automatically queues the next module", async () => {
