@@ -101,6 +101,13 @@ const checks = [
     "设置 TAOBAO_EXECUTION_BACKEND=local_executor"
   ),
   check(
+    "legacy_hosted_worker",
+    "关闭旧宿主执行通道",
+    !configured(process.env.HOSTED_WORKER_TOKEN),
+    !configured(process.env.HOSTED_WORKER_TOKEN) ? "未配置旧 hosted Worker Token" : "仍配置 HOSTED_WORKER_TOKEN",
+    "删除 HOSTED_WORKER_TOKEN，并停止 worker:codex"
+  ),
+  check(
     "deepseek",
     "DeepSeek 模型",
     configured(process.env.DEEPSEEK_API_KEY) && process.env.DEEPSEEK_DISABLED !== "true",

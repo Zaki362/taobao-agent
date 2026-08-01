@@ -35,7 +35,7 @@ Local Executor on user's device
 - PostgreSQL 正式运行时使用按 Session ID 派生的事务级 advisory lock，防止多个服务实例并发推进同一购物工作流。
 - DeepSeek 可以在平衡/探索档位提议下一动作，但只能在动作白名单中选择；后端验证模块、重复任务、置信度和工具预算后才执行。
 - 保守档位、模型失败、低置信度、越界动作或预算耗尽时，确定性策略始终可接管。
-- 旧 Qoder 直连、Codex hosted 与 experimental bridge 仍保留为兼容路径，不再作为正式部署首选。
+- 旧 Qoder 直连、Codex hosted 与 experimental bridge 仅保留为开发兼容路径；production 强制使用 `local_executor`，并以 `410 legacy_hosted_disabled` 关闭旧 hosted Worker API。
 
 当前生产边界：服务端运行时已具备正式架构，但真实淘宝能力仍依赖用户本机淘宝桌面版、Qoder CLI、淘宝 skill、登录态与淘宝侧开放权限；系统不承诺绕过这些外部限制，也不会自动下单或支付。
 
@@ -1512,15 +1512,9 @@ executor 不只负责转发工具调用，也负责把 adapter 输出归一化�
 
 `dashboard.tsx` 承担了过多页面状态和渲染职责，未来应继续拆分。
 
-### 10.5 执行方案并存导致复杂度高
+### 10.5 兼容执行代码仍增加维护复杂度
 
-当前同时存在：
-
-- qoder_cli
-- hosted
-- mock
-
-未来需要明确主路径。
+正式主路径已经收敛为 `local_executor + durable job queue + device token`。主页面只在显式 `codex_hosted` 开发模式下读取旧 Worker 状态，production 会拒绝 legacy hosted API；`qoder_cli`、hosted、experimental bridge 和 mock adapter 仍作为迁移、开发与测试代码存在。后续在真实设备验收稳定后，应按版本计划删除不再需要的旧 provider，而不是让它们重新进入正式运行时。
 
 ### 10.6 下一步理想演进方向
 

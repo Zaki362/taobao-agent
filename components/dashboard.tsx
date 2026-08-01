@@ -133,12 +133,20 @@ export function Dashboard() {
   }
 
   async function refreshHostedInstruction(sessionId: string) {
+    if (!isHostedMode(mcpStatus)) {
+      setHostedInstruction("");
+      return { task: null, instruction: null } satisfies HostedTaskInstruction;
+    }
     const data = await jsonFetch<HostedTaskInstruction>(`/api/hosted/tasks/next?session_id=${sessionId}`);
     setHostedInstruction(data.instruction ?? "");
     return data;
   }
 
   async function refreshWorkerStatus() {
+    if (!isHostedMode(mcpStatus)) {
+      setWorkerStatus(null);
+      return null;
+    }
     const data = await jsonFetch<HostedWorkerStatus>("/api/hosted/worker-status");
     setWorkerStatus(data);
     return data;
@@ -175,9 +183,9 @@ export function Dashboard() {
       setHostedInstruction("");
     } catch {
       setMcpStatus({
-        mode: "codex_hosted",
+        mode: "local_executor",
         available: false,
-        message: "Codex 宿主状态检查失败，请刷新页面后重试。",
+        message: "本地执行器状态检查失败，请刷新页面后重试。",
         permissions_scope: ["淘宝搜索", "详情提取", "加入购物车需显式确认"]
       });
     }
@@ -205,7 +213,6 @@ export function Dashboard() {
     }
 
     refreshMcpStatus().catch(() => undefined);
-    refreshWorkerStatus().catch(() => undefined);
     setResumeSnapshot(snapshot);
   }, []);
 
@@ -353,13 +360,26 @@ export function Dashboard() {
   }
 
   useEffect(() => {
+    if (!isHostedMode(mcpStatus)) {
+      setWorkerStatus(null);
+      return;
+    }
+
     refreshWorkerStatus().catch(() => undefined);
     const timer = window.setInterval(() => {
       refreshWorkerStatus().catch(() => undefined);
     }, 5000);
 
     return () => window.clearInterval(timer);
-  }, []);
+  }, [mcpStatus?.mode]);
+
+  useEffect(() => {
+    if (!session || !isHostedMode(mcpStatus)) {
+      setHostedInstruction("");
+      return;
+    }
+    refreshHostedInstruction(session.session_id).catch(() => undefined);
+  }, [mcpStatus?.mode, session?.session_id]);
 
   useEffect(() => {
     if (!session || pendingHostedTasks.length === 0) {

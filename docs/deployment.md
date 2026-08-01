@@ -52,6 +52,8 @@ SCENECART_RECOVERY_STALE_MS=180000
 
 正式模式也会阻断旧的 `qoder_cli`、`codex_hosted` 与 `experimental_local` 直连路径。误配置时 effective backend 会安全收敛为 `local_executor`，但 readiness 仍保持失败，直到部署环境显式配置正确。
 
+正式环境不要配置 `HOSTED_WORKER_TOKEN`，也不要运行 `npm run worker:codex`。production 会直接拒绝 `/api/hosted/tasks*` 旧 Worker 协议；浏览器主流程也不会轮询旧宿主状态。`/hosted` 页面仍是当前会话、任务、模型和执行器的运维控制台，并不代表继续使用 Codex hosted 执行淘宝任务。
+
 ## 回滚原则
 
 - 应用回滚使用上一版镜像，不修改已经执行的 migration 文件。

@@ -179,6 +179,16 @@ export async function inspectRuntimeReadiness(userId?: string) {
     "正式环境设置 TAOBAO_EXECUTION_BACKEND=local_executor"
   ));
   checks.push(check(
+    "legacy_hosted_worker",
+    "旧宿主执行通道",
+    !configured(process.env.HOSTED_WORKER_TOKEN) ? "pass" : "fail",
+    true,
+    !configured(process.env.HOSTED_WORKER_TOKEN)
+      ? "未配置旧 Codex hosted Worker Token，正式任务只走设备协议"
+      : "仍配置 HOSTED_WORKER_TOKEN；production 虽会拒绝访问，但应移除旧令牌",
+    "从正式环境删除 HOSTED_WORKER_TOKEN，并停止 worker:codex"
+  ));
+  checks.push(check(
     "legacy_mock_mode",
     "旧 Mock 配置",
     process.env.TAOBAO_MCP_MODE === "mock" ? "fail" : "pass",

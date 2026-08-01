@@ -211,6 +211,7 @@ function assertRequiredFiles() {
     "lib/agent/candidate-ranker.ts",
     "lib/agent/candidate-reviewer.ts",
     "lib/api/responses.ts",
+    "lib/auth/hosted-worker.ts",
     "lib/llm/deepseek.ts",
     "lib/llm/prompts.ts",
     "lib/llm/validation.ts",
@@ -290,6 +291,7 @@ function assertArchitectureContracts() {
   const modulesSearchRoute = tryReadText("app/api/modules/search/route.ts");
   const agentNextActionRoute = tryReadText("app/api/agent/next-action/route.ts");
   const responses = tryReadText("lib/api/responses.ts");
+  const hostedWorkerAuth = tryReadText("lib/auth/hosted-worker.ts");
   const cart = tryReadText("lib/agent/cart.ts");
   const cartRoute = tryReadText("app/api/cart/add/route.ts");
   const qoder = tryReadText("lib/mcp/qoder.ts");
@@ -315,6 +317,7 @@ function assertArchitectureContracts() {
   const sessionGuards = tryReadText("lib/session/guards.ts");
   const scenarioIndex = tryReadText("lib/scenarios/index.ts");
   const scenarioNormalize = tryReadText("lib/scenarios/normalize.ts");
+  const releaseAudit = tryReadText("scripts/release-audit.mjs");
 
   if (
     !deepseek ||
@@ -341,6 +344,7 @@ function assertArchitectureContracts() {
     !modulesSearchRoute ||
     !agentNextActionRoute ||
     !responses ||
+    !hostedWorkerAuth ||
     !cart ||
     !cartRoute ||
     !qoder ||
@@ -365,12 +369,23 @@ function assertArchitectureContracts() {
     !sessionStore ||
     !sessionGuards ||
     !scenarioIndex ||
-    !scenarioNormalize
+    !scenarioNormalize ||
+    !releaseAudit
   ) {
     return;
   }
 
   const contracts = [
+    {
+      ok:
+        hostedWorkerAuth.includes("assertLegacyHostedWorkerAvailable") &&
+        hostedWorkerAuth.includes("isFormalProductMode()") &&
+        hostedWorkerAuth.includes("legacy_hosted_disabled") &&
+        dashboard.includes("if (!isHostedMode(mcpStatus))") &&
+        releaseAudit.includes('"legacy_hosted_worker"') &&
+        releaseAudit.includes("HOSTED_WORKER_TOKEN"),
+      message: "正式 local_executor 路径必须停止轮询旧宿主状态，并在 production 关闭 legacy hosted Worker 通道"
+    },
     {
       ok:
         types.includes("AgentDecision") &&
