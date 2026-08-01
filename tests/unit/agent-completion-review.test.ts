@@ -54,6 +54,12 @@ describe("Agent completion review", () => {
     expect(report.critical_coverage_ratio).toBe(1);
     expect(report.total_candidates).toBe(state.shopping_plan.modules.length * 3);
     expect(report.caveats).toHaveLength(0);
+    expect(report.purchase_bundle).toBeDefined();
+    if (!report.purchase_bundle) throw new Error("completion report must include a purchase bundle");
+    expect(report.purchase_bundle.estimated_total).toBeLessThanOrEqual(state.scene_brief.budget);
+    expect(report.purchase_bundle.critical_selected_module_ids).toHaveLength(
+      report.purchase_bundle.critical_module_ids.length
+    );
   });
 
   it("keeps thin candidate evidence visible as a partial result", () => {
@@ -147,5 +153,16 @@ describe("Agent completion review", () => {
     const normalized = normalizeSessionState(state);
 
     expect(normalized.completion_report).toEqual(state.completion_report);
+  });
+
+  it("drops a persisted completion report when its bundle total is inconsistent", () => {
+    const state = fullyCoveredState();
+    state.completion_report = buildAgentCompletionReport(state);
+    if (!state.completion_report.purchase_bundle) throw new Error("expected purchase bundle");
+    state.completion_report.purchase_bundle.estimated_total += 100;
+
+    const normalized = normalizeSessionState(state);
+
+    expect(normalized.completion_report).toBeUndefined();
   });
 });

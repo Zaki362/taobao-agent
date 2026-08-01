@@ -1,4 +1,4 @@
-import { AgentDecisionProposal, ModuleCandidateReview, PlanningModule, SceneBrief, ShoppingPlan } from "@/lib/session/types";
+import { AgentDecisionProposal, ModuleCandidateReview, PlanningModule, PurchaseBundleProposal, SceneBrief, ShoppingPlan } from "@/lib/session/types";
 
 export interface ValidationResult {
   valid: boolean;
@@ -323,4 +323,40 @@ export function validateCandidateReviewOutput(
   }
 
   return seenIds.size === allowedIds.size;
+}
+
+export function validatePurchaseBundleProposalOutput(
+  value: unknown,
+  candidateIds: string[],
+  maxItems: number
+): value is PurchaseBundleProposal {
+  if (!isRecord(value) || !Array.isArray(value.selected_product_ids)) return false;
+  if (!hasBoundedText(value.summary, 300)) return false;
+  if (!Array.isArray(value.tradeoffs) || value.tradeoffs.length > 4 || !value.tradeoffs.every((item) => hasBoundedText(item, 180))) {
+    return false;
+  }
+
+  const selectedIds = value.selected_product_ids;
+  const allowedIds = new Set(candidateIds);
+  const selectedSet = new Set<string>();
+  if (selectedIds.length === 0 || selectedIds.length > maxItems) return false;
+  for (const item of selectedIds) {
+    if (!hasBoundedText(item, 160)) return false;
+    const productId = String(item).trim();
+    if (!allowedIds.has(productId) || selectedSet.has(productId)) return false;
+    selectedSet.add(productId);
+  }
+
+  if (!Array.isArray(value.reasons) || value.reasons.length !== selectedSet.size) return false;
+  const reasonIds = new Set<string>();
+  for (const item of value.reasons) {
+    if (!isRecord(item) || !hasBoundedText(item.product_id, 160) || !hasBoundedText(item.fit_reason, 180)) {
+      return false;
+    }
+    const productId = String(item.product_id).trim();
+    const reason = String(item.fit_reason).trim();
+    if (!selectedSet.has(productId) || reasonIds.has(productId) || reason.length < 6) return false;
+    reasonIds.add(productId);
+  }
+  return reasonIds.size === selectedSet.size;
 }

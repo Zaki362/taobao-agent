@@ -541,6 +541,42 @@ export function HostedConsole() {
                           </div>
                         </div>
                       ) : null}
+                      {selectedSession.completion_report.purchase_bundle ? (
+                        <div className="rounded-[20px] border border-[#f1d0c1] bg-[#fff9f5] p-4">
+                          <div className="flex flex-wrap items-start justify-between gap-3">
+                            <div>
+                              <p className="text-sm font-medium">预算安全购买组合</p>
+                              <p className="mt-1 text-xs leading-5 text-muted-foreground">
+                                {selectedSession.completion_report.purchase_bundle.summary}
+                              </p>
+                            </div>
+                            <Badge variant="secondary">
+                              {selectedSession.completion_report.purchase_bundle.source === "deepseek" ? "DeepSeek 提案" : "规则兜底"}
+                            </Badge>
+                          </div>
+                          <div className="mt-4 grid gap-3 md:grid-cols-3">
+                            <InfoBlock label="组合估价" value={formatCurrency(selectedSession.completion_report.purchase_bundle.estimated_total)} />
+                            <InfoBlock label="预算余量" value={formatCurrency(selectedSession.completion_report.purchase_bundle.remaining_budget)} />
+                            <InfoBlock
+                              label="必需覆盖"
+                              value={`${selectedSession.completion_report.purchase_bundle.critical_selected_module_ids.length}/${selectedSession.completion_report.purchase_bundle.critical_module_ids.length}`}
+                            />
+                          </div>
+                          <div className="mt-4 grid gap-2 md:grid-cols-2">
+                            {selectedSession.completion_report.purchase_bundle.items.map((item) => (
+                              <div key={item.product_id} className="rounded-[16px] border border-border/70 bg-white p-3 text-xs">
+                                <div className="flex items-center justify-between gap-2 text-muted-foreground">
+                                  <span>{item.module_name}</span>
+                                  <span className="font-semibold text-[#e65320]">{formatCurrency(item.price)}</span>
+                                </div>
+                                <p className="mt-1 line-clamp-2 font-medium leading-5 text-foreground">{item.title}</p>
+                                <p className="mt-1 line-clamp-2 leading-5 text-muted-foreground">{item.reason}</p>
+                              </div>
+                            ))}
+                          </div>
+                          <p className="mt-3 text-xs text-muted-foreground">组合只用于建议与审计，不会绕过用户确认自动加购。</p>
+                        </div>
+                      ) : null}
                     </CardContent>
                   </Card>
                 ) : null}

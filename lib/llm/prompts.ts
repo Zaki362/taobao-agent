@@ -1,4 +1,4 @@
-import { AgentDecisionProposal, ModuleCandidateReview, PlanningModule, ProductCandidate, QuickAction, SceneBrief, SessionState, ShoppingPlan, ShoppingPlanModule } from "@/lib/session/types";
+import { AgentDecisionProposal, AgentPurchaseBundle, ModuleCandidateReview, PlanningModule, ProductCandidate, QuickAction, SceneBrief, SessionState, ShoppingPlan, ShoppingPlanModule } from "@/lib/session/types";
 import { getScenarioConfig } from "@/lib/scenarios";
 
 function dataBoundaryNotice() {
@@ -259,5 +259,50 @@ export function decideNextActionPrompt(
     `Active Tasks: ${JSON.stringify(activeTasks)}`,
     `Recent Decisions: ${JSON.stringify(state.agent_decisions.slice(-4).map((decision) => ({ action: decision.action, module_id: decision.module_id, consumed_at: decision.consumed_at, reason: decision.reason })) )}`,
     `Policy Fallback Reference: ${JSON.stringify(policyFallback)}`
+  ].join("\n");
+}
+
+export function composePurchaseBundlePrompt(
+  state: SessionState,
+  fallback: AgentPurchaseBundle
+) {
+  const modules = state.shopping_plan.modules.map((module) => ({
+    module_id: module.module_id,
+    module_name: module.module_name,
+    optional: Boolean(module.optional),
+    priority: module.priority,
+    budget_allocation: module.budget_allocation,
+    recommendation_strategy: module.recommendation_strategy,
+    candidates: (state.module_candidates[module.module_id] ?? []).map((candidate) => ({
+      product_id: candidate.product_id,
+      title: candidate.title,
+      price: candidate.price,
+      shop_name: candidate.shop_name,
+      shop_badges: candidate.shop_badges,
+      highlights: candidate.highlights,
+      risk_notes: candidate.risk_notes,
+      fit_reason: candidate.fit_reason,
+      recommendation_type: candidate.recommendation_type
+    }))
+  }));
+
+  return [
+    "你是场景化购物 Agent 的最终组合决策器。",
+    "请从已搜索到的候选商品中形成一份预算内购买建议；你只做选择与解释，不调用工具、不加购、不下单。",
+    "硬约束：只能原样使用候选中的 product_id；每个模块最多选择一件；总价不得超过用户总预算；优先覆盖所有非 optional 模块；排除已有物品和不想买的类别。",
+    "如果无法覆盖全部模块，应主动做取舍，并在 tradeoffs 中说明；不得编造价格、规格、评价、销量、店铺资质或商品 ID。",
+    "规则组合只是安全参考，你可以在不降低必需模块覆盖率且不突破预算的前提下，依据用户偏好、风险和跨模块价值选择更合理的组合。",
+    "输出必须是严格 JSON，只包含 selected_product_ids、summary、tradeoffs、reasons。",
+    "selected_product_ids 为商品 ID 数组；summary 为一句组合结论；tradeoffs 为 0-4 条短句；reasons 必须为每个已选商品各返回一项 {product_id, fit_reason}，不得遗漏、重复或新增。",
+    dataBoundaryNotice(),
+    `Scene Brief: ${JSON.stringify(state.scene_brief)}`,
+    `Planning Modules And Candidates: ${JSON.stringify(modules)}`,
+    `Safe Policy Reference: ${JSON.stringify({
+      selected_product_ids: fallback.items.map((item) => item.product_id),
+      estimated_total: fallback.estimated_total,
+      critical_selected_module_ids: fallback.critical_selected_module_ids,
+      summary: fallback.summary,
+      caveats: fallback.caveats
+    })}`
   ].join("\n");
 }

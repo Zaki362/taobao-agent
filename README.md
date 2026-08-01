@@ -17,6 +17,7 @@ SceneCart AI 是一个正在按正式产品架构推进的“场景化购物 Age
 - 搜索后 Agent 复盘：每个模块搜索后会生成 `module_reviews`，并在同一次短超时 DeepSeek 调用中批量生成最多三条、与候选商品一一对应的适配理由；商品 ID 和理由长度经过严格校验，无 key、超时或结构异常时完整保留启发式评估与规则理由，不增加逐商品模型请求
 - Agent 搜索决策轨迹：每个模块搜索会写入 `module_search_traces`，记录首轮词、备用词、补搜原因、每次返回数、候选池复盘和下一步建议，让 AI 的执行判断可解释、可恢复
 - Agent 完成报告：自动搜索结束时基于必需模块覆盖、候选质量、真实价格压力、容错跳过和最终停止决策生成方案级验收结论；推荐页与执行台都能查看为什么停止、当前缺口和下一步，用户还可显式授权补齐空白模块或增量优化候选偏薄模块
+- 预算安全购买组合：搜索完成后，Agent 会在真实候选中给出一套不超过用户总预算、每模块最多一件并优先覆盖必需模块的建议组合；常规组合由 chat 提案，存在预算压力或必需覆盖缺口时可升级 reasoner，后端会拒绝伪造商品、越预算和降低安全覆盖的输出，且绝不会自动加购或下单
 - 服务端 Agent 决策循环：用户确认规划后只需启动一次，后端会消费 AI 规划顺序、执行档位、候选池复盘和工具状态，逐轮决定搜索、补搜、容错跳过、等待工具或结束，并把动作写入 `agent_decisions`
 - 浏览器断线续跑：`workflow-runner` 持久化运行 ID、当前模块、自动续跑开关和状态转换；本地执行器每次回填后由服务端自动排队下一模块，关闭或切换页面不会中断整轮搜索
 - 多实例并发保护：PostgreSQL 正式运行时使用事务级 advisory lock，同一 Session 同一时刻只允许一个 Web 实例计算下一动作、回填工具结果并入队
@@ -125,7 +126,7 @@ SCENECART_CRON_SECRET=
 - `SCENECART_PRODUCT_MODE`：本地开发使用 `development`；正式部署必须设为 `production`，此时系统强制禁止演示加购伪成功。
 - `ALLOW_DEMO_CART_FALLBACK`：只对开发预览模式生效。设为 `false` 可在本地提前验证正式加购失败行为。
 - `DEEPSEEK_DISABLED=true`：仅用于自动化测试或离线诊断，显式禁止读取 `.env.local` 中的真实 Key，保证测试不会产生模型调用和费用。
-- `DEEPSEEK_*_TIMEOUT_MS`：可按解析、规划、调整、方案复核、候选复核、Agent 决策和推荐解释分别设置完整响应超时；计时覆盖响应头和正文读取，失败后使用经过校验的确定性方案继续流程。`DEEPSEEK_AGENT_CHAT_TIMEOUT_MS` 与 `DEEPSEEK_AGENT_REASONER_TIMEOUT_MS` 分别约束常规调度和复杂恢复决策，`DEEPSEEK_REQUEST_TIMEOUT_MS` 可作为其他未单独配置任务的统一覆盖值。
+- `DEEPSEEK_*_TIMEOUT_MS`：可按解析、规划、调整、方案复核、候选复核、Agent 决策、购买组合和推荐解释分别设置完整响应超时；计时覆盖响应头和正文读取，失败后使用经过校验的确定性方案继续流程。`DEEPSEEK_AGENT_CHAT_TIMEOUT_MS` 与 `DEEPSEEK_AGENT_REASONER_TIMEOUT_MS` 分别约束常规调度和复杂恢复决策，`DEEPSEEK_BUNDLE_TIMEOUT_MS` 约束最终预算组合提案，`DEEPSEEK_REQUEST_TIMEOUT_MS` 可作为其他未单独配置任务的统一覆盖值。
 - `TAOBAO_EXECUTION_BACKEND`：正式路径使用 `local_executor`。`qoder_cli`、`codex_hosted`、`experimental_local` 只用于迁移和本地调试。
 - 未配置 `TAOBAO_EXECUTION_BACKEND` 时也默认使用 `local_executor`；安装 Qoder CLI 不会再隐式改变网页后端架构。开发兼容 provider 必须通过环境变量显式启用。
 - 正式产品模式会阻断 `qoder_cli`、`codex_hosted` 和 `experimental_local` 直接执行；即使环境变量误配，实际工具调用也只会进入 `local_executor` 持久任务队列，同时 readiness 会保留并报告原始误配置。
@@ -306,7 +307,7 @@ npm run worker:local
 3. 确认 Scene Brief，可手动调整车型、预算、阶段、偏好、已有物品和排除项。
 4. 查看购物规划，重点观察 AI 规划模式、Agent 方案自检、差异化搜索意图、AI 取舍、预算说明和模块优先级；也可以选择保守 / 平衡 / 探索执行档位。
 5. 确认规划后开始搜索，系统会串行搜索各模块。
-6. 在推荐页查看模块化商品结果，右侧会展示当前模块的 AI 推荐逻辑、搜索决策轨迹、候选池复盘、风险提醒和下一步建议；如果候选偏少，可以按 Agent 建议补搜。
+6. 在推荐页查看模块化商品结果，右侧会展示预算内 Agent 建议购买组合、当前模块的 AI 推荐逻辑、搜索决策轨迹、候选池复盘、风险提醒和下一步建议；如果候选偏少，可以按 Agent 建议补搜。
 7. 使用快捷调整回到规划页重新确认。
 8. 点击加入购物车；若真实加购失败，会进入演示购物车。
 9. 进入下单购买页查看已选商品清单和总价。

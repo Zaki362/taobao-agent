@@ -1,5 +1,6 @@
 import {
   AgentCompletionReport,
+  AgentPurchaseBundle,
   ExecutionMode,
   AgentDecision,
   HostedExecutionTask,
@@ -111,8 +112,79 @@ export function isAgentCompletionReport(value: unknown): value is AgentCompletio
     (value.decision_id === undefined || typeof value.decision_id === "string") &&
     typeof value.stop_reason === "string" &&
     typeof value.summary === "string" &&
+    (value.purchase_bundle === undefined || isAgentPurchaseBundle(value.purchase_bundle)) &&
     typeof value.generated_at === "string"
   );
+}
+
+export function isAgentPurchaseBundle(value: unknown): value is AgentPurchaseBundle {
+  if (!isRecord(value)) return false;
+  const validStatus = value.status === "ready" || value.status === "partial";
+  const validSource = value.source === "deepseek" || value.source === "policy";
+  const moneyFields = [value.total_budget, value.estimated_total, value.remaining_budget];
+  if (!validStatus || !validSource || !moneyFields.every((item) => typeof item === "number" && Number.isFinite(item) && item >= 0)) {
+    return false;
+  }
+  if (Number(value.estimated_total) > Number(value.total_budget) + 0.01) return false;
+  if (Math.abs(Number(value.remaining_budget) - Math.max(0, Number(value.total_budget) - Number(value.estimated_total))) > 0.02) {
+    return false;
+  }
+  const listFields = [
+    value.selected_module_ids,
+    value.omitted_module_ids,
+    value.critical_module_ids,
+    value.critical_selected_module_ids,
+    value.caveats,
+    value.guardrails
+  ];
+  if (!listFields.every(isStringArray) || !Array.isArray(value.items)) return false;
+
+  const selectedModuleIds = value.selected_module_ids as string[];
+  const criticalModuleIds = value.critical_module_ids as string[];
+  const criticalSelectedModuleIds = value.critical_selected_module_ids as string[];
+
+  const moduleIds = new Set<string>();
+  const productIds = new Set<string>();
+  for (const item of value.items) {
+    if (!isRecord(item)) return false;
+    const validRecommendation =
+      item.recommendation_type === "稳妥推荐" ||
+      item.recommendation_type === "性价比推荐" ||
+      item.recommendation_type === "升级推荐";
+    if (
+      typeof item.module_id !== "string" ||
+      typeof item.module_name !== "string" ||
+      typeof item.product_id !== "string" ||
+      typeof item.title !== "string" ||
+      typeof item.price !== "number" ||
+      !Number.isFinite(item.price) ||
+      item.price <= 0 ||
+      !validRecommendation ||
+      typeof item.optional !== "boolean" ||
+      typeof item.reason !== "string" ||
+      moduleIds.has(item.module_id) ||
+      productIds.has(item.product_id)
+    ) {
+      return false;
+    }
+    moduleIds.add(item.module_id);
+    productIds.add(item.product_id);
+  }
+  const selectedIds = new Set(selectedModuleIds);
+  if (selectedIds.size !== selectedModuleIds.length || selectedIds.size !== moduleIds.size) return false;
+  if ([...moduleIds].some((moduleId) => !selectedIds.has(moduleId))) return false;
+  const itemTotal = Math.round((value.items as Array<{ price: number }>).reduce((sum, item) => sum + item.price, 0) * 100) / 100;
+  if (Math.abs(itemTotal - Number(value.estimated_total)) > 0.01) return false;
+  const omittedIds = new Set(value.omitted_module_ids as string[]);
+  if ([...selectedIds].some((moduleId) => omittedIds.has(moduleId))) return false;
+  const criticalIds = new Set(criticalModuleIds);
+  if (
+    new Set(criticalSelectedModuleIds).size !== criticalSelectedModuleIds.length ||
+    criticalSelectedModuleIds.some((moduleId) => !criticalIds.has(moduleId) || !selectedIds.has(moduleId))
+  ) {
+    return false;
+  }
+  return typeof value.summary === "string" && typeof value.generated_at === "string";
 }
 
 function isAgentRuntimeState(value: unknown) {

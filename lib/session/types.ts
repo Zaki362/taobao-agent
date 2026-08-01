@@ -292,6 +292,41 @@ export interface AgentRuntimeState {
 
 export type AgentCompletionStatus = "ready" | "partial" | "needs_attention";
 
+export interface AgentPurchaseBundleItem {
+  module_id: string;
+  module_name: string;
+  product_id: string;
+  title: string;
+  price: number;
+  recommendation_type: RecommendationType;
+  optional: boolean;
+  reason: string;
+}
+
+export interface PurchaseBundleProposal {
+  selected_product_ids: string[];
+  summary: string;
+  tradeoffs: string[];
+  reasons: CandidateFitExplanation[];
+}
+
+export interface AgentPurchaseBundle {
+  status: "ready" | "partial";
+  source: "deepseek" | "policy";
+  total_budget: number;
+  estimated_total: number;
+  remaining_budget: number;
+  selected_module_ids: string[];
+  omitted_module_ids: string[];
+  critical_module_ids: string[];
+  critical_selected_module_ids: string[];
+  items: AgentPurchaseBundleItem[];
+  summary: string;
+  caveats: string[];
+  guardrails: string[];
+  generated_at: string;
+}
+
 export interface AgentCompletionReport {
   status: AgentCompletionStatus;
   source: "deepseek_runtime" | "policy";
@@ -314,6 +349,7 @@ export interface AgentCompletionReport {
   strengths: string[];
   caveats: string[];
   next_steps: string[];
+  purchase_bundle?: AgentPurchaseBundle;
   generated_at: string;
 }
 

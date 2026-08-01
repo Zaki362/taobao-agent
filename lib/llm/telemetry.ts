@@ -5,6 +5,7 @@ export type LlmTaskName =
   | "review_candidates"
   | "review_plan"
   | "decide_next_action"
+  | "compose_purchase_bundle"
   | "explain_product_fit";
 
 interface LlmTaskTelemetry {

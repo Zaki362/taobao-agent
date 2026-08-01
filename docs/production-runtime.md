@@ -166,13 +166,13 @@ pending -> leased -> running -> completed
 
 候选回填采用增量证据池，而不是末次写入覆盖：每轮执行器结果会先与 Session 已有候选按 `product_id` 合并，保留更完整的价格、图片、店铺、链接、标签和风险字段，再对全部唯一商品重新生成稳妥 / 性价比 / 升级三档。候选池复盘读取的是合并后的最终池；轨迹分别记录本轮返回数、累计结果数和最终保留数。补搜失败时旧候选仍然可用，失败只写入本轮 attempt，不会把已有模块错误标记为空。
 
-工作流结束时会生成持久化的 `completion_report`，按必需模块覆盖率、候选总数、候选池复盘、价格压力、无价格样本和容错跳过形成 `ready / partial / needs_attention` 结论。报告复用最终 DeepSeek Runtime 或规则决策的停止理由，不增加额外慢模型调用；重新搜索、调整规划、修改关键词或切换执行档位会立即使旧报告失效。
+工作流结束时会生成持久化的 `completion_report`，按必需模块覆盖率、候选总数、候选池复盘、价格压力、无价格样本和容错跳过形成 `ready / partial / needs_attention` 结论。报告复用最终 DeepSeek Runtime 或规则决策的停止理由，并先用确定性组合算法生成预算安全兜底，再发起一次有界的 `compose_purchase_bundle` 调用：常规状态使用 chat，必需覆盖不足或存在预算压力时升级 reasoner。模型只能从已知候选 ID 中提案；后端再次验证每模块最多一件、总价不超预算、必需覆盖不低于兜底方案。超时、结构异常或 guardrail 拒绝都会直接保留规则组合，不阻塞工作流完成。重新搜索、调整规划、修改关键词或切换执行档位会立即使旧报告和组合失效。
 
 当报告存在未覆盖模块时，用户可以显式确认调用 `/api/agent/remediate`。服务端在 Session 锁内仅清理这些模块上一轮的失败、跳过和搜索轨迹，保留其他模块候选、预算与已选商品，然后创建新的运行 ID 继续持久工作流；该入口不能静默触发，也不会因候选偏贵而自动改预算。
 
 当报告只有候选偏薄而不是模块空白时，同一 API 可使用 `scope=thin`。服务端为报告列出的薄弱模块选择未尝试过的新关键词，在对应 `module_review` 写入一次性 `user_confirmed_retry` 授权，不永久改变用户原有的保守/平衡档位。Agent 随后使用跨轮次候选池增量补搜；回填生成新复盘时该授权自然失效，避免一次确认被重复消费。
 
-`RUNTIME_STORE=postgres` 时，每次推进还会获取基于 Session ID 的 PostgreSQL transaction-level advisory lock。锁内的 Session 读取、Agent 决策落盘、Job 创建和事件写入通过 `AsyncLocalStorage` 复用同一数据库 client，并在同一事务提交；竞争实例立即返回等待状态，不会重复创建下一模块。Executor 的成功、失败和取消回填也使用同一把锁，避免重复回执用旧 Session 快照覆盖下一步任务。锁不覆盖 Qoder/Taobao 的长时间执行；平衡/探索档位下只可能额外包含一次有界的 DeepSeek 下一动作判断，常规 chat 默认 8 秒、复杂 reasoner 默认 15 秒。
+`RUNTIME_STORE=postgres` 时，每次推进还会获取基于 Session ID 的 PostgreSQL transaction-level advisory lock。锁内的 Session 读取、Agent 决策落盘、Job 创建和事件写入通过 `AsyncLocalStorage` 复用同一数据库 client，并在同一事务提交；竞争实例立即返回等待状态，不会重复创建下一模块。Executor 的成功、失败和取消回填也使用同一把锁，避免重复回执用旧 Session 快照覆盖下一步任务。锁不覆盖 Qoder/Taobao 的长时间执行；平衡/探索档位下可能包含一次有界的 DeepSeek 下一动作判断，常规 chat 默认 8 秒、复杂 reasoner 默认 15 秒；工作流收敛时还可能包含一次默认 12 秒上限的购买组合提案。两者失败都使用确定性结果继续，不等待淘宝工具执行。
 
 每个模块获得真实候选后，`market-feedback` 会基于有效价格样本计算模块预算压力、参考入手价和跨模块余量。该结果会进入下一动作 prompt：平衡/探索档位可以在候选整体超预算时提出一次未尝试过的性价比补搜词。预算调拨最多按模块预算的 15% 生成总额守恒的建议，始终标记为“需要用户确认”，不会静默改写已经确认的购物规划。
 

@@ -120,6 +120,7 @@ function assertEnvExample() {
     "DEEPSEEK_CHAT_MODEL",
     "DEEPSEEK_REASONER_MODEL",
     "DEEPSEEK_DISABLED",
+    "DEEPSEEK_BUNDLE_TIMEOUT_MS",
     "SCENECART_PRODUCT_MODE",
     "ALLOW_DEMO_CART_FALLBACK",
     "TAOBAO_EXECUTION_BACKEND",
@@ -301,11 +302,13 @@ function assertArchitectureContracts() {
   const directives = tryReadText("lib/agent/directives.ts");
   const decisionEngine = tryReadText("lib/agent/decision-engine.ts");
   const completionReview = tryReadText("lib/agent/completion-review.ts");
+  const purchaseBundle = tryReadText("lib/agent/purchase-bundle.ts");
   const workflowRunner = tryReadText("lib/agent/workflow-runner.ts");
   const marketFeedback = tryReadText("lib/agent/market-feedback.ts");
   const orchestrator = tryReadText("lib/agent/orchestrator.ts");
   const refiner = tryReadText("lib/agent/refiner.ts");
   const prompts = tryReadText("lib/llm/prompts.ts");
+  const validation = tryReadText("lib/llm/validation.ts");
   const types = tryReadText("lib/session/types.ts");
   const dashboard = tryReadText("components/dashboard.tsx");
   const dashboardApi = tryReadText("components/dashboard-api.ts");
@@ -360,11 +363,13 @@ function assertArchitectureContracts() {
     !directives ||
     !decisionEngine ||
     !completionReview ||
+    !purchaseBundle ||
     !workflowRunner ||
     !marketFeedback ||
     !orchestrator ||
     !refiner ||
     !prompts ||
+    !validation ||
     !types ||
     !dashboard ||
     !dashboardApi ||
@@ -444,6 +449,22 @@ function assertArchitectureContracts() {
         hostedConsole.includes("Agent 完成质量审计") &&
         sessionsRoute.includes("completion_report: session.completion_report"),
       message: "Agent 结束搜索时必须生成可持久化的完成报告，并支持用户确认后补齐空白或增量优化薄弱候选池"
+    },
+    {
+      ok:
+        types.includes("AgentPurchaseBundle") &&
+        types.includes("purchase_bundle") &&
+        purchaseBundle.includes("buildPolicyPurchaseBundle") &&
+        purchaseBundle.includes("materializePurchaseBundleProposal") &&
+        deepseek.includes("composePurchaseBundle") &&
+        deepseek.includes("selectPurchaseBundleModelTier") &&
+        prompts.includes("composePurchaseBundlePrompt") &&
+        validation.includes("validatePurchaseBundleProposalOutput") &&
+        workflowRunner.includes('event_type: "agent.purchase_bundle.composed"') &&
+        sessionGuards.includes("isAgentPurchaseBundle") &&
+        dashboardResults.includes("Agent 建议购买组合") &&
+        hostedConsole.includes("预算安全购买组合"),
+      message: "Agent 完成搜索后必须生成经预算、候选白名单与必需覆盖 guardrail 校验的可审计购买组合"
     },
     {
       ok:
@@ -865,6 +886,10 @@ function assertDocumentationContracts() {
   }
 
   const contracts = [
+    {
+      ok: readme.includes("预算安全购买组合") && architecture.includes("compose_purchase_bundle"),
+      message: "README 与架构文档必须同步说明预算安全购买组合和模型 guardrail"
+    },
     {
       ok: readme.includes("候选池复盘") && readme.includes("按 Agent 建议补搜"),
       message: "README 必须同步说明候选池复盘与 Agent 建议补搜能力"

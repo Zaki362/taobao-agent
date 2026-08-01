@@ -111,6 +111,8 @@ export function ResultsPage({
   );
   const selectedTypeCount = new Set(selectedProducts.map((product) => product.recommendation_type)).size;
   const completionReport = session.completion_report;
+  const purchaseBundle = completionReport?.purchase_bundle;
+  const bundleProductIds = new Set(purchaseBundle?.items.map((item) => item.product_id) ?? []);
   const sceneLabel = session.current_scene_label || session.scene_brief.scene_type || "当前场景";
   const aiPlanningLabel =
     session.deepseek_status === "connected"
@@ -162,6 +164,7 @@ export function ResultsPage({
                       <div>
                         <div className="flex flex-wrap items-center gap-2">
                           <Badge>{product.recommendation_type}</Badge>
+                          {bundleProductIds.has(product.product_id) ? <Badge variant="success">组合建议</Badge> : null}
                           {product.shop_badges.map((badge) => (
                             <Badge key={badge} variant="outline">{badge}</Badge>
                           ))}
@@ -312,6 +315,56 @@ export function ResultsPage({
                   {busy ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Wand2 className="mr-2 h-4 w-4" />}
                   继续优化 {completionReport.thin_module_ids.length} 个薄弱模块
                 </Button>
+              ) : null}
+            </CardContent>
+          </Card>
+        ) : null}
+
+        {purchaseBundle ? (
+          <Card className="section-card border-[#f3c9b5] bg-[#fffaf7]">
+            <CardHeader>
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <p className="label-text">预算内决策建议</p>
+                  <CardTitle className="mt-2">Agent 建议购买组合</CardTitle>
+                </div>
+                <Badge variant={purchaseBundle.status === "ready" ? "success" : "secondary"}>
+                  {purchaseBundle.source === "deepseek" ? "AI 组合" : "规则组合"}
+                </Badge>
+              </div>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <p className="text-sm leading-6 text-muted-foreground">{purchaseBundle.summary}</p>
+              <div className="grid grid-cols-2 gap-3">
+                <InfoBlock label="组合估价" value={formatCurrency(purchaseBundle.estimated_total)} />
+                <InfoBlock label="预算余量" value={formatCurrency(purchaseBundle.remaining_budget)} />
+              </div>
+              <div className="space-y-2">
+                {purchaseBundle.items.map((item) => (
+                  <button
+                    key={item.product_id}
+                    type="button"
+                    className="w-full rounded-[18px] border border-border/70 bg-white px-3 py-3 text-left transition hover:border-primary/25"
+                    onClick={() => onSelectModule(item.module_id)}
+                  >
+                    <div className="flex items-center justify-between gap-3 text-xs text-muted-foreground">
+                      <span>{item.module_name}</span>
+                      <span className="shrink-0 font-semibold text-[#e65320]">{formatCurrency(item.price)}</span>
+                    </div>
+                    <p className="mt-1 line-clamp-2 text-sm font-medium leading-5 text-foreground">{item.title}</p>
+                  </button>
+                ))}
+              </div>
+              <div className="rounded-[18px] bg-white/80 px-4 py-3 text-xs leading-5 text-muted-foreground">
+                必需模块覆盖 {purchaseBundle.critical_selected_module_ids.length}/{purchaseBundle.critical_module_ids.length}。这是决策建议，不会自动加购或下单。
+              </div>
+              {purchaseBundle.caveats.length > 0 ? (
+                <details className="rounded-[18px] border border-border/70 bg-white px-4 py-3">
+                  <summary className="cursor-pointer text-xs font-medium">查看组合取舍</summary>
+                  <div className="mt-3 space-y-2 text-xs leading-5 text-muted-foreground">
+                    {purchaseBundle.caveats.map((item) => <p key={item}>· {item}</p>)}
+                  </div>
+                </details>
               ) : null}
             </CardContent>
           </Card>

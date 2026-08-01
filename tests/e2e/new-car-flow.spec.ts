@@ -254,6 +254,11 @@ test("authenticated new-car workflow reaches recommendations through the durable
         covered_module_ids: string[];
         uncovered_module_ids: string[];
         stop_reason: string;
+        purchase_bundle: {
+          estimated_total: number;
+          total_budget: number;
+          items: Array<{ product_id: string; module_id: string }>;
+        };
       };
     };
     expect(completedState.agent_runtime.auto_continue).toBe(false);
@@ -267,6 +272,11 @@ test("authenticated new-car workflow reaches recommendations through the durable
     expect(completedState.completion_report.covered_module_ids).toHaveLength(completedState.shopping_plan.modules.length - 1);
     expect(completedState.completion_report.uncovered_module_ids).toEqual([executorBehavior.failedModuleId]);
     expect(completedState.completion_report.stop_reason.length).toBeGreaterThan(0);
+    expect(completedState.completion_report.purchase_bundle.estimated_total).toBeLessThanOrEqual(
+      completedState.completion_report.purchase_bundle.total_budget
+    );
+    expect(new Set(completedState.completion_report.purchase_bundle.items.map((item) => item.module_id)).size)
+      .toBe(completedState.completion_report.purchase_bundle.items.length);
 
     await page.goto("/?resume=1");
     await expect(page.getByText("搜索执行摘要")).toBeVisible();
@@ -274,6 +284,7 @@ test("authenticated new-car workflow reaches recommendations through the durable
     await page.getByRole("button", { name: "查看推荐结果" }).click();
     await expect(page.getByText("当前模块搜索未形成可用候选")).toBeVisible();
     await expect(page.getByText("Agent 完成报告")).toBeVisible();
+    await expect(page.getByText("Agent 建议购买组合")).toBeVisible();
     await expect(page.getByText("本地执行器", { exact: false }).first()).toBeVisible();
     await expect(page.getByText(/\[[^\]]+\] local_executor/).first()).toBeVisible();
     await expect(page.getByText(/SUCCESS · 0ms/).first()).toBeVisible();

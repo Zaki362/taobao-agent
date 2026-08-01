@@ -1,10 +1,12 @@
 import {
   AgentDecisionProposal,
+  AgentPurchaseBundle,
   CandidateFitExplanation,
   PlanningModule,
   ModuleCandidateReview,
   PlanQualityReview,
   ProductCandidate,
+  PurchaseBundleProposal,
   QuickAction,
   RecommendationType,
   ScenarioId,
@@ -20,7 +22,8 @@ import {
   reviewCandidatePoolPrompt,
   reviewShoppingPlanPrompt,
   refinePlanPrompt,
-  decideNextActionPrompt
+  decideNextActionPrompt,
+  composePurchaseBundlePrompt
 } from "@/lib/llm/prompts";
 import {
   mockExplainProductFit,
@@ -37,9 +40,11 @@ import {
   validatePlanQualityReviewOutput,
   validateSceneBriefOutput,
   validateShoppingPlanOutput,
-  validateAgentDecisionOutput
+  validateAgentDecisionOutput,
+  validatePurchaseBundleProposalOutput
 } from "@/lib/llm/validation";
 import { downgradeLastLlmCall, recordLlmCall, type LlmTaskName } from "@/lib/llm/telemetry";
+import { materializePurchaseBundleProposal } from "@/lib/agent/purchase-bundle";
 
 const DEEPSEEK_BASE_URL = "https://api.deepseek.com/chat/completions";
 const DEFAULT_TIMEOUT_MS: Record<LlmTaskName, number> = {
@@ -49,6 +54,7 @@ const DEFAULT_TIMEOUT_MS: Record<LlmTaskName, number> = {
   review_candidates: 8_000,
   review_plan: 10_000,
   decide_next_action: 8_000,
+  compose_purchase_bundle: 12_000,
   explain_product_fit: 6_000
 };
 const DEFAULT_MAX_OUTPUT_TOKENS: Record<LlmTaskName, number> = {
@@ -58,6 +64,7 @@ const DEFAULT_MAX_OUTPUT_TOKENS: Record<LlmTaskName, number> = {
   review_candidates: 900,
   review_plan: 900,
   decide_next_action: 900,
+  compose_purchase_bundle: 1_400,
   explain_product_fit: 180
 };
 const TIMEOUT_ENV_KEYS: Record<LlmTaskName, string> = {
@@ -67,6 +74,7 @@ const TIMEOUT_ENV_KEYS: Record<LlmTaskName, string> = {
   review_candidates: "DEEPSEEK_CANDIDATE_REVIEW_TIMEOUT_MS",
   review_plan: "DEEPSEEK_PLAN_REVIEW_TIMEOUT_MS",
   decide_next_action: "DEEPSEEK_AGENT_DECISION_TIMEOUT_MS",
+  compose_purchase_bundle: "DEEPSEEK_BUNDLE_TIMEOUT_MS",
   explain_product_fit: "DEEPSEEK_EXPLAIN_TIMEOUT_MS"
 };
 const MIN_TIMEOUT_MS = 250;
@@ -124,6 +132,15 @@ export function selectAgentDecisionModelTier(
   const complexAction = fallback.action === "retry_module" || fallback.action === "skip_module";
 
   return complexAction || hasComplexMarketPressure || hasRecoveryEvidence ? "reasoner" : "chat";
+}
+
+export function selectPurchaseBundleModelTier(
+  state: SessionState,
+  fallback: AgentPurchaseBundle
+): StructuredModelTier {
+  const hasCriticalGap = fallback.critical_selected_module_ids.length < fallback.critical_module_ids.length;
+  const hasBudgetPressure = state.market_feedback.pressure_modules.length > 0;
+  return hasCriticalGap || hasBudgetPressure ? "reasoner" : "chat";
 }
 
 function agentDecisionTimeoutMs(tier: StructuredModelTier) {
@@ -894,4 +911,44 @@ export async function decideAgentNextAction(
     },
     mode: "connected"
   };
+}
+
+export async function composePurchaseBundle(
+  state: SessionState,
+  fallback: AgentPurchaseBundle
+): Promise<{ data: AgentPurchaseBundle; mode: LlmMode }> {
+  const fallbackProposal: PurchaseBundleProposal = {
+    selected_product_ids: fallback.items.map((item) => item.product_id),
+    summary: fallback.summary,
+    tradeoffs: fallback.caveats,
+    reasons: fallback.items.map((item) => ({ product_id: item.product_id, fit_reason: item.reason }))
+  };
+  const modelTier = selectPurchaseBundleModelTier(state, fallback);
+  const result = await deepseekJson<PurchaseBundleProposal>(
+    "compose_purchase_bundle",
+    composePurchaseBundlePrompt(state, fallback),
+    fallbackProposal,
+    { modelTier }
+  );
+  if (result.mode !== "connected") return { data: fallback, mode: "mock" };
+
+  const candidateIds = state.shopping_plan.modules.flatMap((module) =>
+    (state.module_candidates[module.module_id] ?? []).map((candidate) => candidate.product_id)
+  );
+  const valid = validatePurchaseBundleProposalOutput(
+    result.data,
+    candidateIds,
+    state.shopping_plan.modules.length
+  );
+  if (!valid) {
+    downgradeLastLlmCall("compose_purchase_bundle", "schema_validation_failed:purchase_bundle_invalid");
+    return { data: fallback, mode: "mock" };
+  }
+
+  const bundle = materializePurchaseBundleProposal(state, result.data, fallback);
+  if (!bundle) {
+    downgradeLastLlmCall("compose_purchase_bundle", "guardrail_rejected:purchase_bundle_unsafe");
+    return { data: fallback, mode: "mock" };
+  }
+  return { data: bundle, mode: "connected" };
 }

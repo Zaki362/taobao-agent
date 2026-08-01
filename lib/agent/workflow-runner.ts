@@ -6,6 +6,7 @@ import {
   removeModuleAgentDecisions
 } from "@/lib/agent/decision-engine";
 import { buildAgentCompletionReport } from "@/lib/agent/completion-review";
+import { composePurchaseBundle } from "@/lib/llm/deepseek";
 import { runModuleSearch } from "@/lib/agent/product-matcher";
 import { decideNextAgentActionV2 } from "@/lib/agent/runtime-v2";
 import { getRuntimeRepository } from "@/lib/runtime";
@@ -192,13 +193,33 @@ async function executeAdvance(
       return { state, decision, outcome: "waiting" };
     }
 
-    state.completion_report = buildAgentCompletionReport(state, decision);
+    const completionReport = buildAgentCompletionReport(state, decision);
+    const bundleResult = await composePurchaseBundle(state, completionReport.purchase_bundle!);
+    completionReport.purchase_bundle = bundleResult.data;
+    if (bundleResult.mode === "connected") {
+      state.deepseek_status = "connected";
+    }
+    state.completion_report = completionReport;
     transition(state, {
       status: "completed",
       message: decision.reason || "所有规划模块均已处理完成",
       autoContinue: false
     });
     await persistSession(state);
+    await getRuntimeRepository().appendEvent({
+      user_id: state.owner_id,
+      session_id: state.session_id,
+      event_type: "agent.purchase_bundle.composed",
+      payload: {
+        source: bundleResult.data.source,
+        status: bundleResult.data.status,
+        selected_product_count: bundleResult.data.items.length,
+        estimated_total: bundleResult.data.estimated_total,
+        total_budget: bundleResult.data.total_budget,
+        critical_selected_count: bundleResult.data.critical_selected_module_ids.length,
+        critical_module_count: bundleResult.data.critical_module_ids.length
+      }
+    });
     await emitWorkflowEvent(state, options.trigger, "completed", decision);
     return { state, decision, outcome: "completed" };
   }

@@ -1,15 +1,18 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  composePurchaseBundle,
   explainProductFit,
   getDeepSeekTimeoutMs,
   parseScene,
   reviewCandidatePool,
-  selectAgentDecisionModelTier
+  selectAgentDecisionModelTier,
+  selectPurchaseBundleModelTier
 } from "@/lib/llm/deepseek";
 import { mockParseScene } from "@/lib/llm/mock";
 import type { AgentDecisionProposal, ProductCandidate } from "@/lib/session/types";
 import { createSessionFixture } from "@/tests/fixtures/session";
 import { reviewModuleCandidates } from "@/lib/agent/candidate-reviewer";
+import { buildPolicyPurchaseBundle } from "@/lib/agent/purchase-bundle";
 import {
   getLlmTelemetrySnapshot,
   resetLlmTelemetryForTests
@@ -20,6 +23,7 @@ const MANAGED_ENV_KEYS = [
   "DEEPSEEK_DISABLED",
   "DEEPSEEK_REQUEST_TIMEOUT_MS",
   "DEEPSEEK_PARSE_TIMEOUT_MS",
+  "DEEPSEEK_BUNDLE_TIMEOUT_MS",
   "DEEPSEEK_AGENT_CHAT_TIMEOUT_MS",
   "DEEPSEEK_AGENT_REASONER_TIMEOUT_MS"
 ] as const;
@@ -70,6 +74,7 @@ describe("DeepSeek client reliability", () => {
     process.env.DEEPSEEK_DISABLED = "false";
     delete process.env.DEEPSEEK_REQUEST_TIMEOUT_MS;
     delete process.env.DEEPSEEK_PARSE_TIMEOUT_MS;
+    delete process.env.DEEPSEEK_BUNDLE_TIMEOUT_MS;
     delete process.env.DEEPSEEK_AGENT_CHAT_TIMEOUT_MS;
     delete process.env.DEEPSEEK_AGENT_REASONER_TIMEOUT_MS;
     resetLlmTelemetryForTests();
@@ -96,6 +101,9 @@ describe("DeepSeek client reliability", () => {
 
     process.env.DEEPSEEK_PARSE_TIMEOUT_MS = "999999";
     expect(getDeepSeekTimeoutMs("parse_scene")).toBe(60_000);
+
+    delete process.env.DEEPSEEK_REQUEST_TIMEOUT_MS;
+    expect(getDeepSeekTimeoutMs("compose_purchase_bundle")).toBe(12_000);
   });
 
   it("uses chat for routine scheduling and reserves reasoner for recovery decisions", () => {
@@ -330,5 +338,79 @@ describe("DeepSeek client reliability", () => {
     expect(result.mode).toBe("mock");
     expect(result.data.module_id).toBe("safety-essential");
     expect(result.fitReasons["p-1"]).toBe("保留当前模块的规则理由。");
+  });
+
+  it("uses chat for routine bundles and reasoner when critical coverage is under pressure", () => {
+    const state = createSessionFixture();
+    for (const [index, module] of state.shopping_plan.modules.entries()) {
+      state.module_candidates[module.module_id] = [{
+        ...candidate(`${module.module_id}-${index}`, `${module.module_name}候选`, "稳妥推荐", "规则推荐理由。"),
+        module_id: module.module_id,
+        price: 80
+      }];
+    }
+    const ready = buildPolicyPurchaseBundle(state);
+    expect(selectPurchaseBundleModelTier(state, ready)).toBe("chat");
+
+    state.scene_brief.budget = 80;
+    const partial = buildPolicyPurchaseBundle(state);
+    expect(partial.status).toBe("partial");
+    expect(selectPurchaseBundleModelTier(state, partial)).toBe("reasoner");
+  });
+
+  it("accepts a strict budget-safe purchase bundle proposal", async () => {
+    const state = createSessionFixture();
+    for (const [index, module] of state.shopping_plan.modules.entries()) {
+      state.module_candidates[module.module_id] = [{
+        ...candidate(`${module.module_id}-${index}`, `${module.module_name}候选`, "稳妥推荐", "规则推荐理由。"),
+        module_id: module.module_id,
+        price: 80
+      }];
+    }
+    const fallback = buildPolicyPurchaseBundle(state);
+    const selectedIds = fallback.items.map((item) => item.product_id);
+    vi.stubGlobal("fetch", vi.fn(async () => responseForContent(JSON.stringify({
+      selected_product_ids: selectedIds,
+      summary: "在预算内覆盖当前阶段的主要需求，并保留后续调整余量。",
+      tradeoffs: ["暂不扩大到搜索结果之外的商品。"],
+      reasons: selectedIds.map((productId) => ({
+        product_id: productId,
+        fit_reason: "该候选处于当前预算范围内，并与所属模块的首购目标一致。"
+      }))
+    }))));
+
+    const result = await composePurchaseBundle(state, fallback);
+
+    expect(result.mode).toBe("connected");
+    expect(result.data.source).toBe("deepseek");
+    expect(result.data.estimated_total).toBeLessThanOrEqual(state.scene_brief.budget);
+    expect(taskTelemetry("compose_purchase_bundle")).toMatchObject({ connected: 1, fallback: 0 });
+  });
+
+  it("rejects an invented product in a purchase bundle proposal", async () => {
+    const state = createSessionFixture();
+    const module = state.shopping_plan.modules[0];
+    state.module_candidates[module.module_id] = [{
+      ...candidate("known-product", "已知候选", "稳妥推荐", "规则推荐理由。"),
+      module_id: module.module_id,
+      price: 80
+    }];
+    const fallback = buildPolicyPurchaseBundle(state);
+    vi.stubGlobal("fetch", vi.fn(async () => responseForContent(JSON.stringify({
+      selected_product_ids: ["invented-product"],
+      summary: "这份提案包含伪造商品。",
+      tradeoffs: [],
+      reasons: [{ product_id: "invented-product", fit_reason: "这条理由不应被系统接受。" }]
+    }))));
+
+    const result = await composePurchaseBundle(state, fallback);
+
+    expect(result.mode).toBe("mock");
+    expect(result.data).toBe(fallback);
+    expect(taskTelemetry("compose_purchase_bundle")).toMatchObject({
+      connected: 0,
+      fallback: 1,
+      last_reason: "schema_validation_failed:purchase_bundle_invalid"
+    });
   });
 });

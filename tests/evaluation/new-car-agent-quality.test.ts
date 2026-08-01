@@ -9,6 +9,7 @@ import {
   resetLlmTelemetryForTests
 } from "@/lib/llm/telemetry";
 import { createSessionFixture } from "@/tests/fixtures/session";
+import { buildPolicyPurchaseBundle } from "@/lib/agent/purchase-bundle";
 
 const liveEvaluation = process.env.AGENT_EVAL_LIVE === "true";
 
@@ -77,6 +78,38 @@ describe(`new-car Agent quality gate (${liveEvaluation ? "live DeepSeek" : "dete
       expect(planned.mode, diagnostics).toBe("connected");
       expect(reviewed.mode, diagnostics).toBe("connected");
     }
+  });
+
+  it("keeps the final suggested bundle inside hard purchase guardrails", () => {
+    const state = createSessionFixture();
+    for (const [moduleIndex, module] of state.shopping_plan.modules.entries()) {
+      state.module_candidates[module.module_id] = (["稳妥推荐", "性价比推荐", "升级推荐"] as const).map(
+        (recommendationType, candidateIndex) => ({
+          product_id: `${module.module_id}-${candidateIndex}`,
+          title: `${module.module_name}评测候选${candidateIndex + 1}`,
+          price: 80 + moduleIndex * 10 + candidateIndex * 40,
+          source: "evaluation",
+          shop_name: "评测旗舰店",
+          image_url: "https://example.com/bundle.jpg",
+          detail_url: `https://item.taobao.com/item.htm?id=${module.module_id}-${candidateIndex}`,
+          shop_badges: ["旗舰店"],
+          highlights: ["规格明确"],
+          risk_notes: ["需确认适配"],
+          fit_reason: "候选与模块目标和当前预算匹配。",
+          recommendation_type: recommendationType,
+          module_id: module.module_id
+        })
+      );
+    }
+
+    const bundle = buildPolicyPurchaseBundle(state);
+    const knownIds = new Set(Object.values(state.module_candidates).flat().map((item) => item.product_id));
+
+    expect(bundle.estimated_total).toBeLessThanOrEqual(state.scene_brief.budget);
+    expect(new Set(bundle.items.map((item) => item.module_id)).size).toBe(bundle.items.length);
+    expect(new Set(bundle.items.map((item) => item.product_id)).size).toBe(bundle.items.length);
+    expect(bundle.items.every((item) => knownIds.has(item.product_id))).toBe(true);
+    expect(bundle.critical_selected_module_ids.length).toBe(bundle.critical_module_ids.length);
   });
 
   it.runIf(liveEvaluation)("uses DeepSeek chat for a routine guarded runtime decision", async () => {

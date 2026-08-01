@@ -3,6 +3,7 @@ import type {
   AgentDecision,
   SessionState
 } from "@/lib/session/types";
+import { buildPolicyPurchaseBundle } from "@/lib/agent/purchase-bundle";
 
 function ratio(numerator: number, denominator: number) {
   if (denominator <= 0) return 1;
@@ -137,6 +138,7 @@ export function buildAgentCompletionReport(
     strengths: strengths.slice(0, 3),
     caveats: caveats.slice(0, 4),
     next_steps: nextSteps.slice(0, 3),
+    purchase_bundle: buildPolicyPurchaseBundle(state),
     generated_at: new Date().toISOString()
   };
 }

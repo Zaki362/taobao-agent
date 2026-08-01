@@ -98,6 +98,8 @@ describe("server-managed Agent workflow", () => {
       critical_coverage_ratio: 1
     });
     expect(restored?.completion_report?.total_candidates).toBe(state.shopping_plan.modules.length * 3);
+    expect(restored?.completion_report?.purchase_bundle?.estimated_total).toBeLessThanOrEqual(state.scene_brief.budget);
+    expect(restored?.completion_report?.purchase_bundle?.items.length).toBeGreaterThan(0);
     expect(completedJobs).toBe(state.shopping_plan.modules.length);
     expect(Object.keys(restored?.module_candidates ?? {})).toHaveLength(state.shopping_plan.modules.length);
     expect(restored?.tool_logs.filter(
@@ -105,6 +107,9 @@ describe("server-managed Agent workflow", () => {
     )).toHaveLength(state.shopping_plan.modules.length);
     expect((await localRuntimeRepository.listEvents(sessionId, 0, device.user_id, 100))
       .some((event) => event.event_type === "agent.workflow.updated" && event.payload.outcome === "completed"))
+      .toBe(true);
+    expect((await localRuntimeRepository.listEvents(sessionId, 0, device.user_id, 100))
+      .some((event) => event.event_type === "agent.purchase_bundle.composed"))
       .toBe(true);
   });
 
