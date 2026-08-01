@@ -42,8 +42,25 @@ type Readiness = {
       add_to_cart: { registered: number; online: number; available: boolean };
     };
   };
+  llm_runtime: {
+    state: "unverified" | "connected" | "degraded" | "unavailable";
+    calls: number;
+    connected: number;
+    fallback: number;
+    last_model: string | null;
+    last_reason: string | null;
+    last_called_at: string | null;
+  };
   checks: ReadinessCheck[];
 };
+
+function llmRuntimeLabel(readiness: Readiness | null) {
+  if (!readiness) return "正在读取模型状态";
+  if (readiness.llm_runtime.state === "connected") return "DeepSeek 已真实连接";
+  if (readiness.llm_runtime.state === "degraded") return "DeepSeek 部分降级";
+  if (readiness.llm_runtime.state === "unavailable") return "DeepSeek 当前不可用";
+  return "DeepSeek 等待真实验证";
+}
 
 function capabilityLabel(capability: string) {
   if (capability === "module_search") return "商品搜索";
@@ -238,6 +255,15 @@ export function ExecutorSettings() {
             </span>
             <span className={`rounded-full px-3 py-1.5 font-semibold ${searchAvailable ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-700"}`}>
               {searchAvailable ? "真实搜索可用" : "搜索能力未连接"}
+            </span>
+            <span className={`rounded-full px-3 py-1.5 font-semibold ${
+              readiness?.llm_runtime.state === "connected"
+                ? "bg-emerald-50 text-emerald-700"
+                : readiness?.llm_runtime.state === "unavailable"
+                  ? "bg-red-50 text-red-700"
+                  : "bg-amber-50 text-amber-700"
+            }`}>
+              {llmRuntimeLabel(readiness)}
             </span>
             <span className={`rounded-full px-3 py-1.5 font-semibold ${cartAvailable ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-700"}`}>
               {cartAvailable ? "真实加购可用" : "加购能力未连接"}

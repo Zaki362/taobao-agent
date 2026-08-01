@@ -353,10 +353,13 @@ function assertArchitectureContracts() {
   const refiner = tryReadText("lib/agent/refiner.ts");
   const prompts = tryReadText("lib/llm/prompts.ts");
   const validation = tryReadText("lib/llm/validation.ts");
+  const llmTelemetry = tryReadText("lib/llm/telemetry.ts");
+  const runtimeReadiness = tryReadText("lib/runtime/readiness.ts");
   const types = tryReadText("lib/session/types.ts");
   const dashboard = tryReadText("components/dashboard.tsx");
   const dashboardApi = tryReadText("components/dashboard-api.ts");
   const hostedConsole = tryReadText("components/hosted-console.tsx");
+  const executorSettings = tryReadText("components/executor-settings.tsx");
   const dashboardWorkflow = tryReadText("components/dashboard-workflow.ts");
   const dashboardResults = tryReadText("components/dashboard-results.tsx");
   const dashboardConfirmation = tryReadText("components/dashboard-confirmation.tsx");
@@ -420,10 +423,13 @@ function assertArchitectureContracts() {
     !refiner ||
     !prompts ||
     !validation ||
+    !llmTelemetry ||
+    !runtimeReadiness ||
     !types ||
     !dashboard ||
     !dashboardApi ||
     !hostedConsole ||
+    !executorSettings ||
     !dashboardWorkflow ||
     !dashboardResults ||
     !dashboardConfirmation ||
@@ -582,6 +588,16 @@ function assertArchitectureContracts() {
     {
       ok: deepseek.includes("validateSceneBriefOutput") && deepseek.includes("validateShoppingPlanOutput"),
       message: "DeepSeek 调用层必须校验结构化输出"
+    },
+    {
+      ok:
+        llmTelemetry.includes("summarizeLlmRuntimeStatus") &&
+        llmTelemetry.includes("last_sequence") &&
+        runtimeReadiness.includes('"deepseek_runtime"') &&
+        runtimeReadiness.includes("summarizeLlmRuntimeStatus") &&
+        executorSettings.includes("DeepSeek 已真实连接") &&
+        executorSettings.includes("DeepSeek 等待真实验证"),
+      message: "发布就绪度必须区分 DeepSeek 已配置与真实运行证据，且同毫秒调用不能误判最近状态"
     },
     {
       ok: matcher.includes("rankCandidatesForModule"),

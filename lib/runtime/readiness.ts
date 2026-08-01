@@ -4,6 +4,7 @@ import { query } from "@/lib/runtime/database";
 import { getRuntimeRepository, runtimeStoreMode } from "@/lib/runtime";
 import { allowDemoCartFallback, getProductMode, isMcpDebugEnabled } from "@/lib/runtime/product-mode";
 import { summarizeExecutorDevices } from "@/lib/runtime/executor-status";
+import { summarizeLlmRuntimeStatus } from "@/lib/llm/telemetry";
 import {
   summarizeWorkflowRecoveryHeartbeat,
   WORKFLOW_RECOVERY_SERVICE
@@ -52,6 +53,7 @@ export async function inspectRuntimeReadiness(userId?: string) {
   const authRequired = isAuthenticationRequired();
   const secureCookie = useSecureAuthCookie();
   const deepSeekConfigured = configured(process.env.DEEPSEEK_API_KEY) && process.env.DEEPSEEK_DISABLED !== "true";
+  const llmRuntime = summarizeLlmRuntimeStatus();
   const productMode = getProductMode();
   const demoCartFallback = allowDemoCartFallback();
   const mcpDebugConfigured = process.env.SCENECART_ENABLE_MCP_DEBUG === "true";
@@ -218,6 +220,29 @@ export async function inspectRuntimeReadiness(userId?: string) {
     "配置 DEEPSEEK_API_KEY，并确保 DEEPSEEK_DISABLED 不是 true"
   ));
 
+  const llmRuntimeStatus: ReadinessStatus = !deepSeekConfigured || llmRuntime.state === "unavailable"
+    ? "fail"
+    : llmRuntime.state === "connected"
+      ? "pass"
+      : "warn";
+  const llmRuntimeDetail = !deepSeekConfigured
+    ? "模型尚未配置，当前只能使用确定性 fallback"
+    : llmRuntime.state === "unverified"
+      ? "模型已配置，但本进程启动后尚未产生真实调用证据"
+      : llmRuntime.state === "unavailable"
+        ? `${llmRuntime.calls} 次模型任务全部进入 fallback，最近原因：${llmRuntime.last_reason ?? "未知"}`
+        : llmRuntime.state === "degraded"
+          ? `${llmRuntime.calls} 次模型任务中 ${llmRuntime.fallback} 次进入 fallback，最近原因：${llmRuntime.last_reason ?? "已恢复"}`
+          : `${llmRuntime.connected} / ${llmRuntime.calls} 次模型任务真实成功，最近使用 ${llmRuntime.last_model ?? "DeepSeek"}`;
+  checks.push(check(
+    "deepseek_runtime",
+    "DeepSeek 真实运行状态",
+    llmRuntimeStatus,
+    false,
+    llmRuntimeDetail,
+    "先完成一次需求理解；如持续降级，请检查 DeepSeek Key、网络、超时和严格 JSON 校验原因"
+  ));
+
   let executorCapabilities = summarizeExecutorDevices([]);
   if (userId) {
     const devices = await getRuntimeRepository().listDevices(userId);
@@ -284,6 +309,7 @@ export async function inspectRuntimeReadiness(userId?: string) {
       configured: workflowRecoveryConfigured,
       ...workflowRecovery
     },
+    llm_runtime: llmRuntime,
     checked_at: new Date().toISOString(),
     checks
   };

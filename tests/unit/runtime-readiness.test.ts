@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { inspectRuntimeReadiness } from "@/lib/runtime/readiness";
 import { localRuntimeRepository, resetLocalRuntimeForTests } from "@/lib/runtime/local-repository";
+import { recordLlmCall, resetLlmTelemetryForTests } from "@/lib/llm/telemetry";
 
 const originalProductMode = process.env.SCENECART_PRODUCT_MODE;
 const originalBackend = process.env.TAOBAO_EXECUTION_BACKEND;
@@ -10,6 +11,7 @@ const originalMcpDebug = process.env.SCENECART_ENABLE_MCP_DEBUG;
 
 beforeEach(() => {
   resetLocalRuntimeForTests();
+  resetLlmTelemetryForTests();
   delete process.env.SCENECART_CRON_SECRET;
   delete process.env.SCENECART_RECOVERY_STALE_MS;
   delete process.env.SCENECART_ENABLE_MCP_DEBUG;
@@ -129,5 +131,35 @@ describe("production readiness", () => {
       detail: expect.stringContaining("已过期")
     });
     expect(readiness.workflow_recovery.state).toBe("stale");
+  });
+
+  it("does not confuse a configured DeepSeek key with verified model execution", async () => {
+    const originalKey = process.env.DEEPSEEK_API_KEY;
+    const originalDisabled = process.env.DEEPSEEK_DISABLED;
+    process.env.DEEPSEEK_API_KEY = "test-key-never-sent";
+    delete process.env.DEEPSEEK_DISABLED;
+    try {
+      const unverified = await inspectRuntimeReadiness();
+      expect(unverified.checks.find((item) => item.id === "deepseek_runtime")).toMatchObject({
+        status: "warn",
+        detail: expect.stringContaining("尚未产生真实调用证据")
+      });
+      expect(unverified.llm_runtime.state).toBe("unverified");
+
+      recordLlmCall({
+        task: "parse_scene",
+        model: "deepseek-chat",
+        mode: "connected",
+        durationMs: 100
+      });
+      const connected = await inspectRuntimeReadiness();
+      expect(connected.checks.find((item) => item.id === "deepseek_runtime")?.status).toBe("pass");
+      expect(connected.llm_runtime.state).toBe("connected");
+    } finally {
+      if (originalKey === undefined) delete process.env.DEEPSEEK_API_KEY;
+      else process.env.DEEPSEEK_API_KEY = originalKey;
+      if (originalDisabled === undefined) delete process.env.DEEPSEEK_DISABLED;
+      else process.env.DEEPSEEK_DISABLED = originalDisabled;
+    }
   });
 });

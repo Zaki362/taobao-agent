@@ -8,6 +8,8 @@ export type LlmTaskName =
   | "compose_purchase_bundle"
   | "explain_product_fit";
 
+export type LlmRuntimeState = "unverified" | "connected" | "degraded" | "unavailable";
+
 interface LlmTaskTelemetry {
   calls: number;
   connected: number;
@@ -17,11 +19,14 @@ interface LlmTaskTelemetry {
   last_reason?: string;
   last_called_at?: string;
   model?: string;
+  last_sequence: number;
 }
 
 declare global {
   // eslint-disable-next-line no-var
   var __sceneCartLlmTelemetry: Map<LlmTaskName, LlmTaskTelemetry> | undefined;
+  // eslint-disable-next-line no-var
+  var __sceneCartLlmTelemetrySequence: number | undefined;
 }
 
 function telemetryStore() {
@@ -33,6 +38,7 @@ function telemetryStore() {
 
 export function resetLlmTelemetryForTests() {
   globalThis.__sceneCartLlmTelemetry = undefined;
+  globalThis.__sceneCartLlmTelemetrySequence = undefined;
 }
 
 export function recordLlmCall(input: {
@@ -48,8 +54,11 @@ export function recordLlmCall(input: {
     connected: 0,
     fallback: 0,
     total_duration_ms: 0,
-    durations_ms: []
+    durations_ms: [],
+    last_sequence: 0
   };
+  const sequence = (globalThis.__sceneCartLlmTelemetrySequence ?? 0) + 1;
+  globalThis.__sceneCartLlmTelemetrySequence = sequence;
   current.calls += 1;
   current.connected += input.mode === "connected" ? 1 : 0;
   current.fallback += input.mode === "mock" ? 1 : 0;
@@ -58,6 +67,7 @@ export function recordLlmCall(input: {
   current.last_reason = input.reason;
   current.last_called_at = new Date().toISOString();
   current.model = input.model;
+  current.last_sequence = sequence;
   store.set(input.task, current);
 }
 
@@ -96,5 +106,37 @@ export function getLlmTelemetrySnapshot() {
     connected: tasks.reduce((sum, task) => sum + task.connected, 0),
     fallback: tasks.reduce((sum, task) => sum + task.fallback, 0),
     tasks
+  };
+}
+
+export function summarizeLlmRuntimeStatus() {
+  const snapshot = getLlmTelemetrySnapshot();
+  const latestTaskName = [...telemetryStore().entries()]
+    .filter(([, value]) => value.last_called_at)
+    .sort(([, left], [, right]) => (right.last_sequence ?? 0) - (left.last_sequence ?? 0))[0]?.[0];
+  const latestTask = snapshot.tasks.find((task) => task.task === latestTaskName);
+  const fallbackRate = snapshot.calls > 0 ? snapshot.fallback / snapshot.calls : 0;
+  let state: LlmRuntimeState;
+
+  if (snapshot.calls === 0) {
+    state = "unverified";
+  } else if (snapshot.connected === 0) {
+    state = "unavailable";
+  } else if (fallbackRate >= 0.4 || Boolean(latestTask?.last_reason)) {
+    state = "degraded";
+  } else {
+    state = "connected";
+  }
+
+  return {
+    state,
+    calls: snapshot.calls,
+    connected: snapshot.connected,
+    fallback: snapshot.fallback,
+    fallback_rate: Number(fallbackRate.toFixed(3)),
+    last_task: latestTask?.task ?? null,
+    last_model: latestTask?.model ?? null,
+    last_reason: latestTask?.last_reason ?? null,
+    last_called_at: latestTask?.last_called_at ?? null
   };
 }
