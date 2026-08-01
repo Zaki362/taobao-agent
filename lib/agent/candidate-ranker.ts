@@ -13,6 +13,16 @@ export interface CandidateRankingContext {
   budget_guardrails?: string[];
 }
 
+export interface CandidatePoolMergeResult {
+  candidates: ProductCandidate[];
+  previous_count: number;
+  incoming_count: number;
+  unique_count: number;
+  added_product_ids: string[];
+  retained_product_ids: string[];
+  dropped_product_ids: string[];
+}
+
 const QUALITY_TERMS = ["旗舰店", "官方", "正品", "高清", "夜视", "原厂", "稳定", "耐用", "无线", "真空", "磁吸"];
 const PRACTICAL_TERMS = ["专用", "固定", "收纳", "清洁", "充电", "便携", "防滑", "免安装", "通用"];
 const COMFORT_TERMS = ["舒适", "柔软", "静音", "透气", "护颈", "腰靠", "遮阳", "升级"];
@@ -292,4 +302,97 @@ export function rankCandidatesForModule(
     value ? { ...value, recommendation_type: "性价比推荐" as const } : null,
     upgrade ? { ...upgrade, recommendation_type: "升级推荐" as const } : null
   ].filter((item): item is RankedSearchResult => Boolean(item));
+}
+
+function uniqueStrings(values: string[]) {
+  return [...new Set(values.map((value) => value.trim()).filter(Boolean))];
+}
+
+function preferText(incoming: string, existing: string) {
+  return incoming.trim() || existing.trim();
+}
+
+function mergeCandidateRecord(existing: ProductCandidate, incoming: ProductCandidate): ProductCandidate {
+  return {
+    ...existing,
+    ...incoming,
+    title: preferText(incoming.title, existing.title),
+    price: incoming.price > 0 ? incoming.price : existing.price,
+    source: preferText(incoming.source, existing.source),
+    shop_name: preferText(incoming.shop_name, existing.shop_name),
+    image_url: preferText(incoming.image_url, existing.image_url),
+    detail_url: preferText(incoming.detail_url, existing.detail_url),
+    shop_badges: uniqueStrings([...existing.shop_badges, ...incoming.shop_badges]),
+    highlights: uniqueStrings([...existing.highlights, ...incoming.highlights]),
+    risk_notes: uniqueStrings([...existing.risk_notes, ...incoming.risk_notes]),
+    fit_reason: preferText(incoming.fit_reason, existing.fit_reason)
+  };
+}
+
+function asSearchResult(candidate: ProductCandidate): SearchResultItem {
+  return {
+    product_id: candidate.product_id,
+    title: candidate.title,
+    price: candidate.price,
+    shop_name: candidate.shop_name,
+    image_url: candidate.image_url,
+    detail_url: candidate.detail_url,
+    shop_badges: candidate.shop_badges,
+    highlights: candidate.highlights
+  };
+}
+
+/**
+ * A supplemental search must improve the evidence pool instead of replacing it.
+ * The returned pool is deliberately capped to the three product roles exposed by
+ * the UI, while ranking considers every unique product seen across search rounds.
+ */
+export function mergeAndRankModuleCandidates(
+  scene: SceneBrief,
+  module: ShoppingPlanModule,
+  previous: ProductCandidate[],
+  incoming: ProductCandidate[],
+  context?: CandidateRankingContext
+): CandidatePoolMergeResult {
+  const byId = new Map<string, ProductCandidate>();
+  for (const candidate of previous) {
+    if (!candidate.product_id) continue;
+    byId.set(candidate.product_id, { ...candidate, module_id: module.module_id });
+  }
+  for (const candidate of incoming) {
+    if (!candidate.product_id) continue;
+    const normalized = { ...candidate, module_id: module.module_id };
+    const existing = byId.get(candidate.product_id);
+    byId.set(candidate.product_id, existing ? mergeCandidateRecord(existing, normalized) : normalized);
+  }
+
+  const combined = [...byId.values()];
+  const ranked = rankCandidatesForModule(
+    scene,
+    module,
+    combined.map(asSearchResult),
+    context
+  );
+  const candidates = ranked.map((entry) => {
+    const richCandidate = byId.get(entry.item.product_id)!;
+    return {
+      ...richCandidate,
+      module_id: module.module_id,
+      recommendation_type: entry.recommendation_type,
+      highlights: uniqueStrings([...richCandidate.highlights, ...entry.reasons]).slice(0, 6)
+    };
+  });
+  const previousIds = new Set(previous.map((candidate) => candidate.product_id).filter(Boolean));
+  const incomingIds = new Set(incoming.map((candidate) => candidate.product_id).filter(Boolean));
+  const retainedIds = new Set(candidates.map((candidate) => candidate.product_id));
+
+  return {
+    candidates,
+    previous_count: previous.length,
+    incoming_count: incoming.length,
+    unique_count: combined.length,
+    added_product_ids: [...incomingIds].filter((productId) => !previousIds.has(productId)),
+    retained_product_ids: [...retainedIds].filter((productId) => previousIds.has(productId)),
+    dropped_product_ids: [...byId.keys()].filter((productId) => !retainedIds.has(productId))
+  };
 }

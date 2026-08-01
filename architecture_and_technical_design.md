@@ -815,6 +815,8 @@ DeepSeek 目前承担六类结构化任务：
 
 `workflow-runner` 把 `workflow_run_id`、`workflow_status`、`current_module_id`、`auto_continue`、`continuation_count` 和状态说明写入 Session。每轮最多排队一个外部工具任务；成功回填后继续下一模块，终态失败则形成失败轨迹并容错跳过，用户取消则暂停整轮自动推进。任务幂等键按会话、模块、搜索词和本轮运行 ID 构造，重复完成回执不会二次续跑。`workflow-recovery` 可由 Worker 空闲轮询、独立恢复进程或云端 Cron 触发；Repository 直接筛选无活跃工具任务或关联 Job 已终态的候选，按旧会话优先恢复，并隔离单个 Session 的恢复失败。它只重放已经持久化但尚未续跑的结果，再补排后续模块，不重新执行淘宝动作。浏览器只通过 SSE 和恢复轮询观察进度，并保留“查看推荐结果”的用户确认门槛。
 
+补搜采用跨轮次候选池，而不是“最后一次搜索覆盖前一次”。`candidate-ranker` 将已有 `ProductCandidate` 与本轮回填按 `product_id` 去重，合并完整字段后，用当前 Scene Brief、模块预算、搜索策略和 Agent 重排规则重新选择三档候选。`runtime/jobs` 在 DeepSeek 候选复盘前完成这次合并，因此模型评估的是完整证据池；`hosted.resolve` 再执行一次幂等合并，覆盖进程恢复和旧宿主兼容路径。`module_search_traces` 保留每轮关键词和原始返回量，同时单独记录最终候选数；补搜失败只追加失败 attempt，已有候选不会被清空。
+
 当 Runtime 决定 `complete_workflow` 时，`completion-review` 会生成方案级 `completion_report`：计算规划覆盖率、必需模块覆盖率、候选总量、薄弱候选池、预算压力、缺价模块和容错跳过，并保留最终 DeepSeek Runtime/规则停止理由。报告不触发额外模型请求，但把已有模型自主决策转化为可审计的产品结论；任何重搜或规划变更都会清除旧报告。
 
 完成报告不是只读终点。若存在未覆盖模块，用户可显式确认 `/api/agent/remediate`；服务端只重置报告列出的缺口模块及其旧失败决策，在 Session 锁保护下保留其他候选与购物清单，再交给同一 `workflow-runner` 续跑。这样恢复动作仍由用户授权，但后续模块选择、排队和停止判断继续由 Agent 完成。

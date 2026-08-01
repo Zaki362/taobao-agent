@@ -9,6 +9,7 @@ import {
   resolveHostedModuleSearchTask
 } from "@/lib/mcp/hosted";
 import { reviewModuleCandidatesWithAgent } from "@/lib/agent/candidate-reviewer";
+import { mergeAndRankModuleCandidates } from "@/lib/agent/candidate-ranker";
 import { isProductCandidate } from "@/lib/session/guards";
 import { persistSession } from "@/lib/session/repository";
 
@@ -260,6 +261,8 @@ function resultCandidates(result: Record<string, unknown>) {
 function updateRuntimeSearchTrace(
   state: SessionState,
   job: { payload: Record<string, unknown> },
+  incomingCount: number,
+  previousCandidateCount: number,
   candidates: ReturnType<typeof resultCandidates>
 ) {
   const moduleId = typeof job.payload.module_id === "string" ? job.payload.module_id : "";
@@ -276,8 +279,10 @@ function updateRuntimeSearchTrace(
         ? {
             ...attempt,
             status: "success" as const,
-            result_count: candidates.length,
-            reason: "本地执行器已完成真实淘宝搜索并回填候选。",
+            result_count: incomingCount,
+            reason: previousCandidateCount > 0
+              ? "本地执行器已完成补搜，并与已有候选池合并重排。"
+              : "本地执行器已完成真实淘宝搜索并生成候选池。",
             created_at: now
           }
         : attempt)
@@ -286,8 +291,10 @@ function updateRuntimeSearchTrace(
         {
           keyword,
           status: "success" as const,
-          result_count: candidates.length,
-          reason: "本地执行器已完成真实淘宝搜索并回填候选。",
+          result_count: incomingCount,
+          reason: previousCandidateCount > 0
+            ? "本地执行器已完成补搜，并与已有候选池合并重排。"
+            : "本地执行器已完成真实淘宝搜索并生成候选池。",
           created_at: now
         }
       ];
@@ -295,17 +302,27 @@ function updateRuntimeSearchTrace(
   state.module_search_traces[moduleId] = {
     module_id: moduleId,
     module_name: module.module_name,
-    status: candidates.length === 0 ? "failed" : review?.status === "ready" ? "ready" : "thin",
+    status: candidates.length === 0
+      ? "failed"
+      : previousCandidateCount > 0 && incomingCount > 0
+        ? "recovered"
+        : review?.status === "ready"
+          ? "ready"
+          : "thin",
     primary_keyword: previous?.primary_keyword || keyword,
     searched_keywords: [...new Set([...(previous?.searched_keywords ?? []), keyword])],
     attempts,
-    result_count: candidates.length,
+    result_count: attempts.reduce((sum, attempt) => sum + Math.max(0, attempt.result_count), 0),
     candidate_count: candidates.length,
     review_status: review?.status,
     review_summary: review?.summary,
-    recovery_keyword: review?.suggested_keyword,
+    recovery_keyword: previousCandidateCount > 0 ? keyword : review?.suggested_keyword,
     ai_decision_summary: candidates.length > 0
-      ? `「${module.module_name}」已由本地执行器回填 ${candidates.length} 个候选商品。`
+      ? previousCandidateCount > 0
+        ? incomingCount > 0
+          ? `「${module.module_name}」本轮补搜返回 ${incomingCount} 个商品，跨轮次合并重排后保留 ${candidates.length} 个候选。`
+          : `「${module.module_name}」本轮补搜未返回新商品，继续保留此前的 ${candidates.length} 个候选。`
+        : `「${module.module_name}」本轮返回 ${incomingCount} 个商品，重排后保留 ${candidates.length} 个候选。`
       : `「${module.module_name}」真实搜索已完成，但没有形成可用候选，本轮将跳过该模块。`,
     next_action: candidates.length > 0
       ? review?.next_action || "查看候选商品并按需确认详情。"
@@ -324,6 +341,7 @@ function markRuntimeSearchFailure(state: SessionState, job: { payload: Record<st
     : module.search_strategy?.primary_keyword || module.search_keyword || module.module_name;
   const now = new Date().toISOString();
   const previous = state.module_search_traces[moduleId];
+  const preservedCandidateCount = state.module_candidates[moduleId]?.length ?? 0;
   const attempts = (previous?.attempts ?? []).filter((attempt) => attempt.status !== "skipped");
   attempts.push({
     keyword,
@@ -336,14 +354,21 @@ function markRuntimeSearchFailure(state: SessionState, job: { payload: Record<st
   state.module_search_traces[moduleId] = {
     module_id: moduleId,
     module_name: module.module_name,
-    status: "failed",
+    status: preservedCandidateCount > 0 ? previous?.status ?? "thin" : "failed",
     primary_keyword: previous?.primary_keyword || keyword,
     searched_keywords: [...new Set([...(previous?.searched_keywords ?? []), keyword])],
     attempts,
-    result_count: 0,
-    candidate_count: 0,
-    ai_decision_summary: `「${module.module_name}」在自动重试后仍未完成，Agent 将跳过该模块避免阻塞。`,
-    next_action: "继续后续模块；用户可在结果页手动换词补搜。",
+    result_count: previous?.result_count ?? 0,
+    candidate_count: preservedCandidateCount,
+    review_status: previous?.review_status,
+    review_summary: previous?.review_summary,
+    recovery_keyword: previous?.recovery_keyword,
+    ai_decision_summary: preservedCandidateCount > 0
+      ? `「${module.module_name}」本轮补搜失败，已保留此前的 ${preservedCandidateCount} 个候选，不影响后续模块。`
+      : `「${module.module_name}」在自动重试后仍未完成，Agent 将跳过该模块避免阻塞。`,
+    next_action: preservedCandidateCount > 0
+      ? "继续使用已保留候选，并推进后续模块。"
+      : "继续后续模块；用户可在结果页手动换词补搜。",
     generated_at: previous?.generated_at ?? now,
     updated_at: now
   };
@@ -366,9 +391,23 @@ async function persistCompletedRuntimeJobResult(
   if (task.status === expectedTaskStatus) return false;
 
   if (job.job_type === "module_search") {
-    let candidates = resultCandidates(result);
+    const incomingCandidates = resultCandidates(result);
+    let candidates = incomingCandidates;
     const moduleId = typeof job.payload.module_id === "string" ? job.payload.module_id : "";
     const module = state.shopping_plan.modules.find((item) => item.module_id === moduleId);
+    const previousCandidateCount = state.module_candidates[moduleId]?.length ?? 0;
+    if (module) {
+      candidates = mergeAndRankModuleCandidates(
+        state.scene_brief,
+        module,
+        state.module_candidates[moduleId] ?? [],
+        incomingCandidates,
+        {
+          rerank_rules: state.shopping_plan.agent_directives.rerank_rules,
+          budget_guardrails: state.shopping_plan.execution_strategy.budget_guardrails
+        }
+      ).candidates;
+    }
     const assessment = module && candidates.length > 0
       ? await reviewModuleCandidatesWithAgent(state, module, candidates)
       : null;
@@ -386,7 +425,7 @@ async function persistCompletedRuntimeJobResult(
           ? "已从持久化结果恢复淘宝搜索候选"
           : "本地执行器已完成淘宝搜索"
     });
-    updateRuntimeSearchTrace(state, job, candidates);
+    updateRuntimeSearchTrace(state, job, incomingCandidates.length, previousCandidateCount, candidates);
   } else {
     resolveHostedAddToCartTask(state, {
       task_id: task.task_id,

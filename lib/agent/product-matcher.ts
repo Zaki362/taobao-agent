@@ -343,27 +343,37 @@ export async function runModuleSearch(
       });
     }
     const now = new Date().toISOString();
+    const previousTrace = state.module_search_traces[moduleId];
+    const queuedAttempt: ModuleSearchAttempt = {
+      keyword: searchIntent,
+      reason: backend === "local_executor"
+        ? "搜索任务已进入持久化队列，等待本地 Qoder/Taobao 执行器领取。"
+        : "当前处于 Codex 宿主代理模式，搜索任务已排队等待宿主执行。",
+      result_count: 0,
+      status: "skipped",
+      created_at: now
+    };
+    const previousAttempts = previousTrace?.attempts ?? [];
+    const attempts = previousAttempts.some((attempt) => attempt.keyword === searchIntent)
+      ? previousAttempts.map((attempt) => attempt.keyword === searchIntent ? queuedAttempt : attempt)
+      : [...previousAttempts, queuedAttempt];
+    const existingCandidateCount = state.module_candidates[moduleId]?.length ?? 0;
     state.module_search_traces[moduleId] = {
       module_id: module.module_id,
       module_name: module.module_name,
       status: "thin",
-      primary_keyword: searchIntent,
-      searched_keywords: [searchIntent],
-      attempts: [
-        {
-          keyword: searchIntent,
-          reason: backend === "local_executor"
-            ? "搜索任务已进入持久化队列，等待本地 Qoder/Taobao 执行器领取。"
-            : "当前处于 Codex 宿主代理模式，搜索任务已排队等待宿主执行。",
-          result_count: 0,
-          status: "skipped",
-          created_at: now
-        }
-      ],
-      result_count: 0,
-      candidate_count: state.module_candidates[moduleId]?.length ?? 0,
+      primary_keyword: previousTrace?.primary_keyword || searchIntent,
+      searched_keywords: [...new Set([...(previousTrace?.searched_keywords ?? []), searchIntent])],
+      attempts,
+      result_count: previousTrace?.result_count ?? 0,
+      candidate_count: existingCandidateCount,
+      review_status: previousTrace?.review_status,
+      review_summary: previousTrace?.review_summary,
+      recovery_keyword: previousTrace?.recovery_keyword,
       ai_decision_summary: backend === "local_executor"
-        ? `「${module.module_name}」搜索任务已持久化，执行器完成后会自动回填候选池。`
+        ? existingCandidateCount > 0
+          ? `「${module.module_name}」已有 ${existingCandidateCount} 个候选，补搜任务已持久化；新结果会与原候选合并重排。`
+          : `「${module.module_name}」搜索任务已持久化，执行器完成后会自动回填候选池。`
         : `「${module.module_name}」搜索任务已交给宿主代理，等待回填候选池。`,
       next_action: backend === "local_executor" ? "等待本地执行器回填事件。" : "等待宿主代理完成任务并刷新结果。",
       generated_at: state.module_search_traces[moduleId]?.generated_at ?? now,

@@ -7,6 +7,7 @@ import { isHostedExecutionTask, isProductCandidate } from "@/lib/session/guards"
 import { getLegacyHostedAccess } from "@/lib/auth/hosted-worker";
 import { advanceAgentWorkflow } from "@/lib/agent/workflow-runner";
 import { reviewModuleCandidatesWithAgent } from "@/lib/agent/candidate-reviewer";
+import { mergeAndRankModuleCandidates } from "@/lib/agent/candidate-ranker";
 
 function optionalString(value: unknown) {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
@@ -33,6 +34,18 @@ export async function POST(request: NextRequest) {
         ? body.candidates.filter(isProductCandidate)
         : [];
       const module = session.shopping_plan.modules.find((item) => item.module_id === task.module_id);
+      if (module) {
+        candidates = mergeAndRankModuleCandidates(
+          session.scene_brief,
+          module,
+          session.module_candidates[module.module_id] ?? [],
+          candidates,
+          {
+            rerank_rules: session.shopping_plan.agent_directives.rerank_rules,
+            budget_guardrails: session.shopping_plan.execution_strategy.budget_guardrails
+          }
+        ).candidates;
+      }
       const assessment = body.status !== "failed" && module && candidates.length > 0
         ? await reviewModuleCandidatesWithAgent(session, module, candidates)
         : null;

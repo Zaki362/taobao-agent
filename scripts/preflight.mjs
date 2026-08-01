@@ -322,6 +322,7 @@ function assertArchitectureContracts() {
   const hostedNextRoute = tryReadText("app/api/hosted/tasks/next/route.ts");
   const hostedResolveRoute = tryReadText("app/api/hosted/tasks/resolve/route.ts");
   const hostedWorkerStatusRoute = tryReadText("app/api/hosted/worker-status/route.ts");
+  const runtimeJobs = tryReadText("lib/runtime/jobs.ts");
   const sessionStore = tryReadText("lib/session/store.ts");
   const sessionGuards = tryReadText("lib/session/guards.ts");
   const scenarioIndex = tryReadText("lib/scenarios/index.ts");
@@ -380,6 +381,7 @@ function assertArchitectureContracts() {
     !hostedNextRoute ||
     !hostedResolveRoute ||
     !hostedWorkerStatusRoute ||
+    !runtimeJobs ||
     !sessionStore ||
     !sessionGuards ||
     !scenarioIndex ||
@@ -452,6 +454,19 @@ function assertArchitectureContracts() {
         matcher.includes("rerank_rules: state.shopping_plan.agent_directives.rerank_rules") &&
         matcher.includes("budget_guardrails: state.shopping_plan.execution_strategy.budget_guardrails"),
       message: "候选排序必须接入 AI 的 rerank_rules 与预算纪律，不能只靠静态词表排序"
+    },
+    {
+      ok:
+        ranker.includes("mergeAndRankModuleCandidates") &&
+        ranker.includes("previous_count") &&
+        ranker.includes("retained_product_ids") &&
+        runtimeJobs.includes("mergeAndRankModuleCandidates") &&
+        runtimeJobs.includes("previousCandidateCount") &&
+        runtimeJobs.includes("跨轮次合并重排") &&
+        mcpHosted.includes("mergeAndRankModuleCandidates") &&
+        hostedResolveRoute.includes("mergeAndRankModuleCandidates") &&
+        matcher.includes("previousTrace?.searched_keywords"),
+      message: "Agent 补搜必须合并并重排跨轮次候选，保留搜索历史与旧候选，不能使用末次结果覆盖"
     },
     {
       ok:

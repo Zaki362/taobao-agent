@@ -126,6 +126,136 @@ describe("server-managed Agent workflow", () => {
     expect(await localRuntimeRepository.claimJob(device, 30_000)).toBeNull();
   });
 
+  it("merges and reranks candidates across Agent-directed supplemental searches", async () => {
+    const sessionId = `session-workflow-candidate-merge-${Date.now()}`;
+    sessionFiles.add(sessionId);
+    const state = createSessionFixture({ session_id: sessionId });
+    state.shopping_plan.agent_directives.search_depth = "标准搜索";
+    state.shopping_plan.agent_directives.autonomy_level = "平衡执行";
+    await localRuntimeRepository.saveSession(state);
+
+    const started = await advanceAgentWorkflow(sessionId, device.user_id, {
+      start: true,
+      trigger: "user_start"
+    });
+    expect(started.outcome).toBe("queued");
+    const firstJob = await localRuntimeRepository.claimJob(device, 30_000);
+    const moduleId = String(firstJob!.payload.module_id);
+    const moduleName = String(firstJob!.payload.module_name);
+    const firstCandidate: ProductCandidate = {
+      ...candidates(moduleId, moduleName)[0],
+      product_id: `${moduleId}-first-round-quality`,
+      title: `${moduleName} 官方旗舰店 原厂 高清 稳定 专用`,
+      price: 29,
+      shop_name: "官方测试旗舰店"
+    };
+    await applyCompletedRuntimeJob(firstJob!.id, device, {
+      summary: "首轮只返回一个高质量候选",
+      candidates: [firstCandidate]
+    });
+
+    const retry = await advanceAgentWorkflow(sessionId, device.user_id, {
+      trigger: "job_completed"
+    });
+    expect(retry).toMatchObject({
+      outcome: "queued",
+      decision: { action: "retry_module", module_id: moduleId }
+    });
+    const secondJob = await localRuntimeRepository.claimJob(device, 30_000);
+    expect(secondJob?.payload.module_id).toBe(moduleId);
+    expect(secondJob?.payload.keyword).not.toBe(firstJob?.payload.keyword);
+    const secondRound = candidates(moduleId, moduleName).map((candidate, index) => ({
+      ...candidate,
+      product_id: `${moduleId}-second-round-${index}`,
+      title: `${moduleName} 补搜候选 ${index + 1}`,
+      price: 139 + index * 70,
+      shop_name: "补搜测试店"
+    }));
+    await applyCompletedRuntimeJob(secondJob!.id, device, {
+      summary: "第二轮补齐档位候选",
+      candidates: secondRound
+    });
+
+    const restored = await localRuntimeRepository.getSession(sessionId, device.user_id);
+    const finalCandidates = restored?.module_candidates[moduleId] ?? [];
+    const trace = restored?.module_search_traces[moduleId];
+    expect(finalCandidates).toHaveLength(3);
+    expect(finalCandidates.some((candidate) => candidate.product_id === firstCandidate.product_id)).toBe(true);
+    expect(finalCandidates.some((candidate) => candidate.product_id.startsWith(`${moduleId}-second-round-`))).toBe(true);
+    expect(new Set(finalCandidates.map((candidate) => candidate.recommendation_type)).size).toBe(3);
+    expect(trace?.searched_keywords).toHaveLength(2);
+    expect(trace?.attempts.filter((attempt) => attempt.status === "success")).toHaveLength(2);
+    expect(trace?.result_count).toBe(4);
+    expect(trace?.candidate_count).toBe(3);
+    expect(trace?.status).toBe("recovered");
+    expect(trace?.ai_decision_summary).toContain("跨轮次合并重排");
+
+    let continuation = await advanceAgentWorkflow(sessionId, device.user_id, {
+      trigger: "job_completed"
+    });
+    while (continuation.outcome === "queued") {
+      const nextJob = await localRuntimeRepository.claimJob(device, 30_000);
+      const nextModuleId = String(nextJob!.payload.module_id);
+      const nextModuleName = String(nextJob!.payload.module_name);
+      await applyCompletedRuntimeJob(nextJob!.id, device, {
+        summary: "完成补搜合并测试的剩余模块",
+        candidates: candidates(nextModuleId, nextModuleName)
+      });
+      continuation = await advanceAgentWorkflow(sessionId, device.user_id, {
+        trigger: "job_completed"
+      });
+    }
+    expect(continuation.outcome).toBe("completed");
+  });
+
+  it("preserves the existing candidate pool when a supplemental search fails", async () => {
+    const sessionId = `session-workflow-candidate-retry-failure-${Date.now()}`;
+    sessionFiles.add(sessionId);
+    const state = createSessionFixture({ session_id: sessionId });
+    state.shopping_plan.agent_directives.search_depth = "标准搜索";
+    state.shopping_plan.agent_directives.autonomy_level = "平衡执行";
+    await localRuntimeRepository.saveSession(state);
+
+    await advanceAgentWorkflow(sessionId, device.user_id, {
+      start: true,
+      trigger: "user_start"
+    });
+    const firstJob = await localRuntimeRepository.claimJob(device, 30_000);
+    const moduleId = String(firstJob!.payload.module_id);
+    const moduleName = String(firstJob!.payload.module_name);
+    const preservedCandidate = candidates(moduleId, moduleName)[0];
+    await applyCompletedRuntimeJob(firstJob!.id, device, {
+      summary: "首轮形成一个候选",
+      candidates: [preservedCandidate]
+    });
+
+    const retry = await advanceAgentWorkflow(sessionId, device.user_id, {
+      trigger: "job_completed"
+    });
+    expect(retry.decision?.action).toBe("retry_module");
+    const retryJob = await localRuntimeRepository.claimJob(device, 30_000);
+    await applyFailedRuntimeJob(retryJob!.id, device, "补搜工具终态失败", { retryable: false });
+
+    const restored = await localRuntimeRepository.getSession(sessionId, device.user_id);
+    expect(restored?.module_candidates[moduleId].map((candidate) => candidate.product_id)).toEqual([
+      preservedCandidate.product_id
+    ]);
+    expect(restored?.module_search_traces[moduleId]).toMatchObject({
+      status: "thin",
+      candidate_count: 1
+    });
+    expect(restored?.module_search_traces[moduleId].attempts.at(-1)).toMatchObject({
+      keyword: retryJob?.payload.keyword,
+      status: "error",
+      result_count: 0
+    });
+    expect(restored?.module_search_traces[moduleId].ai_decision_summary).toContain("已保留此前的 1 个候选");
+
+    restored!.agent_runtime.auto_continue = false;
+    restored!.agent_runtime.workflow_status = "paused";
+    await localRuntimeRepository.saveSession(restored!);
+  });
+
   it("recovers only uncovered modules while preserving completed candidates", async () => {
     const sessionId = `session-workflow-recover-${Date.now()}`;
     sessionFiles.add(sessionId);

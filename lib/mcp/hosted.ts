@@ -1,5 +1,6 @@
 import { HostedExecutionTask, ModuleCandidateReview, ProductCandidate, SelectedItem, SessionState } from "@/lib/session/types";
 import { reviewModuleCandidates } from "@/lib/agent/candidate-reviewer";
+import { mergeAndRankModuleCandidates } from "@/lib/agent/candidate-ranker";
 import { refreshMarketFeedback } from "@/lib/agent/market-feedback";
 import { summarizeLogText } from "@/lib/mcp/logging";
 
@@ -193,12 +194,24 @@ export function resolveHostedModuleSearchTask(
 
   if (input.status === "completed") {
     const moduleId = task.module_id ?? "";
-    const candidates = (input.candidates ?? []).map((candidate) => ({
+    const incomingCandidates = (input.candidates ?? []).map((candidate) => ({
       ...candidate,
       module_id: moduleId || candidate.module_id
     }));
-    state.module_candidates[moduleId] = candidates;
     const module = state.shopping_plan.modules.find((item) => item.module_id === task.module_id);
+    const candidates = module
+      ? mergeAndRankModuleCandidates(
+          state.scene_brief,
+          module,
+          state.module_candidates[moduleId] ?? [],
+          incomingCandidates,
+          {
+            rerank_rules: state.shopping_plan.agent_directives.rerank_rules,
+            budget_guardrails: state.shopping_plan.execution_strategy.budget_guardrails
+          }
+        ).candidates
+      : incomingCandidates;
+    state.module_candidates[moduleId] = candidates;
     if (module) {
       state.module_reviews[module.module_id] = input.review ?? reviewModuleCandidates(state, module, candidates);
     }
