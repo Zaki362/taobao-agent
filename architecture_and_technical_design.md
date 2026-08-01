@@ -815,6 +815,8 @@ DeepSeek 目前承担六类结构化任务：
 
 `workflow-runner` 把 `workflow_run_id`、`workflow_status`、`current_module_id`、`auto_continue`、`continuation_count` 和状态说明写入 Session。每轮最多排队一个外部工具任务；成功回填后继续下一模块，终态失败则形成失败轨迹并容错跳过，用户取消则暂停整轮自动推进。任务幂等键按会话、模块、搜索词和本轮运行 ID 构造，重复完成回执不会二次续跑。`workflow-recovery` 可由 Worker 空闲轮询、独立恢复进程或云端 Cron 触发；Repository 直接筛选无活跃工具任务或关联 Job 已终态的候选，按旧会话优先恢复，并隔离单个 Session 的恢复失败。它只重放已经持久化但尚未续跑的结果，再补排后续模块，不重新执行淘宝动作。浏览器只通过 SSE 和恢复轮询观察进度，并保留“查看推荐结果”的用户确认门槛。
 
+当 Runtime 决定 `complete_workflow` 时，`completion-review` 会生成方案级 `completion_report`：计算规划覆盖率、必需模块覆盖率、候选总量、薄弱候选池、预算压力、缺价模块和容错跳过，并保留最终 DeepSeek Runtime/规则停止理由。报告不触发额外模型请求，但把已有模型自主决策转化为可审计的产品结论；任何重搜或规划变更都会清除旧报告。
+
 在 PostgreSQL 模式下，`withWorkflowSessionLock` 使用 `pg_try_advisory_xact_lock` 对同一 Session 的一次推进加互斥；Executor 结果回填使用有超时的 blocking advisory lock，保证重复完成、失败和取消回执串行写入。数据库层通过 `AsyncLocalStorage` 将锁内所有 repository 查询绑定到同一个 `PoolClient`，因此状态读取、决策记录、任务幂等创建、回填和事件写入随事务一起提交或回滚。锁不包住淘宝工具执行；平衡/探索档位下只可能包含一次上限 8 秒的 DeepSeek 下一动作判断，避免数据库连接被桌面自动化长期占用。
 
 每次动作都会写入 session 的 `agent_decisions`，保存来源、置信度、理由和证据。规划顺序与候选复盘可以来自 DeepSeek，后端负责动作白名单、重复调用抑制、失败跳过和高风险确认，因此模型获得了真实的执行选择空间，但不能越过交易和隐私边界。

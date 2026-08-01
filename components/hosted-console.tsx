@@ -505,6 +505,46 @@ export function HostedConsole() {
                   </CardContent>
                 </Card>
 
+                {selectedSession.completion_report ? (
+                  <Card className="section-card">
+                    <CardHeader>
+                      <div className="flex flex-wrap items-start justify-between gap-3">
+                        <div>
+                          <CardTitle>Agent 完成质量审计</CardTitle>
+                          <p className="mt-2 text-sm text-muted-foreground">记录本轮为什么停止，以及真实候选是否覆盖了用户确认的方案。</p>
+                        </div>
+                        <Badge variant={selectedSession.completion_report.status === "ready" ? "success" : selectedSession.completion_report.status === "needs_attention" ? "danger" : "secondary"}>
+                          {selectedSession.completion_report.status === "ready" ? "方案可用" : selectedSession.completion_report.status === "needs_attention" ? "仍有缺口" : "部分可用"}
+                        </Badge>
+                      </div>
+                    </CardHeader>
+                    <CardContent className="space-y-4">
+                      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                        <InfoBlock label="规划覆盖" value={`${selectedSession.completion_report.covered_module_ids.length}/${selectedSession.completion_report.total_modules}`} />
+                        <InfoBlock label="必需覆盖" value={`${selectedSession.completion_report.critical_covered_module_ids.length}/${selectedSession.completion_report.critical_module_ids.length}`} />
+                        <InfoBlock label="候选总数" value={`${selectedSession.completion_report.total_candidates} 件`} />
+                        <InfoBlock label="结束决策源" value={selectedSession.completion_report.source === "deepseek_runtime" ? "DeepSeek Runtime" : "规则策略"} />
+                      </div>
+                      <div className="rounded-[20px] border border-primary/10 bg-primary/[0.035] p-4 text-sm">
+                        <p className="font-medium">{selectedSession.completion_report.summary}</p>
+                        <p className="mt-2 text-xs leading-5 text-muted-foreground">停止理由：{selectedSession.completion_report.stop_reason}</p>
+                      </div>
+                      {selectedSession.completion_report.caveats.length > 0 ? (
+                        <div className="grid gap-3 md:grid-cols-2">
+                          <div className="panel-muted p-4 text-xs leading-6 text-muted-foreground">
+                            <p className="font-medium text-foreground">当前缺口</p>
+                            {selectedSession.completion_report.caveats.map((item) => <p key={item} className="mt-1">· {item}</p>)}
+                          </div>
+                          <div className="panel-muted p-4 text-xs leading-6 text-muted-foreground">
+                            <p className="font-medium text-foreground">建议动作</p>
+                            {selectedSession.completion_report.next_steps.map((item) => <p key={item} className="mt-1">· {item}</p>)}
+                          </div>
+                        </div>
+                      ) : null}
+                    </CardContent>
+                  </Card>
+                ) : null}
+
                 <Card className="section-card">
                   <CardHeader>
                     <CardTitle>Agent Runtime 2.0</CardTitle>

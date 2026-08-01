@@ -350,6 +350,7 @@ export function applyBudgetReallocationSuggestion(
 
   state.last_action = refinementImpact.quick_action;
   state.last_refinement = refinementImpact;
+  state.completion_report = undefined;
   state.agent_runtime.workflow_status = "idle";
   state.agent_runtime.auto_continue = false;
   state.agent_runtime.current_module_id = undefined;

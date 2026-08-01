@@ -4,6 +4,7 @@ import {
   pendingAgentDecision,
   recordAgentDecision
 } from "@/lib/agent/decision-engine";
+import { buildAgentCompletionReport } from "@/lib/agent/completion-review";
 import { runModuleSearch } from "@/lib/agent/product-matcher";
 import { decideNextAgentActionV2 } from "@/lib/agent/runtime-v2";
 import { getRuntimeRepository } from "@/lib/runtime";
@@ -71,6 +72,8 @@ async function emitWorkflowEvent(
       current_module_id: state.agent_runtime.current_module_id,
       decision_id: decision?.decision_id,
       decision_action: decision?.action,
+      completion_status: state.completion_report?.status,
+      completion_coverage_ratio: state.completion_report?.coverage_ratio,
       message: state.agent_runtime.workflow_message
     }
   });
@@ -101,6 +104,7 @@ async function executeAdvance(
       state.agent_runtime.workflow_run_id = randomUUID();
       state.agent_runtime.continuation_count = 0;
       state.agent_runtime.used_tool_calls = 0;
+      state.completion_report = undefined;
       state.agent_decisions = state.agent_decisions.filter(
         (decision) =>
           Boolean(decision.consumed_at) ||
@@ -178,6 +182,7 @@ async function executeAdvance(
       return { state, decision, outcome: "waiting" };
     }
 
+    state.completion_report = buildAgentCompletionReport(state, decision);
     transition(state, {
       status: "completed",
       message: decision.reason || "所有规划模块均已处理完成",

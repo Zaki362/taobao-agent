@@ -52,6 +52,7 @@ export async function GET() {
         market_feedback: session.market_feedback,
         agent_decisions: session.agent_decisions.slice(-MAX_SESSION_LIST_AGENT_DECISIONS),
         agent_runtime: session.agent_runtime,
+        completion_report: session.completion_report,
         tool_logs: session.tool_logs.slice(0, MAX_SESSION_LIST_TOOL_LOGS),
         hosted_tasks: session.hosted_tasks.slice(0, MAX_SESSION_LIST_HOSTED_TASKS)
       }));

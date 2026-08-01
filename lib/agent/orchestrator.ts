@@ -283,6 +283,7 @@ export async function updateModuleSearchStrategy(
   module.search_keyword = primaryKeyword;
   module.search_strategy = nextStrategy;
   module.status = "refined";
+  state.completion_report = undefined;
   delete state.module_candidates[moduleId];
   delete state.module_reviews[moduleId];
   delete state.module_search_traces[moduleId];

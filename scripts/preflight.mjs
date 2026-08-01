@@ -204,6 +204,7 @@ function assertRequiredFiles() {
     "components/dashboard-workflow.ts",
     "lib/agent/directives.ts",
     "lib/agent/decision-engine.ts",
+    "lib/agent/completion-review.ts",
     "lib/agent/runtime-v2.ts",
     "lib/agent/orchestrator.ts",
     "lib/agent/planner.ts",
@@ -278,6 +279,8 @@ function assertArchitectureContracts() {
   const reviewer = tryReadText("lib/agent/candidate-reviewer.ts");
   const directives = tryReadText("lib/agent/directives.ts");
   const decisionEngine = tryReadText("lib/agent/decision-engine.ts");
+  const completionReview = tryReadText("lib/agent/completion-review.ts");
+  const workflowRunner = tryReadText("lib/agent/workflow-runner.ts");
   const marketFeedback = tryReadText("lib/agent/market-feedback.ts");
   const orchestrator = tryReadText("lib/agent/orchestrator.ts");
   const refiner = tryReadText("lib/agent/refiner.ts");
@@ -333,6 +336,8 @@ function assertArchitectureContracts() {
     !reviewer ||
     !directives ||
     !decisionEngine ||
+    !completionReview ||
+    !workflowRunner ||
     !marketFeedback ||
     !orchestrator ||
     !refiner ||
@@ -391,6 +396,19 @@ function assertArchitectureContracts() {
         releaseAudit.includes('"legacy_hosted_worker"') &&
         releaseAudit.includes("HOSTED_WORKER_TOKEN"),
       message: "正式 local_executor 路径必须停止轮询旧宿主状态，并在 production 关闭 legacy hosted Worker 通道"
+    },
+    {
+      ok:
+        types.includes("AgentCompletionReport") &&
+        types.includes("completion_report") &&
+        types.includes("uncovered_module_ids") &&
+        completionReview.includes("buildAgentCompletionReport") &&
+        completionReview.includes("critical_coverage_ratio") &&
+        workflowRunner.includes("buildAgentCompletionReport") &&
+        dashboardResults.includes("Agent 完成报告") &&
+        hostedConsole.includes("Agent 完成质量审计") &&
+        sessionsRoute.includes("completion_report: session.completion_report"),
+      message: "Agent 结束搜索时必须生成可持久化的方案级完成报告，并在推荐页与执行台展示覆盖度和停止理由"
     },
     {
       ok:

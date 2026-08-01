@@ -323,6 +323,7 @@ export async function runModuleSearch(
   if (!module) {
     throw new Error("module not found");
   }
+  state.completion_report = undefined;
 
   const searchKeywordQueue = buildSearchKeywordQueue(state, module, options?.keywordOverride);
   const searchIntent = searchKeywordQueue[0] || searchIntentForModule(state.scene_brief, module);

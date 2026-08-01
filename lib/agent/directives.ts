@@ -45,6 +45,7 @@ function profileDirectives(profile: AgentDirectiveProfile): AgentDirectives {
 export function applyAgentDirectiveProfile(state: SessionState, profile: AgentDirectiveProfile) {
   const directives = profileDirectives(profile);
   state.shopping_plan.agent_directives = directives;
+  state.completion_report = undefined;
   const moduleCount = Math.max(1, state.shopping_plan.modules.length);
   state.agent_runtime.max_tool_calls = profile === "conservative"
     ? Math.max(moduleCount, 6)

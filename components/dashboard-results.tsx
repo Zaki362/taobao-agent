@@ -101,6 +101,7 @@ export function ResultsPage({
     (suggestion) => suggestion.from_module_id === selectedModuleId || suggestion.to_module_id === selectedModuleId
   );
   const selectedTypeCount = new Set(selectedProducts.map((product) => product.recommendation_type)).size;
+  const completionReport = session.completion_report;
   const sceneLabel = session.current_scene_label || session.scene_brief.scene_type || "当前场景";
   const aiPlanningLabel =
     session.deepseek_status === "connected"
@@ -247,6 +248,46 @@ export function ResultsPage({
       </div>
 
       <div className="space-y-5 xl:sticky xl:top-6">
+        {completionReport ? (
+          <Card className="section-card border-primary/15">
+            <CardHeader>
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <p className="label-text">本轮搜索验收</p>
+                  <CardTitle className="mt-2">Agent 完成报告</CardTitle>
+                </div>
+                <Badge variant={completionReport.status === "ready" ? "success" : completionReport.status === "needs_attention" ? "danger" : "secondary"}>
+                  {completionReport.status === "ready" ? "方案可用" : completionReport.status === "needs_attention" ? "仍有缺口" : "部分可用"}
+                </Badge>
+              </div>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <p className="text-sm leading-6 text-muted-foreground">{completionReport.summary}</p>
+              <div className="grid grid-cols-2 gap-3">
+                <InfoBlock
+                  label="必需模块覆盖"
+                  value={`${completionReport.critical_covered_module_ids.length}/${completionReport.critical_module_ids.length}`}
+                />
+                <InfoBlock label="候选总数" value={`${completionReport.total_candidates} 件`} />
+              </div>
+              <div className="rounded-[18px] bg-secondary/45 px-4 py-3 text-xs leading-5 text-muted-foreground">
+                <p className="font-medium text-foreground">停止理由</p>
+                <p className="mt-1">{completionReport.stop_reason}</p>
+                <p className="mt-2">决策来源：{completionReport.source === "deepseek_runtime" ? "DeepSeek Runtime" : "规则策略"}</p>
+              </div>
+              {completionReport.caveats.length > 0 ? (
+                <details className="rounded-[18px] border border-border/80 bg-white px-4 py-3">
+                  <summary className="cursor-pointer text-xs font-medium">查看缺口与下一步</summary>
+                  <div className="mt-3 space-y-2 text-xs leading-5 text-muted-foreground">
+                    {completionReport.caveats.map((item) => <p key={item}>· {item}</p>)}
+                    {completionReport.next_steps.map((item) => <p key={item} className="text-foreground">下一步：{item}</p>)}
+                  </div>
+                </details>
+              ) : null}
+            </CardContent>
+          </Card>
+        ) : null}
+
         <Card className="section-card">
           <CardHeader>
             <CardTitle>当前摘要</CardTitle>

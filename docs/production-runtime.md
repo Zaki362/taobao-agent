@@ -157,6 +157,8 @@ pending -> leased -> running -> completed
 
 `lib/agent/workflow-runner.ts` 是正式搜索阶段的推进器。它对单进程内同一 Session 做互斥，并依赖持久任务幂等键抵御重复入队；每次只允许一个淘宝模块任务处于等待执行状态。用户取消任务会关闭自动续跑，终态工具失败则记录错误、跳过当前模块并继续下一模块。`workflow-recovery.ts` 与受 `SCENECART_CRON_SECRET` 保护的 `/api/internal/workflow-recovery` 补偿“Job 已提交结果但续跑尚未触发”的进程中断窗口。
 
+工作流结束时会生成持久化的 `completion_report`，按必需模块覆盖率、候选总数、候选池复盘、价格压力、无价格样本和容错跳过形成 `ready / partial / needs_attention` 结论。报告复用最终 DeepSeek Runtime 或规则决策的停止理由，不增加额外慢模型调用；重新搜索、调整规划、修改关键词或切换执行档位会立即使旧报告失效。
+
 `RUNTIME_STORE=postgres` 时，每次推进还会获取基于 Session ID 的 PostgreSQL transaction-level advisory lock。锁内的 Session 读取、Agent 决策落盘、Job 创建和事件写入通过 `AsyncLocalStorage` 复用同一数据库 client，并在同一事务提交；竞争实例立即返回等待状态，不会重复创建下一模块。Executor 的成功、失败和取消回填也使用同一把锁，避免重复回执用旧 Session 快照覆盖下一步任务。锁不覆盖 Qoder/Taobao 的长时间执行；平衡/探索档位下只可能额外包含一次有界的 DeepSeek 下一动作判断，常规 chat 默认 8 秒、复杂 reasoner 默认 15 秒。
 
 每个模块获得真实候选后，`market-feedback` 会基于有效价格样本计算模块预算压力、参考入手价和跨模块余量。该结果会进入下一动作 prompt：平衡/探索档位可以在候选整体超预算时提出一次未尝试过的性价比补搜词。预算调拨最多按模块预算的 15% 生成总额守恒的建议，始终标记为“需要用户确认”，不会静默改写已经确认的购物规划。

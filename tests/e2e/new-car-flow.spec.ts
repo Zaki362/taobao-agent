@@ -221,21 +221,46 @@ test("authenticated new-car workflow reaches recommendations through the durable
       agent_runtime: { continuation_count: number; auto_continue: boolean };
       shopping_plan: { modules: Array<{ module_id: string }> };
       module_candidates: Record<string, unknown[]>;
+      completion_report: {
+        status: string;
+        total_modules: number;
+        covered_module_ids: string[];
+        stop_reason: string;
+      };
     };
     expect(completedState.agent_runtime.auto_continue).toBe(false);
     expect(completedState.agent_runtime.continuation_count).toBeGreaterThanOrEqual(
       completedState.shopping_plan.modules.length
     );
     expect(Object.keys(completedState.module_candidates)).toHaveLength(completedState.shopping_plan.modules.length);
+    expect(completedState.completion_report.total_modules).toBe(completedState.shopping_plan.modules.length);
+    expect(completedState.completion_report.covered_module_ids).toHaveLength(completedState.shopping_plan.modules.length);
+    expect(completedState.completion_report.stop_reason.length).toBeGreaterThan(0);
 
     await page.goto("/?resume=1");
     await expect(page.getByText("搜索执行摘要")).toBeVisible();
     await expect(page.getByRole("button", { name: "查看推荐结果" })).toBeEnabled();
     await page.getByRole("button", { name: "查看推荐结果" }).click();
     await expect(page.getByText(/E2E 真实链路候选/).first()).toBeVisible();
+    await expect(page.getByText("Agent 完成报告")).toBeVisible();
     await expect(page.getByText("本地执行器", { exact: false }).first()).toBeVisible();
     await expect(page.getByText(/\[[^\]]+\] local_executor/).first()).toBeVisible();
     await expect(page.getByText(/SUCCESS · 0ms/).first()).toBeVisible();
+
+    const completedSessionListResponse = await page.request.get("/api/sessions");
+    const completedSessionList = await completedSessionListResponse.json() as {
+      sessions: Array<{
+        session_id: string;
+        completion_report?: { total_modules: number; stop_reason: string };
+      }>;
+    };
+    const completedSessionSummary = completedSessionList.sessions.find(
+      (session) => session.session_id === persistedSessionId
+    );
+    expect(completedSessionSummary?.completion_report?.total_modules).toBe(
+      completedState.shopping_plan.modules.length
+    );
+    expect(completedSessionSummary?.completion_report?.stop_reason.length).toBeGreaterThan(0);
 
     page.once("dialog", (dialog) => dialog.accept());
     await page.getByRole("button", { name: "加入购物车" }).first().click();
@@ -257,6 +282,7 @@ test("authenticated new-car workflow reaches recommendations through the durable
 
     await page.goto("/hosted");
     await expect(page.getByText("Agent Runtime 2.0")).toBeVisible();
+    await expect(page.getByText("Agent 完成质量审计")).toBeVisible();
     await expect(page.getByText("运行健康诊断")).toBeVisible();
     await expect(page.getByText("真实市场反馈")).toBeVisible();
     await expect(page.getByText(/已观察：\d+\/\d+ 个模块/)).toBeVisible();

@@ -87,6 +87,11 @@ describe("server-managed Agent workflow", () => {
     expect(advance.outcome).toBe("completed");
     expect(restored?.agent_runtime.workflow_status).toBe("completed");
     expect(restored?.agent_runtime.auto_continue).toBe(false);
+    expect(restored?.completion_report).toMatchObject({
+      status: "ready",
+      critical_coverage_ratio: 1
+    });
+    expect(restored?.completion_report?.total_candidates).toBe(state.shopping_plan.modules.length * 3);
     expect(completedJobs).toBe(state.shopping_plan.modules.length);
     expect(Object.keys(restored?.module_candidates ?? {})).toHaveLength(state.shopping_plan.modules.length);
     expect(restored?.tool_logs.filter(
@@ -146,6 +151,7 @@ describe("server-managed Agent workflow", () => {
 
     expect(restarted.outcome).toBe("queued");
     expect(restored?.agent_runtime.used_tool_calls).toBe(1);
+    expect(restored?.completion_report).toBeUndefined();
     expect(queuedJob).not.toBeNull();
     expect(queuedJob?.payload.module_id).toBe(state.shopping_plan.modules[0].module_id);
   });

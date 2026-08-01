@@ -146,6 +146,7 @@ export async function runRefiner(state: SessionState, action: QuickAction) {
 
   const impacted = selectImpactedModules(previousModules, state.shopping_plan.modules, action);
   state.last_refinement = impacted;
+  state.completion_report = undefined;
 
   for (const moduleId of [...impacted.impacted_modules, ...impacted.removed_modules]) {
     delete state.module_candidates[moduleId];

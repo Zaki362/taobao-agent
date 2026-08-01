@@ -1,4 +1,5 @@
 import {
+  AgentCompletionReport,
   ExecutionMode,
   AgentDecision,
   HostedExecutionTask,
@@ -74,6 +75,43 @@ export function isAgentDecision(value: unknown): value is AgentDecision {
       (typeof value.decision_latency_ms === "number" && Number.isFinite(value.decision_latency_ms))) &&
     (value.consumed_at === undefined || typeof value.consumed_at === "string") &&
     typeof value.created_at === "string"
+  );
+}
+
+export function isAgentCompletionReport(value: unknown): value is AgentCompletionReport {
+  if (!isRecord(value)) return false;
+  const validStatus = value.status === "ready" || value.status === "partial" || value.status === "needs_attention";
+  const validSource = value.source === "deepseek_runtime" || value.source === "policy";
+  const numberFields = [
+    value.total_modules,
+    value.total_candidates,
+    value.coverage_ratio,
+    value.critical_coverage_ratio
+  ];
+  const listFields = [
+    value.covered_module_ids,
+    value.uncovered_module_ids,
+    value.critical_module_ids,
+    value.critical_covered_module_ids,
+    value.skipped_module_ids,
+    value.thin_module_ids,
+    value.budget_pressure_module_ids,
+    value.unpriced_module_ids,
+    value.strengths,
+    value.caveats,
+    value.next_steps
+  ];
+
+  return (
+    validStatus &&
+    validSource &&
+    numberFields.every((item) => typeof item === "number" && Number.isFinite(item)) &&
+    listFields.every(isStringArray) &&
+    (value.workflow_run_id === undefined || typeof value.workflow_run_id === "string") &&
+    (value.decision_id === undefined || typeof value.decision_id === "string") &&
+    typeof value.stop_reason === "string" &&
+    typeof value.summary === "string" &&
+    typeof value.generated_at === "string"
   );
 }
 
@@ -355,6 +393,7 @@ export function isRenderableSessionState(value: unknown): value is SessionState 
     isMarketFeedback(value.market_feedback) &&
     Array.isArray(value.agent_decisions) &&
     isAgentRuntimeState(value.agent_runtime) &&
+    (value.completion_report === undefined || isAgentCompletionReport(value.completion_report)) &&
     Array.isArray(value.hosted_tasks) &&
     isExecutionMode(value.execution_mode) &&
     isStringArray(value.permissions_scope) &&

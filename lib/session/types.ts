@@ -289,6 +289,33 @@ export interface AgentRuntimeState {
   initialized_at: string;
 }
 
+export type AgentCompletionStatus = "ready" | "partial" | "needs_attention";
+
+export interface AgentCompletionReport {
+  status: AgentCompletionStatus;
+  source: "deepseek_runtime" | "policy";
+  workflow_run_id?: string;
+  decision_id?: string;
+  total_modules: number;
+  covered_module_ids: string[];
+  uncovered_module_ids: string[];
+  critical_module_ids: string[];
+  critical_covered_module_ids: string[];
+  skipped_module_ids: string[];
+  thin_module_ids: string[];
+  budget_pressure_module_ids: string[];
+  unpriced_module_ids: string[];
+  total_candidates: number;
+  coverage_ratio: number;
+  critical_coverage_ratio: number;
+  stop_reason: string;
+  summary: string;
+  strengths: string[];
+  caveats: string[];
+  next_steps: string[];
+  generated_at: string;
+}
+
 export type RefinementModuleDecisionType = "needs_search" | "reused" | "removed";
 
 export interface RefinementModuleDecision {
@@ -369,6 +396,7 @@ export interface SessionState {
   market_feedback: MarketFeedback;
   agent_decisions: AgentDecision[];
   agent_runtime: AgentRuntimeState;
+  completion_report?: AgentCompletionReport;
   selected_items: SelectedItem[];
   tool_logs: MCPToolLog[];
   hosted_tasks: HostedExecutionTask[];
