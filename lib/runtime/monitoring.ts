@@ -34,6 +34,12 @@ interface RuntimeHealthInput {
     calls: number;
     connected: number;
     fallback: number;
+    tasks?: Array<{
+      task: string;
+      calls: number;
+      p95_duration_ms: number;
+      last_reason?: string;
+    }>;
   };
   workflowRecovery?: {
     configured: boolean;
@@ -174,6 +180,29 @@ export function evaluateRuntimeHealth(input: RuntimeHealthInput) {
       "模型 fallback 比例偏高",
       `${input.llm.calls} 次模型任务中有 ${input.llm.fallback} 次使用 fallback。`,
       "按任务查看 last_reason，优先优化高延迟或结构校验失败的 Prompt。"
+    ));
+  }
+
+  const slowTaskThresholds: Record<string, number> = {
+    parse_scene: 12_000,
+    personalize_template: 18_000,
+    refine_plan: 16_000,
+    review_candidates: 7_000,
+    review_plan: 5_000,
+    decide_next_action: 7_000,
+    explain_product_fit: 5_000
+  };
+  for (const task of input.llm.tasks ?? []) {
+    const threshold = slowTaskThresholds[task.task];
+    if (!threshold || task.calls < 3 || task.p95_duration_ms < threshold) continue;
+    incidents.push(incident(
+      `llm_latency_${task.task}`,
+      "warning",
+      `模型任务 ${task.task} 响应偏慢`,
+      `${task.calls} 次调用的 P95 耗时为 ${Math.round(task.p95_duration_ms / 1_000)} 秒，已接近该任务的等待上限。`,
+      task.last_reason === "timeout"
+        ? "检查 DeepSeek 网络与模型选择；不要直接放大超时，先确认 Prompt 体积和响应 schema。"
+        : "检查该任务 Prompt、模型选择与返回体大小，并结合最近 fallback 原因定位。"
     ));
   }
 

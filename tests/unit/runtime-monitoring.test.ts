@@ -83,6 +83,36 @@ describe("runtime monitoring", () => {
     expect(health.incidents[0]?.code).toBe("agent_guardrail_rejections");
   });
 
+  it("reports sustained task-level model latency without reacting to one sample", () => {
+    const smallSample = input();
+    smallSample.llm = {
+      calls: 1,
+      connected: 1,
+      fallback: 0,
+      tasks: [{ task: "personalize_template", calls: 1, p95_duration_ms: 19_000 }]
+    };
+    expect(evaluateRuntimeHealth(smallSample).status).toBe("healthy");
+
+    const sustained = input();
+    sustained.llm = {
+      calls: 4,
+      connected: 4,
+      fallback: 0,
+      tasks: [{
+        task: "personalize_template",
+        calls: 4,
+        p95_duration_ms: 19_000,
+        last_reason: "timeout"
+      }]
+    };
+    const health = evaluateRuntimeHealth(sustained);
+    expect(health.status).toBe("warning");
+    expect(health.incidents[0]).toMatchObject({
+      code: "llm_latency_personalize_template",
+      severity: "warning"
+    });
+  });
+
   it("alerts when a configured workflow recovery scheduler is stale", () => {
     const state = input();
     state.workflowRecovery = {

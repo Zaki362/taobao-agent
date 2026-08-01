@@ -61,8 +61,14 @@ type RuntimeMetrics = {
     fallback: number;
     tasks: Array<{
       task: string;
+      model: string;
+      calls: number;
+      connected: number;
+      fallback: number;
       average_duration_ms: number;
       p95_duration_ms: number;
+      last_reason?: string;
+      last_called_at?: string;
     }>;
   };
   health: {
@@ -119,6 +125,32 @@ function workflowStatusLabel(status: SessionState["agent_runtime"]["workflow_sta
   if (status === "paused") return "已暂停";
   if (status === "error") return "需要处理";
   return "等待用户开始";
+}
+
+function llmTaskLabel(task: string) {
+  const labels: Record<string, string> = {
+    parse_scene: "理解需求",
+    personalize_template: "个性化规划",
+    refine_plan: "方案调整",
+    review_plan: "规划复核",
+    review_candidates: "候选复盘",
+    decide_next_action: "Agent 下一步决策",
+    explain_product_fit: "推荐理由"
+  };
+  return labels[task] ?? task;
+}
+
+function llmReasonLabel(reason?: string) {
+  if (!reason) return "最近调用成功";
+  if (reason === "timeout") return "响应超时";
+  if (reason === "invalid_json") return "返回内容不是合法 JSON";
+  if (reason === "empty_content") return "模型未返回内容";
+  if (reason === "request_failed") return "网络请求失败";
+  if (reason === "api_key_missing") return "未配置 API Key";
+  if (reason === "explicitly_disabled") return "模型已被显式禁用";
+  if (reason.startsWith("http_")) return `上游接口 ${reason.slice(5)}`;
+  if (reason.startsWith("schema_validation_failed")) return "结构化结果未通过校验";
+  return reason;
 }
 
 function InfoBlock({ label, value }: { label: string; value: string }) {
@@ -327,15 +359,47 @@ export function HostedConsole() {
         ) : null}
 
         {runtimeMetrics?.available && runtimeMetrics.llm.calls > 0 ? (
-          <div className="grid gap-3 md:grid-cols-3">
-            <InfoBlock label="DeepSeek 成功" value={`${runtimeMetrics.llm.connected} / ${runtimeMetrics.llm.calls} 次`} />
-            <InfoBlock label="模型 Fallback" value={`${runtimeMetrics.llm.fallback} 次`} />
-            <InfoBlock
-              label="规划平均耗时"
-              value={formatDuration(
-                runtimeMetrics.llm.tasks.find((task) => task.task === "personalize_template")?.average_duration_ms ?? 0
-              )}
-            />
+          <div className="space-y-3">
+            <div className="grid gap-3 md:grid-cols-3">
+              <InfoBlock label="DeepSeek 成功" value={`${runtimeMetrics.llm.connected} / ${runtimeMetrics.llm.calls} 次`} />
+              <InfoBlock label="模型 Fallback" value={`${runtimeMetrics.llm.fallback} 次`} />
+              <InfoBlock
+                label="规划平均耗时"
+                value={formatDuration(
+                  runtimeMetrics.llm.tasks.find((task) => task.task === "personalize_template")?.average_duration_ms ?? 0
+                )}
+              />
+            </div>
+            <details className="rounded-[24px] border border-border/80 bg-white px-5 py-4 shadow-sm">
+              <summary className="cursor-pointer list-none text-sm font-semibold text-foreground">
+                查看模型调用明细
+                <span className="ml-2 text-xs font-normal text-muted-foreground">按能力查看模型、延迟与回退原因</span>
+              </summary>
+              <div className="mt-4 grid gap-3 lg:grid-cols-2">
+                {runtimeMetrics.llm.tasks.map((task) => (
+                  <div key={task.task} className="rounded-[18px] border border-border/70 bg-secondary/30 p-4">
+                    <div className="flex flex-wrap items-start justify-between gap-2">
+                      <div>
+                        <p className="text-sm font-semibold">{llmTaskLabel(task.task)}</p>
+                        <p className="mt-1 text-xs text-muted-foreground">{task.model}</p>
+                      </div>
+                      <Badge variant={task.fallback === 0 ? "success" : task.connected > 0 ? "secondary" : "danger"}>
+                        成功 {task.connected} · 回退 {task.fallback}
+                      </Badge>
+                    </div>
+                    <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
+                      <span>调用 {task.calls} 次</span>
+                      <span>平均 {formatDuration(task.average_duration_ms)}</span>
+                      <span>P95 {formatDuration(task.p95_duration_ms)}</span>
+                      <span>最近 {formatTime(task.last_called_at)}</span>
+                    </div>
+                    <p className={`mt-3 text-xs leading-5 ${task.last_reason ? "text-amber-700" : "text-emerald-700"}`}>
+                      {llmReasonLabel(task.last_reason)}
+                    </p>
+                  </div>
+                ))}
+              </div>
+            </details>
           </div>
         ) : null}
 
