@@ -520,6 +520,13 @@ function assertArchitectureContracts() {
     return;
   }
 
+  if (
+    !sessionStore.includes('execution_mode: state.execution_mode ?? "local_executor"') ||
+    !sessionStore.includes('mcp_status: state.mcp_status ?? "unavailable"')
+  ) {
+    fail("旧 Session 缺失执行字段时必须迁移到 local_executor，不能重新激活 Codex hosted 兼容通道");
+  }
+
   const contracts = [
     {
       ok:

@@ -490,10 +490,10 @@ export function normalizeSessionState(state: SessionState): SessionState {
     last_refinement: isRefinementImpactSummary((state as Partial<SessionState>).last_refinement)
       ? (state as Partial<SessionState>).last_refinement
       : undefined,
-    execution_mode: state.execution_mode ?? "codex_hosted",
+    execution_mode: state.execution_mode ?? "local_executor",
     permissions_scope: Array.isArray(state.permissions_scope) ? state.permissions_scope : [],
     deepseek_status: state.deepseek_status ?? "mock",
-    mcp_status: state.mcp_status ?? "hosted",
+    mcp_status: state.mcp_status ?? "unavailable",
     current_scene_label: state.current_scene_label ?? state.scene_brief.scene_type
   };
 }
