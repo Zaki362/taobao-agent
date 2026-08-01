@@ -103,12 +103,13 @@ test("authenticated new-car workflow reaches recommendations through the durable
   });
   expect(blockedCrossSiteRequest.status()).toBe(403);
 
-  await page.goto("/login");
+  await page.goto("/settings/executor");
+  await expect(page).toHaveURL(/\/login\?next=%2Fsettings%2Fexecutor$/);
   await page.getByRole("button", { name: "还没有账号？创建账号" }).click();
   await page.getByLabel("邮箱").fill(`e2e-${Date.now()}@example.com`);
   await page.getByLabel("密码").fill("e2e-secure-password");
   await page.getByRole("button", { name: "注册并登录" }).click();
-  await expect(page).toHaveURL(/\/$/);
+  await expect(page).toHaveURL(/\/settings\/executor$/);
 
   const blockedRecovery = await page.request.get("/api/internal/workflow-recovery");
   expect(blockedRecovery.status()).toBe(401);

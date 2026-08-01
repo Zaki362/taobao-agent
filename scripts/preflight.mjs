@@ -186,7 +186,11 @@ function assertExecutorConfigurator() {
   const configurator = tryReadText("scripts/configure-executor.mjs");
   const utilities = tryReadText("scripts/executor-config-utils.mjs");
   const settings = tryReadText("components/executor-settings.tsx");
-  if (!configurator || !utilities || !settings) return;
+  const settingsPage = tryReadText("app/settings/executor/page.tsx");
+  const loginPage = tryReadText("app/login/page.tsx");
+  const authForm = tryReadText("components/auth-form.tsx");
+  const returnPath = tryReadText("lib/auth/return-path.ts");
+  if (!configurator || !utilities || !settings || !settingsPage || !loginPage || !authForm || !returnPath) return;
 
   if (
     !configurator.includes("hiddenQuestion") ||
@@ -194,9 +198,14 @@ function assertExecutorConfigurator() {
     !configurator.includes("fs.rename") ||
     !utilities.includes("TAOBAO_EXECUTION_BACKEND") ||
     !utilities.includes("SCENECART_DEVICE_TOKEN") ||
-    !settings.includes("npm run executor:configure")
+    !settings.includes("npm run executor:configure") ||
+    !settings.includes("/login?next=%2Fsettings%2Fexecutor") ||
+    !settingsPage.includes("requireAuthenticatedPageIdentity") ||
+    !loginPage.includes("normalizeAuthReturnPath") ||
+    !authForm.includes("router.replace(returnTo)") ||
+    !returnPath.includes('candidate.startsWith("//")')
   ) {
-    fail("本地执行器必须提供不回显令牌、原子写入且限制文件权限的安全配置入口");
+    fail("本地执行器必须提供账号绑定、安全登录回跳和不回显令牌的配置入口");
   }
 }
 
@@ -267,6 +276,7 @@ function assertRequiredFiles() {
     "lib/agent/candidate-reviewer.ts",
     "lib/api/responses.ts",
     "lib/auth/hosted-worker.ts",
+    "lib/auth/return-path.ts",
     "lib/llm/deepseek.ts",
     "lib/llm/prompts.ts",
     "lib/llm/validation.ts",

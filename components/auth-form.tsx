@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 
-export function AuthForm() {
+export function AuthForm({ returnTo = "/" }: { returnTo?: string }) {
   const router = useRouter();
   const [mode, setMode] = useState<"login" | "register">("login");
   const [email, setEmail] = useState("");
@@ -25,7 +25,7 @@ export function AuthForm() {
       });
       const payload = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(payload.error || "登录失败");
-      router.push("/");
+      router.replace(returnTo);
       router.refresh();
     } catch (errorValue) {
       setError(errorValue instanceof Error ? errorValue.message : "登录失败");

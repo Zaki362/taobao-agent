@@ -78,11 +78,18 @@ export function ExecutorSettings() {
   const doctorCommand = "npm run executor:doctor";
   const workerCommand = "npm run worker:local";
 
+  function requireActiveLogin(response: Response) {
+    if (response.status !== 401) return;
+    window.location.assign("/login?next=%2Fsettings%2Fexecutor");
+    throw new Error("登录状态已失效，正在返回登录页");
+  }
+
   async function load() {
     const [devicesResponse, readinessResponse] = await Promise.all([
       fetch("/api/executor/devices"),
       fetch("/api/runtime/readiness")
     ]);
+    requireActiveLogin(devicesResponse);
     const devicesPayload = await devicesResponse.json().catch(() => ({}));
     const readinessPayload = await readinessResponse.json().catch(() => ({}));
     if (!devicesResponse.ok) throw new Error(devicesPayload.error || "读取执行器失败");
@@ -114,6 +121,7 @@ export function ExecutorSettings() {
           capabilities: enableCartCapability ? ["module_search", "add_to_cart"] : ["module_search"]
         })
       });
+      requireActiveLogin(response);
       const payload = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(payload.error || "注册执行器失败");
       setToken(payload.device_token);
@@ -134,6 +142,7 @@ export function ExecutorSettings() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ device_id: deviceId })
       });
+      requireActiveLogin(response);
       const payload = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(payload.error || "撤销执行器失败");
       await load();
@@ -159,6 +168,7 @@ export function ExecutorSettings() {
           capabilities: enabled ? ["module_search", "add_to_cart"] : ["module_search"]
         })
       });
+      requireActiveLogin(response);
       const payload = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(payload.error || "更新执行器权限失败");
       await load();

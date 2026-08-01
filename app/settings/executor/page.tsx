@@ -1,8 +1,8 @@
 import { ExecutorSettings } from "@/components/executor-settings";
-import { requirePageIdentity } from "@/lib/auth/page";
+import { requireAuthenticatedPageIdentity } from "@/lib/auth/page";
 
 export default async function ExecutorSettingsPage() {
-  await requirePageIdentity();
+  await requireAuthenticatedPageIdentity("/settings/executor");
   return (
     <main className="min-h-screen">
       <div className="page-shell max-w-[1100px]">

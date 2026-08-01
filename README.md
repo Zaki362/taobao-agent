@@ -68,7 +68,7 @@ npm run dev
 
 如果已经在 `.env.local` 配置 `SCENECART_DEVICE_TOKEN`，也可以运行 `npm run dev:auto`。它会用同一个已确认可用的地址启动网页和正式 `worker:local`；未配置令牌时只启动网页并提示前往执行器设置页，不再自动启动旧 Codex hosted worker。
 
-首次连接本地执行器时，在 `/settings/executor` 注册设备并复制一次性令牌，然后在项目目录运行：
+首次连接本地执行器时，在 `/settings/executor` 注册设备并复制一次性令牌。设备始终需要绑定 SceneCart 账号；即使主购物流程处于本地匿名开发模式，设置页也会先引导登录/注册，并在成功后自动返回。然后在项目目录运行：
 
 ```bash
 npm run executor:configure
