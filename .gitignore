@@ -3,6 +3,7 @@ node_modules
 
 # build outputs
 .next
+.next-verify
 out
 dist
 coverage

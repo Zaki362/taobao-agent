@@ -95,6 +95,7 @@ npm run check
 ```bash
 npm run preflight
 npm run release:audit
+npm run release:verify -- --static
 npm run typecheck
 npm run build
 ```
@@ -141,6 +142,7 @@ SCENECART_CRON_SECRET=
 - `DATABASE_URL`：PostgreSQL 连接串。配置后先运行 `npm run db:migrate`。
 - `AUTH_REQUIRED=true`：正式部署必须开启，确保 Session、设备与任务按用户隔离。
 - `APP_ORIGIN`：正式产品允许发起写请求的网页 Origin；多个地址使用逗号分隔。
+- `SCENECART_RELEASE_VERIFY_URL`：可选的正式发布探测地址；`npm run release:verify` 未显式传 `--url` 时优先使用它，否则使用 `APP_ORIGIN` 的第一个地址。
 - `SCENECART_DEVICE_TOKEN`：在 `/settings/executor` 注册设备后一次性获得，配置在运行 Qoder/Taobao 的本机，不应写入仓库。
 - `SCENECART_CRON_SECRET`：至少 32 字符的独立高熵密钥，只用于保护服务端恢复扫描端点；不能复用设备 Token、DeepSeek Key 或用户密码。
 - `SCENECART_RECOVERY_STALE_MS`：恢复调度失联阈值，默认 180000ms；readiness 会校验持久心跳，而不是只检查 Secret 是否存在。
@@ -245,6 +247,7 @@ lib/scenarios/
 - `GET /api/runtime/events/stream`：按 Session 推送执行事件的 SSE
 - `GET /api/runtime/health`：运行时、数据库和执行 backend 健康检查
 - `GET /api/runtime/readiness`：正式发布配置与当前账号本地执行器就绪度检查
+- `GET /api/internal/runtime-readiness`：只读的部署就绪探针；仅接受 `SCENECART_CRON_SECRET` Bearer，不包含用户设备能力，也不会触发任务恢复
 - `GET /api/runtime/metrics`：当前 Session 的任务积压、失败率与设备在线摘要
 - `POST /api/runtime/jobs/:jobId/cancel`：仅取消尚未被执行器领取的任务
 
@@ -267,6 +270,12 @@ npm run db:check
 npm run release:audit
 npm run build
 npm run start
+```
+
+实例启动并收到恢复 Worker 心跳后，用一条命令完成静态配置、数据库、health 与只读 readiness 验证：
+
+```bash
+SCENECART_RELEASE_VERIFY_URL=https://你的正式域名 npm run release:verify
 ```
 
 用户登录后打开 `/settings/executor` 注册本机设备，再在运行淘宝桌面版与 Qoder 的机器启动：

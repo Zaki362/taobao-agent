@@ -39,15 +39,22 @@ SCENECART_RECOVERY_STALE_MS=180000
 ## 发布检查
 
 1. GitHub Actions `quality` 全部通过。
-2. `npm run release:audit` 返回 `READY`。该命令只报告配置是否满足正式要求，不打印 Key、Token 或数据库连接串。
-3. `npm run db:migrate`、`npm run db:check`、`npm run check` 和 `npm run eval:agent` 成功。
-4. `/api/runtime/health` 返回 `healthy`。
-5. 登录后访问 `/api/runtime/readiness`，确认 `ready_for_production=true`。
-6. 注册测试设备并运行 `npm run executor:doctor`；设备在线后应得到 `operational_for_shopping=true`。
-7. 使用隔离淘宝测试账号完成一次搜索；真实加购仅在明确授权且账号能力稳定时验收。
-8. 检查执行台中的任务积压、在线设备、模型 fallback、失败任务和“运行健康诊断”，不得带着严重告警发布。
+2. 数据库 migration 由发布流程显式执行一次：`npm run db:migrate`。验证命令不会自动改数据库。
+3. 设置 `SCENECART_RELEASE_VERIFY_URL=https://正式域名`，运行 `npm run release:verify`。它会依次验证静态配置、数据库 schema、公开 health 与受内部 Bearer 保护的只读 readiness，且不会打印 Key、Token 或数据库连接串。
+4. `npm run check`、`npm run eval:agent` 成功。
+5. 注册测试设备并运行 `npm run executor:doctor`；登录后访问 `/api/runtime/readiness`，设备在线时应得到 `operational_for_shopping=true`。
+6. 使用隔离淘宝测试账号完成一次搜索；真实加购仅在明确授权且账号能力稳定时验收。
+7. 检查执行台中的任务积压、在线设备、模型 fallback、失败任务和“运行健康诊断”，不得带着严重告警发布。
 
-`health` 只回答进程和数据库是否存活；`readiness` 才会检查正式产品模式、演示加购回退、数据库持久化、认证、服务端恢复心跳、安全 Cookie、正式 HTTPS Origin、DeepSeek、`local_executor`、手动 MCP 调试端点、旧 Mock 标志和当前账号执行器状态，不能用前者代替发布验收。应用启动后应等待至少一次恢复 Worker/Cron 心跳，再把实例加入正式流量。
+```bash
+SCENECART_RELEASE_VERIFY_URL=https://scenecart.example.com npm run release:verify
+```
+
+只想在部署前验证环境变量而不访问数据库和线上实例时，可以运行 `npm run release:verify -- --static`。完整验证会复用 `SCENECART_CRON_SECRET` 调用 `/api/internal/runtime-readiness`；该接口只读、不扫描或恢复任务，并使用与恢复端点相同的常量时间 Bearer 校验。完整验证只接受非本地 HTTPS 目标，地址不得包含用户名、密码或查询参数。
+
+如果本机开发服务器正在运行，验证生产构建时可使用 `NEXT_DIST_DIR=.next-verify npm run build`，避免构建过程覆盖开发服务器正在使用的 `.next` 热更新产物。正式 Docker/CI 构建无需设置该变量。
+
+`health` 只回答进程和数据库是否存活；`readiness` 才会检查正式产品模式、演示加购回退、数据库持久化、认证、服务端恢复心跳、安全 Cookie、正式 HTTPS Origin、DeepSeek、`local_executor`、手动 MCP 调试端点、旧 Mock 标志和当前账号执行器状态，不能用前者代替发布验收。内部 readiness 不带用户身份，因此只验证平台发布条件；某个用户是否具备真实搜索与加购能力，仍必须通过登录后的 `/api/runtime/readiness` 和 `executor:doctor` 验证。应用启动后应等待至少一次恢复 Worker/Cron 心跳，再把实例加入正式流量。
 
 `db:check` 会同时核对 migration checksum 与运行时实体表，包括恢复调度依赖的 `runtime_service_heartbeats`。Docker 镜像只包含 Web、数据库迁移和恢复 Worker；用户设备令牌、Qoder CLI、淘宝 skill 与淘宝登录态不得进入镜像或 Compose 环境。
 

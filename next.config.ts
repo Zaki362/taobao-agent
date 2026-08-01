@@ -2,6 +2,9 @@ import type { NextConfig } from "next";
 import path from "node:path";
 
 const nextConfig: NextConfig = {
+  ...(process.env.NEXT_DIST_DIR?.trim()
+    ? { distDir: process.env.NEXT_DIST_DIR.trim() }
+    : {}),
   typedRoutes: false,
   output: "standalone",
   allowedDevOrigins: ["127.0.0.1", "localhost"],

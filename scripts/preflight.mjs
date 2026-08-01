@@ -154,7 +154,7 @@ function assertPackageScripts() {
   }
 
   const scripts = pkg.scripts ?? {};
-  const required = ["dev", "build", "typecheck", "preflight", "release:audit", "check", "db:migrate", "db:check", "test:unit", "test:integration", "test:e2e", "eval:agent", "worker:local", "worker:recovery", "executor:configure", "executor:doctor"];
+  const required = ["dev", "build", "typecheck", "preflight", "release:audit", "release:verify", "check", "db:migrate", "db:check", "test:unit", "test:integration", "test:e2e", "eval:agent", "worker:local", "worker:recovery", "executor:configure", "executor:doctor"];
 
   for (const scriptName of required) {
     if (typeof scripts[scriptName] !== "string") {
@@ -289,6 +289,7 @@ function assertRequiredFiles() {
     "app/api/session/purchase-bundle/route.ts",
     "app/api/session/state/route.ts",
     "app/api/runtime/readiness/route.ts",
+    "app/api/internal/runtime-readiness/route.ts",
     "app/error.tsx",
     "components/dashboard.tsx",
     "components/dashboard-api.ts",
@@ -324,6 +325,7 @@ function assertRequiredFiles() {
     "lib/runtime/executor-protocol.ts",
     "lib/runtime/postgres-repository.ts",
     "scripts/release-audit.mjs",
+    "scripts/release-verify.mjs",
     "lib/runtime/readiness.ts",
     "lib/runtime/product-mode.ts",
     "lib/runtime/monitoring.ts",

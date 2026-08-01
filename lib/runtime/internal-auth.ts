@@ -12,7 +12,7 @@ function safeEqual(left: string, right: string) {
   return leftBuffer.length === rightBuffer.length && timingSafeEqual(leftBuffer, rightBuffer);
 }
 
-export function assertWorkflowRecoveryAccess(request: Request) {
+export function assertInternalOperationsAccess(request: Request) {
   const expected = process.env.SCENECART_CRON_SECRET?.trim() ?? "";
   if (expected.length < 32) {
     throw new ApiRouteError(
@@ -25,3 +25,5 @@ export function assertWorkflowRecoveryAccess(request: Request) {
     throw new ApiRouteError("invalid recovery token", 401, "invalid_recovery_token");
   }
 }
+
+export const assertWorkflowRecoveryAccess = assertInternalOperationsAccess;
