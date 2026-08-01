@@ -4,6 +4,7 @@ node_modules
 # build outputs
 .next
 .next-verify
+.next-e2e
 out
 dist
 coverage

@@ -33,6 +33,7 @@ export default defineConfig({
     reuseExistingServer: !process.env.CI,
     env: {
       ...process.env,
+      NEXT_DIST_DIR: ".next-e2e",
       AUTH_REQUIRED: "true",
       RUNTIME_STORE: "local",
       SCENECART_LOCAL_RUNTIME_PERSIST: "false",
