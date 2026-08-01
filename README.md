@@ -21,6 +21,8 @@ SceneCart AI 是一个正在按正式产品架构推进的“场景化购物 Age
 - 上下文感知调整建议：同一次购买组合决策会结合真实价格压力、候选薄弱模块和当前取舍，从场景允许的快捷操作中挑选最多 3 个下一步建议；前端展示理由与预计影响模块，模型不能发明动作、引用规划外模块或自动执行调整，旧会话仍兼容原有固定操作入口
 - 服务端 Agent 决策循环：用户确认规划后只需启动一次，后端会消费 AI 规划顺序、执行档位、候选池复盘和工具状态，逐轮决定搜索、补搜、容错跳过、等待工具或结束，并把动作写入 `agent_decisions`
 - 浏览器断线续跑：`workflow-runner` 持久化运行 ID、当前模块、自动续跑开关和状态转换；本地执行器每次回填后由服务端自动排队下一模块，关闭或切换页面不会中断整轮搜索
+- 账号级任务续接：首页读取隐私收敛的服务端会话摘要，展示最近购物任务的预算、模块覆盖和执行状态；用户可跨浏览器恢复任意任务，完整 Agent context 只在点击继续后按所有权校验加载
+- 会话所有权 fail-closed：PostgreSQL 与本地认证运行时都要求 `owner_id` 精确匹配；早期无 owner 的匿名会话不会向任意登录账号暴露，只在显式匿名开发模式中保留兼容读取
 - 多实例并发保护：PostgreSQL 正式运行时使用事务级 advisory lock，同一 Session 同一时刻只允许一个 Web 实例计算下一动作、回填工具结果并入队
 - 服务端中断恢复：独立 `worker:recovery` 或云端 Cron 会扫描持久化 Job/Session，重放已提交结果并补排下一模块，不依赖浏览器或某台执行器恰好空闲
 - Agent Runtime 2.0：平衡/探索档位可由 DeepSeek `decide_next_action` 提议下一步动作；常规模块调度使用低延迟 chat，只有补搜、失败恢复或市场预算压力出现时才升级 reasoner。模型可以自主改写品牌、功能和价格带搜索词；若模型只遗漏品类词但所有筛选词均能由当前模块策略解释，后端会补齐品类锚点后继续执行，跨品类词、URL、工具名、命令参数和提示词控制语句仍会被拒绝。动作白名单、模块合法性、首搜前置条件、置信度、工具预算和重复调用继续由 guardrail 校验
@@ -238,6 +240,7 @@ lib/scenarios/
 - `POST /api/session/budget-reallocation`：用户确认真实候选价格生成的跨模块预算建议；金额由服务端建议决定，保持总预算不变并仅失效受影响模块
 - `POST /api/session/search-strategy`：用户确认规划前微调模块搜索任务包，写回当前 session 的主搜索词和备用词
 - `GET /api/session/state`：读取当前 session 完整状态
+- `GET /api/sessions?view=summary&limit=6`：读取当前账号最近购物任务的轻量摘要，不返回候选池、模型凭证和工具日志
 - `GET /api/mcp/status`：读取当前工具执行模式状态
 - `POST /api/mcp/run`：仅开发调试使用；需要显式设置 `SCENECART_ENABLE_MCP_DEBUG=true`，production 始终隐藏。高风险工具仍必须同时传 `confirm_high_risk=true` 与 `input.confirmed=true`
 - `GET /api/sessions`：执行台读取会话列表

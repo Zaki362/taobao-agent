@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { ChevronRight, Loader2, Sparkles } from "lucide-react";
+import { ArrowRight, ChevronRight, Clock3, Loader2, PackageCheck, Sparkles } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -14,6 +14,8 @@ import {
   startButtonText
 } from "@/components/dashboard-config";
 import { WorkflowStage } from "@/lib/session/types";
+import type { ShoppingSessionSummary } from "@/lib/session/summaries";
+import { formatCurrency } from "@/lib/utils";
 
 export function TopHeader({ currentStage }: { currentStage: string }) {
   const [authenticated, setAuthenticated] = useState(false);
@@ -88,10 +90,18 @@ export function TopHeader({ currentStage }: { currentStage: string }) {
 
 export function LandingPage({
   onEnterScenario,
-  interactiveReady
+  interactiveReady,
+  recentSessions,
+  recentSessionsLoading,
+  resumingSessionId,
+  onResumeSession
 }: {
   onEnterScenario: () => void;
   interactiveReady: boolean;
+  recentSessions: ShoppingSessionSummary[];
+  recentSessionsLoading: boolean;
+  resumingSessionId: string;
+  onResumeSession: (session: ShoppingSessionSummary) => void;
 }) {
   return (
     <Card className="section-card">
@@ -134,6 +144,98 @@ export function LandingPage({
             </button>
           ))}
         </div>
+
+        {recentSessionsLoading || recentSessions.length > 0 ? (
+          <div className="border-t border-border/70 pt-8">
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+              <div>
+                <p className="label-text">Recent Tasks</p>
+                <h3 className="mt-2 text-xl font-semibold tracking-tight">最近购物任务</h3>
+                <p className="mt-1 text-sm leading-6 text-muted-foreground">
+                  任务保存在服务端，换浏览器后也可以从原进度继续。
+                </p>
+              </div>
+              <Badge variant="outline">最多展示 6 条</Badge>
+            </div>
+
+            {recentSessionsLoading ? (
+              <div className="mt-5 flex min-h-28 items-center justify-center rounded-[24px] border border-dashed border-border bg-muted/25 text-sm text-muted-foreground">
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                正在读取最近任务
+              </div>
+            ) : (
+              <div className="mt-5 grid gap-3 lg:grid-cols-2">
+                {recentSessions.map((session) => {
+                  const progress = session.module_count > 0
+                    ? Math.round((session.covered_module_count / session.module_count) * 100)
+                    : 0;
+                  const isResuming = resumingSessionId === session.session_id;
+                  return (
+                    <article
+                      key={session.session_id}
+                      className="rounded-[24px] border border-border/75 bg-white p-5 shadow-sm transition hover:border-primary/25 hover:shadow-card"
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <Badge>{session.scene_label}</Badge>
+                            <Badge variant="outline">{session.status_label}</Badge>
+                          </div>
+                          <p className="mt-3 line-clamp-2 text-[15px] font-medium leading-6 text-foreground">
+                            {session.requirement}
+                          </p>
+                        </div>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="shrink-0"
+                          disabled={Boolean(resumingSessionId)}
+                          onClick={() => onResumeSession(session)}
+                        >
+                          {isResuming ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : null}
+                          继续任务
+                          {!isResuming ? <ArrowRight className="ml-1.5 h-4 w-4" /> : null}
+                        </Button>
+                      </div>
+
+                      <div className="mt-4 grid grid-cols-3 gap-2 text-xs text-muted-foreground">
+                        <span>{formatCurrency(session.budget)} 预算</span>
+                        <span>{session.covered_module_count}/{session.module_count} 模块</span>
+                        <span>{session.candidate_count} 个候选</span>
+                      </div>
+                      <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-muted">
+                        <div
+                          className="h-full rounded-full bg-primary transition-[width]"
+                          style={{ width: `${progress}%` }}
+                        />
+                      </div>
+                      <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
+                        <span className="inline-flex items-center gap-1.5">
+                          <Clock3 className="h-3.5 w-3.5" />
+                          {new Date(session.last_activity_at).toLocaleString("zh-CN", {
+                            month: "numeric",
+                            day: "numeric",
+                            hour: "2-digit",
+                            minute: "2-digit",
+                            hour12: false
+                          })}
+                        </span>
+                        {session.selected_item_count > 0 ? (
+                          <span className="inline-flex items-center gap-1.5 text-primary">
+                            <PackageCheck className="h-3.5 w-3.5" />
+                            已选 {session.selected_item_count} 件
+                          </span>
+                        ) : (
+                          <span>{session.priority_style}</span>
+                        )}
+                      </div>
+                    </article>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        ) : null}
       </CardContent>
     </Card>
   );

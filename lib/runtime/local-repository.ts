@@ -149,9 +149,12 @@ function copy<T>(value: T): T {
   return structuredClone(value);
 }
 
-function canAccessSession(session: SessionState, userId?: string) {
+export function canAccessSession(session: SessionState, userId?: string) {
   if (!userId) return true;
-  return !session.owner_id || session.owner_id === userId;
+  // Once an authenticated identity is present, local development must follow
+  // the same fail-closed ownership rule as PostgreSQL. Legacy anonymous
+  // sessions remain available only to the intentionally anonymous dev mode.
+  return session.owner_id === userId;
 }
 
 function isActiveWorkflow(session: SessionState) {

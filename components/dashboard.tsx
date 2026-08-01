@@ -34,6 +34,7 @@ import {
   WorkflowStage
 } from "@/lib/session/types";
 import type { AgentDirectiveProfile } from "@/lib/agent/directives";
+import type { ShoppingSessionSummary } from "@/lib/session/summaries";
 
 type HostedTaskInstruction = {
   task: {
@@ -89,6 +90,9 @@ export function Dashboard() {
   const [cartingProductId, setCartingProductId] = useState("");
   const [removingCartProductId, setRemovingCartProductId] = useState("");
   const [workflowControlBusy, setWorkflowControlBusy] = useState(false);
+  const [recentSessions, setRecentSessions] = useState<ShoppingSessionSummary[]>([]);
+  const [recentSessionsLoading, setRecentSessionsLoading] = useState(true);
+  const [resumingSessionId, setResumingSessionId] = useState("");
 
   const selectedModule = session?.shopping_plan.modules.find((item) => item.module_id === selectedModuleId) ?? session?.shopping_plan.modules[0];
   const selectedProducts = selectedModule ? session?.module_candidates[selectedModule.module_id] ?? [] : [];
@@ -128,6 +132,20 @@ export function Dashboard() {
     const status = await jsonFetch<MpcStatus>("/api/mcp/status");
     setMcpStatus(status);
     return status;
+  }
+
+  async function refreshRecentSessions() {
+    setRecentSessionsLoading(true);
+    try {
+      const data = await jsonFetch<{ sessions?: ShoppingSessionSummary[] }>("/api/sessions?view=summary&limit=6");
+      setRecentSessions(Array.isArray(data.sessions) ? data.sessions : []);
+    } catch {
+      // Logged-out formal deployments return 401 here. The landing page remains usable
+      // and the login entry explains how to access account-bound history.
+      setRecentSessions([]);
+    } finally {
+      setRecentSessionsLoading(false);
+    }
   }
 
   async function hydrateSession(sessionId: string) {
@@ -180,6 +198,7 @@ export function Dashboard() {
     if (typeof window !== "undefined") {
       window.localStorage.removeItem(WORKFLOW_STORAGE_KEY);
     }
+    refreshRecentSessions().catch(() => undefined);
   }
 
   async function enterScenario() {
@@ -203,6 +222,7 @@ export function Dashboard() {
 
   useEffect(() => {
     setInteractiveReady(true);
+    refreshRecentSessions().catch(() => undefined);
   }, []);
 
   useEffect(() => {
@@ -362,6 +382,45 @@ export function Dashboard() {
         hasScenario: resumeSnapshot.selectedScenario === "new-car"
       })
     );
+  }
+
+  async function resumeServerSession(summary: ShoppingSessionSummary) {
+    setResumingSessionId(summary.session_id);
+    setErrorMessage("");
+    setStatusMessage("正在读取服务端购物任务");
+    try {
+      const data = await hydrateSession(summary.session_id);
+      await refreshMcpStatus().catch(() => undefined);
+      await refreshHostedInstruction(summary.session_id).catch(() => undefined);
+      const selectedModule =
+        data.shopping_plan.modules.find((module) => module.module_id === data.agent_runtime.current_module_id) ??
+        data.shopping_plan.modules.find((module) => (data.module_candidates[module.module_id]?.length ?? 0) > 0) ??
+        data.shopping_plan.modules[0];
+
+      setResumeSnapshot(null);
+      setSelectedScenario("new-car");
+      setSceneInput(data.raw_input || buildSceneInputFromBrief(data.scene_brief));
+      setParsedScene(data.scene_brief);
+      setParseDeepSeekMode(data.deepseek_status);
+      setSelectedModuleId(selectedModule?.module_id ?? "");
+      setSearchSummary(
+        summary.resume_stage === "confirm_plan"
+          ? []
+          : [data.completion_report?.summary ?? data.agent_runtime.workflow_message]
+      );
+      setStage(summary.resume_stage);
+      setStatusMessage(
+        summary.resume_stage === "confirm_plan"
+          ? "已恢复购物规划，请确认后开始搜索。"
+          : summary.resume_stage === "searching"
+            ? data.agent_runtime.workflow_message
+            : "已恢复推荐结果，可以继续比较、调整或加购。"
+      );
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "恢复购物任务失败");
+    } finally {
+      setResumingSessionId("");
+    }
   }
 
   function restartWorkflowFromBanner() {
@@ -1253,7 +1312,14 @@ export function Dashboard() {
         ) : null}
 
         {stage === "landing" || stage === "scenario_select" ? (
-          <LandingPage onEnterScenario={enterScenario} interactiveReady={interactiveReady} />
+          <LandingPage
+            onEnterScenario={enterScenario}
+            interactiveReady={interactiveReady}
+            recentSessions={recentSessions.filter((item) => item.session_id !== resumeSnapshot?.sessionId)}
+            recentSessionsLoading={recentSessionsLoading}
+            resumingSessionId={resumingSessionId}
+            onResumeSession={resumeServerSession}
+          />
         ) : null}
 
         {stage === "input_requirement" ? (

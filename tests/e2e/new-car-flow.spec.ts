@@ -282,6 +282,7 @@ test("authenticated new-car workflow reaches recommendations through the durable
 
     const completedStateResponse = await page.request.get(`/api/session/state?session_id=${persistedSessionId}`);
     const completedState = await completedStateResponse.json() as {
+      raw_input: string;
       agent_runtime: { continuation_count: number; auto_continue: boolean };
       shopping_plan: { modules: Array<{ module_id: string }> };
       module_candidates: Record<string, unknown[]>;
@@ -349,6 +350,37 @@ test("authenticated new-car workflow reaches recommendations through the durable
       completedState.shopping_plan.modules.length
     );
     expect(completedSessionSummary?.completion_report?.stop_reason.length).toBeGreaterThan(0);
+
+    const compactSessionListResponse = await page.request.get("/api/sessions?view=summary&limit=3");
+    expect(compactSessionListResponse.ok()).toBeTruthy();
+    const compactSessionList = await compactSessionListResponse.json() as {
+      sessions: Array<{
+        session_id: string;
+        resume_stage: string;
+        status_label: string;
+        covered_module_count: number;
+        module_count: number;
+        tool_logs?: unknown;
+        module_candidates?: unknown;
+      }>;
+    };
+    const compactSession = compactSessionList.sessions.find((item) => item.session_id === persistedSessionId);
+    expect(compactSession).toMatchObject({
+      resume_stage: "review_results",
+      status_label: "推荐已生成",
+      covered_module_count: completedState.shopping_plan.modules.length - 1,
+      module_count: completedState.shopping_plan.modules.length
+    });
+    expect(compactSession).not.toHaveProperty("tool_logs");
+    expect(compactSession).not.toHaveProperty("module_candidates");
+
+    await page.evaluate(() => window.localStorage.removeItem("scenecart-dashboard-state"));
+    await page.goto("/");
+    await expect(page.getByRole("heading", { name: "最近购物任务" })).toBeVisible();
+    const recentTask = page.locator("article").filter({ hasText: completedState.raw_input }).first();
+    await expect(recentTask).toContainText("推荐已生成");
+    await recentTask.getByRole("button", { name: "继续任务" }).click();
+    await expect(page.getByText("Agent 完成报告")).toBeVisible();
 
     const unconfirmedRecovery = await page.request.post("/api/agent/remediate", {
       headers: { Origin: "http://127.0.0.1:3100" },

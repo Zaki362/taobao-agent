@@ -1,6 +1,8 @@
+import { NextRequest } from "next/server";
 import { apiOk, apiRouteError } from "@/lib/api/responses";
 import { loadSessions } from "@/lib/session/repository";
 import { getRequestIdentity } from "@/lib/auth/request";
+import { summarizeShoppingSessions } from "@/lib/session/summaries";
 
 const MAX_SESSION_LIST_TOOL_LOGS = 16;
 const MAX_SESSION_LIST_HOSTED_TASKS = 16;
@@ -28,10 +30,16 @@ function summarizeModuleSearchTraces<T>(moduleSearchTraces: Record<string, T>) {
   return Object.fromEntries(Object.entries(moduleSearchTraces).slice(0, MAX_SESSION_LIST_SEARCH_TRACES));
 }
 
-export async function GET() {
+export async function GET(request: NextRequest) {
   try {
     const identity = await getRequestIdentity();
-    const sessions = (await loadSessions(identity.userId))
+    const storedSessions = await loadSessions(identity.userId);
+    if (request.nextUrl.searchParams.get("view") === "summary") {
+      const requestedLimit = Number(request.nextUrl.searchParams.get("limit") ?? 6);
+      return apiOk({ sessions: summarizeShoppingSessions(storedSessions, requestedLimit) });
+    }
+
+    const sessions = storedSessions
       .sort((a, b) => sessionTimestamp(b.session_id) - sessionTimestamp(a.session_id))
       .map((session) => ({
         session_id: session.session_id,

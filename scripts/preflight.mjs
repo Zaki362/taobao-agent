@@ -351,6 +351,7 @@ function assertRequiredFiles() {
     "tests/evaluation/new-car-agent-quality.test.ts",
     "lib/mcp/qoder.ts",
     "lib/session/guards.ts",
+    "lib/session/summaries.ts",
     "lib/session/store.ts",
     "app/not-found.tsx",
     "lib/scenarios/new-car.ts",
@@ -404,6 +405,7 @@ function assertArchitectureContracts() {
   const runtimeReadiness = tryReadText("lib/runtime/readiness.ts");
   const types = tryReadText("lib/session/types.ts");
   const dashboard = tryReadText("components/dashboard.tsx");
+  const dashboardIntake = tryReadText("components/dashboard-intake.tsx");
   const dashboardApi = tryReadText("components/dashboard-api.ts");
   const hostedConsole = tryReadText("components/hosted-console.tsx");
   const executorSettings = tryReadText("components/executor-settings.tsx");
@@ -445,10 +447,12 @@ function assertArchitectureContracts() {
   const hostedWorkerStatusRoute = tryReadText("app/api/hosted/worker-status/route.ts");
   const runtimeDatabase = tryReadText("lib/runtime/database.ts");
   const runtimeIndex = tryReadText("lib/runtime/index.ts");
+  const localRuntimeRepository = tryReadText("lib/runtime/local-repository.ts");
   const authRequest = tryReadText("lib/auth/request.ts");
   const runtimeJobs = tryReadText("lib/runtime/jobs.ts");
   const sessionStore = tryReadText("lib/session/store.ts");
   const sessionGuards = tryReadText("lib/session/guards.ts");
+  const sessionSummaries = tryReadText("lib/session/summaries.ts");
   const scenarioIndex = tryReadText("lib/scenarios/index.ts");
   const scenarioNormalize = tryReadText("lib/scenarios/normalize.ts");
   const releaseAudit = tryReadText("scripts/release-audit.mjs");
@@ -477,6 +481,7 @@ function assertArchitectureContracts() {
     !runtimeReadiness ||
     !types ||
     !dashboard ||
+    !dashboardIntake ||
     !dashboardApi ||
     !hostedConsole ||
     !executorSettings ||
@@ -517,10 +522,12 @@ function assertArchitectureContracts() {
     !hostedWorkerStatusRoute ||
     !runtimeDatabase ||
     !runtimeIndex ||
+    !localRuntimeRepository ||
     !authRequest ||
     !runtimeJobs ||
     !sessionStore ||
     !sessionGuards ||
+    !sessionSummaries ||
     !scenarioIndex ||
     !scenarioNormalize ||
     !releaseAudit
@@ -1068,6 +1075,18 @@ function assertArchitectureContracts() {
         sessionsRoute.includes("MAX_SESSION_LIST_SEARCH_TRACES") &&
         sessionsRoute.includes("summarizeModuleCandidates"),
       message: "AI 多轮执行后的会话日志、任务、候选池和搜索决策轨迹必须有持久化与列表接口体积边界"
+    },
+    {
+      ok:
+        localRuntimeRepository.includes("return session.owner_id === userId") &&
+        sessionSummaries.includes("summarizeShoppingSessions") &&
+        !sessionSummaries.includes("llm_calls:") &&
+        !sessionSummaries.includes("tool_logs:") &&
+        !sessionSummaries.includes("module_candidates:") &&
+        sessionsRoute.includes('searchParams.get("view") === "summary"') &&
+        dashboard.includes('"/api/sessions?view=summary&limit=6"') &&
+        dashboardIntake.includes("最近购物任务"),
+      message: "登录态会话必须精确校验 owner，首页历史只能读取隐私收敛摘要，不能传输完整 Agent context"
     },
     {
       ok:
