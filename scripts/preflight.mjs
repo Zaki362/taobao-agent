@@ -381,6 +381,7 @@ function assertArchitectureContracts() {
   const reviewer = tryReadText("lib/agent/candidate-reviewer.ts");
   const directives = tryReadText("lib/agent/directives.ts");
   const decisionEngine = tryReadText("lib/agent/decision-engine.ts");
+  const agentRuntimeV2 = tryReadText("lib/agent/runtime-v2.ts");
   const completionReview = tryReadText("lib/agent/completion-review.ts");
   const purchaseBundle = tryReadText("lib/agent/purchase-bundle.ts");
   const bundleAdoption = tryReadText("lib/session/bundle-adoption.ts");
@@ -590,6 +591,11 @@ function assertArchitectureContracts() {
         decisionEngine.includes('action: "retry_module"') &&
         decisionEngine.includes('action: "skip_module"') &&
         decisionEngine.includes('action: "complete_workflow"') &&
+        searchStrategy.includes("validateAutonomousSearchKeyword") &&
+        searchStrategy.includes("moduleSearchAnchorTerms") &&
+        agentRuntimeV2.includes("validateAutonomousSearchKeyword") &&
+        agentRuntimeV2.includes("补搜前必须已有首轮搜索记录") &&
+        prompts.includes("allowed_category_anchors") &&
         orchestrator.includes("getNextAgentAction") &&
         agentNextActionRoute.includes("getNextAgentAction") &&
         dashboard.includes("/api/agent/next-action") &&

@@ -6,19 +6,77 @@ function compactKeyword(value: string) {
   return value.replace(/\s+/g, " ").trim();
 }
 
-function moduleAnchorTerms(module: ShoppingPlanModule) {
-  return [module.module_name, ...module.typical_item_types]
+export function moduleSearchAnchorTerms(module: ShoppingPlanModule) {
+  return [
+    module.module_name,
+    ...module.typical_item_types,
+    ...(module.search_strategy?.include_terms ?? []),
+    ...(module.search_strategy?.must_have_signals ?? [])
+  ]
     .map((term) => compactKeyword(term))
-    .filter(Boolean)
+    .filter((term) => term.length >= 2)
     .filter((term, index, list) => list.indexOf(term) === index);
 }
 
+export interface AutonomousSearchKeywordValidation {
+  valid: boolean;
+  normalized: string;
+  matched_anchors: string[];
+  notes: string[];
+}
+
+const unsafeKeywordPatterns = [
+  { pattern: /https?:\/\/|www\./i, note: "自主搜索词不能包含 URL" },
+  { pattern: /\b(?:qodercli|taobao-native|sourceApp)\b/i, note: "自主搜索词不能包含工具调用指令" },
+  { pattern: /(?:^|\s)--[a-z][\w-]*/i, note: "自主搜索词不能包含命令行参数" },
+  { pattern: /(?:忽略|覆盖).{0,8}(?:指令|规则|要求)/i, note: "自主搜索词不能包含提示词控制指令" },
+  { pattern: /(?:执行|运行).{0,6}(?:命令|脚本|工具)|(?:system|assistant|tool)\s*[:=]/i, note: "自主搜索词不能包含执行指令" },
+  { pattern: /`|\$\(|&&|\|\||[{}]/, note: "自主搜索词包含不安全的控制字符" }
+];
+
+export function validateAutonomousSearchKeyword(
+  module: ShoppingPlanModule,
+  value: string
+): AutonomousSearchKeywordValidation {
+  const normalized = compactKeyword(value);
+  const notes: string[] = [];
+
+  if (!normalized) {
+    notes.push("自主搜索词不能为空");
+  }
+  if (value.length > 80 || normalized.length > 80) {
+    notes.push("自主搜索词不能超过 80 个字符");
+  }
+  if (/[\u0000-\u001f\u007f]/.test(value)) {
+    notes.push("自主搜索词不能包含换行或控制字符");
+  }
+
+  for (const unsafe of unsafeKeywordPatterns) {
+    if (unsafe.pattern.test(value)) {
+      notes.push(unsafe.note);
+    }
+  }
+
+  const anchors = moduleSearchAnchorTerms(module);
+  const matchedAnchors = anchors.filter((anchor) => normalized.includes(anchor));
+  if (normalized && matchedAnchors.length === 0) {
+    notes.push(`自主搜索词必须保留「${module.module_name}」的至少一个品类锚点`);
+  }
+
+  return {
+    valid: notes.length === 0,
+    normalized,
+    matched_anchors: matchedAnchors,
+    notes: [...new Set(notes)]
+  };
+}
+
 function countAnchorMatches(keyword: string, module: ShoppingPlanModule) {
-  return moduleAnchorTerms(module).filter((term) => keyword.includes(term)).length;
+  return moduleSearchAnchorTerms(module).filter((term) => keyword.includes(term)).length;
 }
 
 function ensureModuleAnchors(keyword: string, module: ShoppingPlanModule, minAnchors = 1) {
-  const anchors = moduleAnchorTerms(module);
+  const anchors = moduleSearchAnchorTerms(module);
   const missingAnchors = anchors.filter((term) => !keyword.includes(term));
   let repaired = compactKeyword(keyword);
 
@@ -31,7 +89,7 @@ function ensureModuleAnchors(keyword: string, module: ShoppingPlanModule, minAnc
 
 function keywordSignature(scene: SceneBrief, module: ShoppingPlanModule, keyword: string) {
   const scenario = getScenarioConfig(scene.scenario_id);
-  const anchors = moduleAnchorTerms(module).filter((term) => keyword.includes(term));
+  const anchors = moduleSearchAnchorTerms(module).filter((term) => keyword.includes(term));
   if (anchors.length > 0) {
     return anchors.slice(0, 3).join("|");
   }
@@ -177,4 +235,3 @@ export function normalizeSearchKeywords(scene: SceneBrief, modules: ShoppingPlan
     };
   });
 }
-

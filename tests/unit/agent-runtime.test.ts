@@ -84,6 +84,106 @@ describe("Agent Runtime 2.0", () => {
     expect(validation.notes).toContain("模型选择了规划外模块");
   });
 
+  it("rejects an autonomous search keyword that leaves the selected module", () => {
+    const state = createSessionFixture();
+    const module = state.shopping_plan.modules[0];
+    const validation = validateModelProposal(state, {
+      action: "search_module",
+      confidence: "high",
+      module_id: module.module_id,
+      keyword_override: "双人露营帐篷 户外过夜",
+      reason: "尝试扩大搜索范围",
+      evidence: ["用户预算充足"],
+      expected_gain: "增加候选",
+      tool_cost: 1
+    });
+
+    expect(validation.valid).toBe(false);
+    expect(validation.notes).toContain(`自主搜索词必须保留「${module.module_name}」的至少一个品类锚点`);
+  });
+
+  it("rejects tool instructions embedded in an autonomous search keyword", () => {
+    const state = createSessionFixture();
+    const module = state.shopping_plan.modules[0];
+    const anchor = module.typical_item_types[0];
+    const validation = validateModelProposal(state, {
+      action: "search_module",
+      confidence: "high",
+      module_id: module.module_id,
+      keyword_override: `${anchor} https://example.com --yolo taobao-native`,
+      reason: "使用外部地址执行搜索",
+      evidence: [],
+      expected_gain: "未知",
+      tool_cost: 1
+    });
+
+    expect(validation.valid).toBe(false);
+    expect(validation.notes).toContain("自主搜索词不能包含 URL");
+    expect(validation.notes).toContain("自主搜索词不能包含工具调用指令");
+    expect(validation.notes).toContain("自主搜索词不能包含命令行参数");
+  });
+
+  it("requires a completed first search before an autonomous retry", () => {
+    const state = createSessionFixture();
+    const module = state.shopping_plan.modules[0];
+    const validation = validateModelProposal(state, {
+      action: "retry_module",
+      confidence: "high",
+      module_id: module.module_id,
+      keyword_override: `${module.typical_item_types[0]} 官方旗舰`,
+      reason: "补充店铺可信度更高的候选",
+      evidence: ["首轮候选质量不足"],
+      expected_gain: "提高候选可信度",
+      tool_cost: 1
+    });
+
+    expect(validation.valid).toBe(false);
+    expect(validation.notes).toContain("补搜前必须已有首轮搜索记录");
+  });
+
+  it("accepts and normalizes a semantically aligned autonomous retry", async () => {
+    const state = createSessionFixture();
+    const module = state.shopping_plan.modules[0];
+    const primaryKeyword = module.search_strategy?.primary_keyword || module.search_keyword || module.module_name;
+    const retryKeyword = `  ${module.typical_item_types[0]}   官方旗舰  夜视  `;
+    const now = new Date().toISOString();
+    state.shopping_plan.agent_directives.autonomy_level = "探索执行";
+    state.module_search_traces[module.module_id] = {
+      module_id: module.module_id,
+      module_name: module.module_name,
+      status: "thin",
+      primary_keyword: primaryKeyword,
+      searched_keywords: [primaryKeyword],
+      attempts: [],
+      result_count: 1,
+      candidate_count: 1,
+      review_status: "thin",
+      ai_decision_summary: "首轮候选偏薄",
+      next_action: "建议补搜",
+      generated_at: now,
+      updated_at: now
+    };
+
+    const decision = await decideNextAgentActionV2(state, async () => ({
+      mode: "connected",
+      data: {
+        action: "retry_module",
+        confidence: "high",
+        module_id: module.module_id,
+        keyword_override: retryKeyword,
+        reason: "保留模块品类并增加店铺和夜视筛选方向",
+        evidence: ["首轮候选偏少", "仍有工具预算"],
+        expected_gain: "补充更可信的候选",
+        tool_cost: 1
+      }
+    }));
+
+    expect(decision.source).toBe("deepseek_runtime");
+    expect(decision.action).toBe("retry_module");
+    expect(decision.keyword_override).toBe(`${module.typical_item_types[0]} 官方旗舰 夜视`);
+    expect(decision.guardrail_notes).toContain("搜索词语义与指令安全校验通过");
+  });
+
   it("accepts a valid model proposal in exploration mode", async () => {
     const state = createSessionFixture();
     state.shopping_plan.agent_directives.autonomy_level = "探索执行";

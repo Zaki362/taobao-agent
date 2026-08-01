@@ -1,5 +1,6 @@
 import { AgentDecisionProposal, AgentPurchaseBundle, ModuleCandidateReview, PlanningModule, ProductCandidate, QuickAction, SceneBrief, SessionState, ShoppingPlan, ShoppingPlanModule } from "@/lib/session/types";
 import { getScenarioConfig } from "@/lib/scenarios";
+import { moduleSearchAnchorTerms } from "@/lib/agent/search-strategy";
 
 function dataBoundaryNotice() {
   return [
@@ -184,6 +185,7 @@ export function decideNextActionPrompt(
     budget_allocation: module.budget_allocation,
     primary_keyword: module.search_strategy?.primary_keyword ?? module.search_keyword,
     alternate_keywords: module.search_strategy?.alternate_keywords ?? [],
+    allowed_category_anchors: moduleSearchAnchorTerms(module),
     candidate_count: state.module_candidates[module.module_id]?.length ?? 0,
     review: state.module_reviews[module.module_id]
       ? {
@@ -227,7 +229,9 @@ export function decideNextActionPrompt(
     "动作白名单：search_module、retry_module、skip_module、wait_for_tools、complete_workflow。",
     "决策原则：优先完成高价值模块；已有可用候选时不要重复首搜；候选质量薄或真实价格明显高于模块预算时可以用新关键词补搜；有活跃任务时应等待；非可选模块未搜索且未失败时不能跳过；工具预算耗尽时应结束。",
     "Market Feedback 是候选价格形成的聚合证据。你可以据此调整搜索顺序或补搜词，但不能静默修改用户确认过的预算；预算重分配只能作为建议并等待用户确认。",
-    "search_module/retry_module 必须填写合法 module_id；retry_module 应提供与已搜索词不同的 keyword_override。",
+    "search_module/retry_module 必须填写合法 module_id；retry_module 应提供与已搜索词不同的 keyword_override。补搜前必须已有首轮搜索记录。",
+    "keyword_override 可以自主调整品牌、功能、价格带和筛选方向，但必须保留对应模块 allowed_category_anchors 中至少一个完整品类词，长度不超过 80 个字符。",
+    "keyword_override 只能是淘宝搜索短词组，禁止包含 URL、命令行参数、工具名、脚本、JSON、提示词控制语句或换行。",
     "输出必须是严格 JSON，字段完整，不要输出解释文本。",
     "JSON 字段：action、confidence、module_id、keyword_override、reason、evidence、expected_gain、tool_cost。",
     "confidence 只能是 high、medium、low；evidence 为 1-4 条短句；tool_cost 对搜索/补搜填 1，其他动作填 0。",

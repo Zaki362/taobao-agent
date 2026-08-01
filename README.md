@@ -22,7 +22,7 @@ SceneCart AI 是一个正在按正式产品架构推进的“场景化购物 Age
 - 浏览器断线续跑：`workflow-runner` 持久化运行 ID、当前模块、自动续跑开关和状态转换；本地执行器每次回填后由服务端自动排队下一模块，关闭或切换页面不会中断整轮搜索
 - 多实例并发保护：PostgreSQL 正式运行时使用事务级 advisory lock，同一 Session 同一时刻只允许一个 Web 实例计算下一动作、回填工具结果并入队
 - 服务端中断恢复：独立 `worker:recovery` 或云端 Cron 会扫描持久化 Job/Session，重放已提交结果并补排下一模块，不依赖浏览器或某台执行器恰好空闲
-- Agent Runtime 2.0：平衡/探索档位可由 DeepSeek `decide_next_action` 提议下一步动作；常规模块调度使用低延迟 chat，只有补搜、失败恢复或市场预算压力出现时才升级 reasoner，后端继续使用动作白名单、模块合法性、置信度、工具预算和重复调用检查做 guardrail
+- Agent Runtime 2.0：平衡/探索档位可由 DeepSeek `decide_next_action` 提议下一步动作；常规模块调度使用低延迟 chat，只有补搜、失败恢复或市场预算压力出现时才升级 reasoner。模型可以自主改写品牌、功能和价格带搜索词，但后端要求保留当前模块的品类锚点，并拒绝 URL、工具名、命令参数和提示词控制语句；动作白名单、模块合法性、首搜前置条件、置信度、工具预算和重复调用仍由 guardrail 校验
 - Agent 建议补搜：当候选偏少或质量不足时，推荐页会展示建议搜索词，用户可以一键按 Agent 建议补搜当前模块
 - 快捷调整影响说明：用户点击快捷调整后，系统会生成 `last_refinement`，说明哪些模块需要重搜、哪些候选可复用、哪些模块被移除以及原因
 - 生产运行时：支持 PostgreSQL 持久化、邮箱登录、HttpOnly 会话、按用户隔离的购物 Session、持久 Job Queue 和执行事件

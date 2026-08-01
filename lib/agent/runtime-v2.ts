@@ -3,6 +3,7 @@ import {
   decideNextAgentAction
 } from "@/lib/agent/decision-engine";
 import { decideAgentNextAction } from "@/lib/llm/deepseek";
+import { validateAutonomousSearchKeyword } from "@/lib/agent/search-strategy";
 import type {
   AgentDecision,
   AgentDecisionProposal,
@@ -56,10 +57,11 @@ function isSettled(state: SessionState, module: ShoppingPlanModule) {
 export function validateModelProposal(
   state: SessionState,
   proposal: AgentDecisionProposal
-): { valid: boolean; notes: string[] } {
+): { valid: boolean; notes: string[]; normalized_keyword_override?: string } {
   const notes: string[] = [];
   const module = moduleById(state, proposal.module_id);
   const budgetRemaining = state.agent_runtime.max_tool_calls - state.agent_runtime.used_tool_calls;
+  let normalizedKeywordOverride: string | undefined;
 
   if (proposal.confidence === "low") notes.push("模型置信度过低，使用规则兜底");
   if (proposal.tool_cost > budgetRemaining) notes.push("模型动作超过本轮工具预算");
@@ -72,7 +74,20 @@ export function validateModelProposal(
     }
     if (module && proposal.action === "retry_module") {
       const searched = state.module_search_traces[module.module_id]?.searched_keywords ?? [];
-      if (!proposal.keyword_override || searched.includes(proposal.keyword_override)) {
+      if (searched.length === 0) {
+        notes.push("补搜前必须已有首轮搜索记录");
+      }
+      if (!proposal.keyword_override) {
+        notes.push("补搜必须提供未尝试过的新关键词");
+      }
+    }
+    if (module && proposal.keyword_override) {
+      const keywordValidation = validateAutonomousSearchKeyword(module, proposal.keyword_override);
+      normalizedKeywordOverride = keywordValidation.normalized;
+      notes.push(...keywordValidation.notes);
+      const searched = state.module_search_traces[module.module_id]?.searched_keywords
+        .map((keyword) => keyword.replace(/\s+/g, " ").trim()) ?? [];
+      if (proposal.action === "retry_module" && searched.includes(keywordValidation.normalized)) {
         notes.push("补搜必须提供未尝试过的新关键词");
       }
     }
@@ -96,7 +111,12 @@ export function validateModelProposal(
     if (!allSettled && budgetRemaining > 0) notes.push("仍有未处理模块且工具预算未耗尽");
   }
 
-  return { valid: notes.length === 0, notes };
+  const uniqueNotes = [...new Set(notes)];
+  return {
+    valid: uniqueNotes.length === 0,
+    notes: uniqueNotes,
+    normalized_keyword_override: normalizedKeywordOverride
+  };
 }
 
 function materializeModelDecision(
@@ -182,8 +202,15 @@ export async function decideNextAgentActionV2(
       state.agent_runtime.last_fallback_reason = undefined;
       return materializeModelDecision(
         state,
-        modeled.data,
-        ["动作白名单校验通过", "工具预算校验通过"],
+        {
+          ...modeled.data,
+          keyword_override: validation.normalized_keyword_override ?? modeled.data.keyword_override
+        },
+        [
+          "动作白名单校验通过",
+          "工具预算校验通过",
+          ...(modeled.data.keyword_override ? ["搜索词语义与指令安全校验通过"] : [])
+        ],
         decisionLatencyMs
       );
     }
