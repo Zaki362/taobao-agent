@@ -63,4 +63,16 @@ describe("shopping session summaries", () => {
     expect(summaries).toHaveLength(1);
     expect(summaries[0].session_id).toBe(newer.session_id);
   });
+
+  it("marks archived sessions without exposing additional context", () => {
+    const archivedAt = "2099-01-03T08:00:00.000Z";
+    const summary = summarizeShoppingSession(createSessionFixture({ archived_at: archivedAt }));
+
+    expect(summary).toMatchObject({
+      archived_at: archivedAt,
+      status_label: "已归档",
+      last_activity_at: archivedAt
+    });
+    expect(summary).not.toHaveProperty("hosted_tasks");
+  });
 });

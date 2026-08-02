@@ -168,6 +168,7 @@ function workflowTransitionTime(session: SessionState) {
 }
 
 function isWorkflowRecoveryCandidate(session: SessionState) {
+  if (session.archived_at) return false;
   if (!isActiveWorkflow(session)) return false;
 
   const activeTask = session.hosted_tasks.find((task) =>
@@ -309,6 +310,9 @@ export const localRuntimeRepository: RuntimeRepository = {
   },
 
   async createJob(input) {
+    if (getSession(input.session_id)?.archived_at) {
+      throw new Error("session archived");
+    }
     const state = runtimeState();
     const existing = [...state.jobs.values()].find((job) => job.idempotency_key === input.idempotency_key);
     if (existing) {
@@ -366,6 +370,7 @@ export const localRuntimeRepository: RuntimeRepository = {
       .filter(
         (item) =>
           item.status === "pending" &&
+          !getSession(item.session_id)?.archived_at &&
           new Date(item.available_at).getTime() <= now &&
           (!item.user_id || item.user_id === device.user_id) &&
           device.capabilities.includes(item.job_type)

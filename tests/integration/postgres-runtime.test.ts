@@ -8,6 +8,7 @@ import { closeDatabasePoolForTests, query, withWorkflowSessionLock } from "@/lib
 import { applyCompletedRuntimeJob, enqueueModuleSearchJob } from "@/lib/runtime/jobs";
 import { postgresRuntimeRepository } from "@/lib/runtime/postgres-repository";
 import type { ExecutorDevice, RuntimeUser } from "@/lib/runtime/types";
+import { updateShoppingSessionLifecycle } from "@/lib/session/lifecycle";
 import { createSessionFixture } from "@/tests/fixtures/session";
 
 const databaseAvailable = Boolean(process.env.DATABASE_URL);
@@ -192,6 +193,49 @@ describeWithDatabase("PostgreSQL production runtime contract", () => {
     });
     expect(await postgresRuntimeRepository.cancelJob(cancellableId, otherUserId)).toBeNull();
     expect((await postgresRuntimeRepository.cancelJob(cancellableId, userId))?.status).toBe("cancelled");
+  });
+
+  it("prevents PostgreSQL workers from creating or claiming work for archived sessions", async () => {
+    const archivedSessionId = `session-pg-archive-${randomUUID()}`;
+    await postgresRuntimeRepository.saveSession(createSessionFixture({
+      session_id: archivedSessionId,
+      owner_id: userId
+    }));
+    const pendingJobId = randomUUID();
+    await postgresRuntimeRepository.createJob({
+      id: pendingJobId,
+      user_id: userId,
+      session_id: archivedSessionId,
+      job_type: "module_search",
+      idempotency_key: `integration:${archivedSessionId}:pending`,
+      payload: {}
+    });
+
+    const archived = await updateShoppingSessionLifecycle(archivedSessionId, "archive", userId);
+    expect(archived.state.archived_at).toBeTruthy();
+    expect(archived.cancelled_pending_jobs).toBe(1);
+    expect((await postgresRuntimeRepository.getJob(pendingJobId))?.status).toBe("cancelled");
+    const blockedClaimId = randomUUID();
+    await query(
+      `INSERT INTO agent_jobs(id, user_id, session_id, job_type, idempotency_key, payload)
+       VALUES($1, $2, $3, 'module_search', $4, '{}'::jsonb)`,
+      [blockedClaimId, userId, archivedSessionId, `integration:${archivedSessionId}:claim-blocked`]
+    );
+    expect(await postgresRuntimeRepository.claimJob(device, 30_000)).toBeNull();
+    expect((await postgresRuntimeRepository.getJob(blockedClaimId))?.status).toBe("pending");
+    await query("UPDATE agent_jobs SET status = 'cancelled' WHERE id = $1", [blockedClaimId]);
+    await expect(postgresRuntimeRepository.createJob({
+      id: randomUUID(),
+      user_id: userId,
+      session_id: archivedSessionId,
+      job_type: "module_search",
+      idempotency_key: `integration:${archivedSessionId}:rejected`,
+      payload: {}
+    })).rejects.toThrow("session archived");
+
+    const restored = await updateShoppingSessionLifecycle(archivedSessionId, "restore", userId);
+    expect(restored.state.archived_at).toBeUndefined();
+    expect(restored.state.agent_runtime.auto_continue).toBe(false);
   });
 
   it("terminates non-retryable executor failures after the first attempt", async () => {

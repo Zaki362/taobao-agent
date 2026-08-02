@@ -22,6 +22,7 @@ SceneCart AI 是一个正在按正式产品架构推进的“场景化购物 Age
 - 服务端 Agent 决策循环：用户确认规划后只需启动一次，后端会消费 AI 规划顺序、执行档位、候选池复盘和工具状态，逐轮决定搜索、补搜、容错跳过、等待工具或结束，并把动作写入 `agent_decisions`
 - 浏览器断线续跑：`workflow-runner` 持久化运行 ID、当前模块、自动续跑开关和状态转换；本地执行器每次回填后由服务端自动排队下一模块，关闭或切换页面不会中断整轮搜索
 - 账号级任务续接：首页读取隐私收敛的服务端会话摘要，展示最近购物任务的预算、模块覆盖和执行状态；用户可跨浏览器恢复任意任务，完整 Agent context 只在点击继续后按所有权校验加载
+- 安全任务归档：首页可将旧购物任务移入折叠归档区并随时恢复；归档会停止 Agent 自动推进、取消尚未领取的执行器任务，并阻止 Worker 继续领取或创建该会话的新任务，已经被领取的动作则保留真实状态而不伪装成已取消
 - 会话所有权 fail-closed：PostgreSQL 与本地认证运行时都要求 `owner_id` 精确匹配；早期无 owner 的匿名会话不会向任意登录账号暴露，只在显式匿名开发模式中保留兼容读取
 - 多实例并发保护：PostgreSQL 正式运行时使用事务级 advisory lock，同一 Session 同一时刻只允许一个 Web 实例计算下一动作、回填工具结果并入队
 - 服务端中断恢复：独立 `worker:recovery` 或云端 Cron 会扫描持久化 Job/Session，重放已提交结果并补排下一模块，不依赖浏览器或某台执行器恰好空闲
@@ -241,6 +242,8 @@ lib/scenarios/
 - `POST /api/session/search-strategy`：用户确认规划前微调模块搜索任务包，写回当前 session 的主搜索词和备用词
 - `GET /api/session/state`：读取当前 session 完整状态
 - `GET /api/sessions?view=summary&limit=6`：读取当前账号最近购物任务的轻量摘要，不返回候选池、模型凭证和工具日志
+- `GET /api/sessions?view=summary&archive=archived&limit=20`：读取当前账号已归档任务摘要
+- `POST /api/session/archive`：显式确认后归档或恢复购物任务，`action` 为 `archive | restore`
 - `GET /api/mcp/status`：读取当前工具执行模式状态
 - `POST /api/mcp/run`：仅开发调试使用；需要显式设置 `SCENECART_ENABLE_MCP_DEBUG=true`，production 始终隐藏。高风险工具仍必须同时传 `confirm_high_risk=true` 与 `input.confirmed=true`
 - `GET /api/sessions`：执行台读取会话列表

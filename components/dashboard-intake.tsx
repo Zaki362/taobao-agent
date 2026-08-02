@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { ArrowRight, ChevronRight, Clock3, Loader2, PackageCheck, Sparkles } from "lucide-react";
+import { Archive, ArchiveRestore, ArrowRight, ChevronRight, Clock3, Loader2, PackageCheck, Sparkles } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -92,16 +92,24 @@ export function LandingPage({
   onEnterScenario,
   interactiveReady,
   recentSessions,
+  archivedSessions,
   recentSessionsLoading,
   resumingSessionId,
-  onResumeSession
+  lifecycleSessionId,
+  onResumeSession,
+  onArchiveSession,
+  onRestoreSession
 }: {
   onEnterScenario: () => void;
   interactiveReady: boolean;
   recentSessions: ShoppingSessionSummary[];
+  archivedSessions: ShoppingSessionSummary[];
   recentSessionsLoading: boolean;
   resumingSessionId: string;
+  lifecycleSessionId: string;
   onResumeSession: (session: ShoppingSessionSummary) => void;
+  onArchiveSession: (session: ShoppingSessionSummary) => void;
+  onRestoreSession: (session: ShoppingSessionSummary) => void;
 }) {
   return (
     <Card className="section-card">
@@ -145,7 +153,7 @@ export function LandingPage({
           ))}
         </div>
 
-        {recentSessionsLoading || recentSessions.length > 0 ? (
+        {recentSessionsLoading || recentSessions.length > 0 || archivedSessions.length > 0 ? (
           <div className="border-t border-border/70 pt-8">
             <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
               <div>
@@ -170,6 +178,7 @@ export function LandingPage({
                     ? Math.round((session.covered_module_count / session.module_count) * 100)
                     : 0;
                   const isResuming = resumingSessionId === session.session_id;
+                  const isUpdatingLifecycle = lifecycleSessionId === session.session_id;
                   return (
                     <article
                       key={session.session_id}
@@ -185,17 +194,27 @@ export function LandingPage({
                             {session.requirement}
                           </p>
                         </div>
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          className="shrink-0"
-                          disabled={Boolean(resumingSessionId)}
-                          onClick={() => onResumeSession(session)}
-                        >
-                          {isResuming ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : null}
-                          继续任务
-                          {!isResuming ? <ArrowRight className="ml-1.5 h-4 w-4" /> : null}
-                        </Button>
+                        <div className="flex shrink-0 flex-wrap justify-end gap-2">
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            disabled={Boolean(resumingSessionId || lifecycleSessionId)}
+                            onClick={() => onArchiveSession(session)}
+                          >
+                            {isUpdatingLifecycle ? <Loader2 className="h-4 w-4 animate-spin" /> : <Archive className="h-4 w-4" />}
+                            归档
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            disabled={Boolean(resumingSessionId || lifecycleSessionId)}
+                            onClick={() => onResumeSession(session)}
+                          >
+                            {isResuming ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                            继续任务
+                            {!isResuming ? <ArrowRight className="h-4 w-4" /> : null}
+                          </Button>
+                        </div>
                       </div>
 
                       <div className="mt-4 grid grid-cols-3 gap-2 text-xs text-muted-foreground">
@@ -234,6 +253,46 @@ export function LandingPage({
                 })}
               </div>
             )}
+
+            {archivedSessions.length > 0 ? (
+              <details className="mt-5 rounded-[24px] border border-border/70 bg-muted/20 px-5 py-4">
+                <summary className="cursor-pointer text-sm font-medium text-muted-foreground transition hover:text-foreground">
+                  已归档任务（{archivedSessions.length}）
+                </summary>
+                <div className="mt-4 grid gap-3 lg:grid-cols-2">
+                  {archivedSessions.map((session) => {
+                    const isRestoring = lifecycleSessionId === session.session_id;
+                    return (
+                      <article key={session.session_id} className="rounded-[22px] border border-border/70 bg-white p-4">
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <Badge variant="outline">{session.scene_label}</Badge>
+                              <Badge variant="outline">已归档</Badge>
+                            </div>
+                            <p className="mt-3 line-clamp-2 text-sm font-medium leading-6 text-foreground">
+                              {session.requirement}
+                            </p>
+                            <p className="mt-2 text-xs text-muted-foreground">
+                              {session.candidate_count} 个候选 · 已选 {session.selected_item_count} 件
+                            </p>
+                          </div>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            disabled={Boolean(lifecycleSessionId || resumingSessionId)}
+                            onClick={() => onRestoreSession(session)}
+                          >
+                            {isRestoring ? <Loader2 className="h-4 w-4 animate-spin" /> : <ArchiveRestore className="h-4 w-4" />}
+                            恢复
+                          </Button>
+                        </div>
+                      </article>
+                    );
+                  })}
+                </div>
+              </details>
+            ) : null}
           </div>
         ) : null}
       </CardContent>

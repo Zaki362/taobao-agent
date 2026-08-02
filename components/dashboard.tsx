@@ -91,8 +91,10 @@ export function Dashboard() {
   const [removingCartProductId, setRemovingCartProductId] = useState("");
   const [workflowControlBusy, setWorkflowControlBusy] = useState(false);
   const [recentSessions, setRecentSessions] = useState<ShoppingSessionSummary[]>([]);
+  const [archivedSessions, setArchivedSessions] = useState<ShoppingSessionSummary[]>([]);
   const [recentSessionsLoading, setRecentSessionsLoading] = useState(true);
   const [resumingSessionId, setResumingSessionId] = useState("");
+  const [lifecycleSessionId, setLifecycleSessionId] = useState("");
 
   const selectedModule = session?.shopping_plan.modules.find((item) => item.module_id === selectedModuleId) ?? session?.shopping_plan.modules[0];
   const selectedProducts = selectedModule ? session?.module_candidates[selectedModule.module_id] ?? [] : [];
@@ -137,12 +139,17 @@ export function Dashboard() {
   async function refreshRecentSessions() {
     setRecentSessionsLoading(true);
     try {
-      const data = await jsonFetch<{ sessions?: ShoppingSessionSummary[] }>("/api/sessions?view=summary&limit=6");
-      setRecentSessions(Array.isArray(data.sessions) ? data.sessions : []);
+      const [activeData, archivedData] = await Promise.all([
+        jsonFetch<{ sessions?: ShoppingSessionSummary[] }>("/api/sessions?view=summary&limit=6"),
+        jsonFetch<{ sessions?: ShoppingSessionSummary[] }>("/api/sessions?view=summary&archive=archived&limit=20")
+      ]);
+      setRecentSessions(Array.isArray(activeData.sessions) ? activeData.sessions : []);
+      setArchivedSessions(Array.isArray(archivedData.sessions) ? archivedData.sessions : []);
     } catch {
       // Logged-out formal deployments return 401 here. The landing page remains usable
       // and the login entry explains how to access account-bound history.
       setRecentSessions([]);
+      setArchivedSessions([]);
     } finally {
       setRecentSessionsLoading(false);
     }
@@ -420,6 +427,41 @@ export function Dashboard() {
       setErrorMessage(error instanceof Error ? error.message : "恢复购物任务失败");
     } finally {
       setResumingSessionId("");
+    }
+  }
+
+  async function updateServerSessionLifecycle(
+    summary: ShoppingSessionSummary,
+    action: "archive" | "restore"
+  ) {
+    const confirmed = window.confirm(
+      action === "archive"
+        ? `确认归档「${summary.requirement}」吗？尚未执行的后台动作会停止，之后仍可恢复。`
+        : `确认恢复「${summary.requirement}」吗？恢复后不会自动开始搜索。`
+    );
+    if (!confirmed) return;
+
+    setLifecycleSessionId(summary.session_id);
+    setErrorMessage("");
+    try {
+      await jsonFetch("/api/session/archive", {
+        method: "POST",
+        body: JSON.stringify({
+          session_id: summary.session_id,
+          action,
+          confirmed: true
+        })
+      });
+      if (action === "archive" && resumeSnapshot?.sessionId === summary.session_id) {
+        setResumeSnapshot(null);
+        window.localStorage.removeItem(WORKFLOW_STORAGE_KEY);
+      }
+      await refreshRecentSessions();
+      setStatusMessage(action === "archive" ? "购物任务已安全归档" : "购物任务已恢复，可从最近任务继续");
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "更新购物任务状态失败");
+    } finally {
+      setLifecycleSessionId("");
     }
   }
 
@@ -1316,9 +1358,13 @@ export function Dashboard() {
             onEnterScenario={enterScenario}
             interactiveReady={interactiveReady}
             recentSessions={recentSessions.filter((item) => item.session_id !== resumeSnapshot?.sessionId)}
+            archivedSessions={archivedSessions}
             recentSessionsLoading={recentSessionsLoading}
             resumingSessionId={resumingSessionId}
+            lifecycleSessionId={lifecycleSessionId}
             onResumeSession={resumeServerSession}
+            onArchiveSession={(summary) => updateServerSessionLifecycle(summary, "archive")}
+            onRestoreSession={(summary) => updateServerSessionLifecycle(summary, "restore")}
           />
         ) : null}
 

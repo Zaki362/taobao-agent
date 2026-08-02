@@ -1,4 +1,4 @@
-import { expect, test, type APIRequestContext } from "@playwright/test";
+import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
 import protocol from "../../lib/runtime/executor-protocol.json";
 
 const recommendationTypes = ["稳妥推荐", "性价比推荐", "升级推荐"] as const;
@@ -7,6 +7,15 @@ const executorHeaders = (token: string) => ({
   Authorization: `Bearer ${token}`,
   "X-SceneCart-Executor-Protocol": protocol.version
 });
+
+async function returnToLandingWithoutLocalSnapshot(page: Page) {
+  await page.goto("/");
+  const restartButton = page.getByRole("button", { name: "重新开始" });
+  if (await restartButton.isVisible()) {
+    await restartButton.click();
+  }
+  await expect(page.getByRole("heading", { name: "最近购物任务" })).toBeVisible();
+}
 
 function candidatesFor(job: { id: string; payload: Record<string, unknown> }) {
   const moduleId = String(job.payload.module_id ?? "module");
@@ -374,9 +383,7 @@ test("authenticated new-car workflow reaches recommendations through the durable
     expect(compactSession).not.toHaveProperty("tool_logs");
     expect(compactSession).not.toHaveProperty("module_candidates");
 
-    await page.evaluate(() => window.localStorage.removeItem("scenecart-dashboard-state"));
-    await page.goto("/");
-    await expect(page.getByRole("heading", { name: "最近购物任务" })).toBeVisible();
+    await returnToLandingWithoutLocalSnapshot(page);
     const recentTask = page.locator("article").filter({ hasText: completedState.raw_input }).first();
     await expect(recentTask).toContainText("推荐已生成");
     await recentTask.getByRole("button", { name: "继续任务" }).click();
@@ -602,6 +609,59 @@ test("authenticated new-car workflow reaches recommendations through the durable
 
     await page.getByRole("button", { name: "返回当前进度" }).click();
     await expect(page.getByText("确认购物规划")).toBeVisible();
+
+    const unconfirmedArchive = await page.request.post("/api/session/archive", {
+      headers: { Origin: "http://127.0.0.1:3100" },
+      data: { session_id: persistedSessionId, action: "archive", confirmed: false }
+    });
+    expect(unconfirmedArchive.status()).toBe(400);
+
+    const archiveResponse = await page.request.post("/api/session/archive", {
+      headers: { Origin: "http://127.0.0.1:3100" },
+      data: { session_id: persistedSessionId, action: "archive", confirmed: true }
+    });
+    const archiveResult = await archiveResponse.json() as {
+      state: { archived_at?: string; agent_runtime: { auto_continue: boolean } };
+      cancelled_pending_jobs: number;
+    };
+    expect(archiveResponse.ok(), JSON.stringify(archiveResult)).toBeTruthy();
+    expect(archiveResult.state.archived_at).toBeTruthy();
+    expect(archiveResult.state.agent_runtime.auto_continue).toBe(false);
+    expect(archiveResult.cancelled_pending_jobs).toBeGreaterThanOrEqual(1);
+
+    const activeAfterArchive = await page.request.get("/api/sessions?view=summary&limit=20");
+    const activeAfterArchivePayload = await activeAfterArchive.json() as {
+      sessions: Array<{ session_id: string }>;
+    };
+    expect(activeAfterArchivePayload.sessions.some((item) => item.session_id === persistedSessionId)).toBe(false);
+    const archivedSummaryResponse = await page.request.get(
+      "/api/sessions?view=summary&archive=archived&limit=20"
+    );
+    const archivedSummaryPayload = await archivedSummaryResponse.json() as {
+      sessions: Array<{ session_id: string; status_label: string; archived_at?: string }>;
+    };
+    expect(archivedSummaryPayload.sessions.find((item) => item.session_id === persistedSessionId))
+      .toMatchObject({ status_label: "已归档" });
+
+    await returnToLandingWithoutLocalSnapshot(page);
+    await page.getByText(/已归档任务（\d+）/).click();
+    const archivedTaskCard = page.locator("article").filter({ hasText: completedState.raw_input }).first();
+    await expect(archivedTaskCard).toContainText("已归档");
+    page.once("dialog", (dialog) => dialog.accept());
+    await archivedTaskCard.getByRole("button", { name: "恢复" }).click();
+    const restoredTaskCard = page.locator("article").filter({ hasText: completedState.raw_input }).first();
+    await expect(restoredTaskCard.getByRole("button", { name: "继续任务" })).toBeVisible();
+
+    const restoredStateResponse = await page.request.get(`/api/session/state?session_id=${persistedSessionId}`);
+    const restoredLifecycleState = await restoredStateResponse.json() as {
+      archived_at?: string;
+      agent_runtime: { workflow_status: string; auto_continue: boolean };
+    };
+    expect(restoredLifecycleState.archived_at).toBeUndefined();
+    expect(restoredLifecycleState.agent_runtime).toMatchObject({
+      workflow_status: "idle",
+      auto_continue: false
+    });
   } finally {
     stopExecutor = true;
     await executor;

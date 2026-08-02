@@ -460,6 +460,8 @@ export interface SelectedItem {
 export interface SessionState {
   session_id: string;
   owner_id?: string;
+  archived_at?: string;
+  archived_from_workflow_status?: AgentRuntimeState["workflow_status"];
   raw_input: string;
   scene_brief: SceneBrief;
   base_template: PlanningModule[];

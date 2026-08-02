@@ -147,7 +147,8 @@ export const postgresRuntimeRepository: RuntimeRepository = {
     const result = await query<{ state: SessionState }>(
       `SELECT sessions.state
        FROM shopping_sessions AS sessions
-       WHERE sessions.state #>> '{agent_runtime,auto_continue}' = 'true'
+       WHERE NOT (sessions.state ? 'archived_at')
+         AND sessions.state #>> '{agent_runtime,auto_continue}' = 'true'
          AND sessions.state #>> '{agent_runtime,workflow_status}' IN ('running', 'waiting_for_tools')
          ${ownerClause}
          AND (
@@ -280,7 +281,11 @@ export const postgresRuntimeRepository: RuntimeRepository = {
   async createJob(input: CreateRuntimeJobInput) {
     const result = await query(
       `INSERT INTO agent_jobs(id, user_id, session_id, job_type, idempotency_key, payload, priority, max_attempts)
-       VALUES($1, $2, $3, $4, $5, $6::jsonb, $7, $8)
+       SELECT $1, $2, $3, $4, $5, $6::jsonb, $7, $8
+       WHERE NOT EXISTS (
+         SELECT 1 FROM shopping_sessions AS sessions
+         WHERE sessions.id = $3 AND sessions.state ? 'archived_at'
+       )
        ON CONFLICT(idempotency_key) DO UPDATE SET
          status = CASE WHEN agent_jobs.status IN ('failed', 'cancelled') THEN 'pending' ELSE agent_jobs.status END,
          payload = CASE WHEN agent_jobs.status IN ('failed', 'cancelled') THEN EXCLUDED.payload ELSE agent_jobs.payload END,
@@ -306,6 +311,7 @@ export const postgresRuntimeRepository: RuntimeRepository = {
         input.max_attempts ?? 3
       ]
     );
+    if (!result.rowCount) throw new Error("session archived");
     return normalizeJob(result.rows[0]);
   },
 
@@ -343,6 +349,11 @@ export const postgresRuntimeRepository: RuntimeRepository = {
            AND available_at <= NOW()
            AND (user_id IS NULL OR user_id = $1)
            AND job_type = ANY($2::text[])
+           AND NOT EXISTS (
+             SELECT 1 FROM shopping_sessions AS sessions
+             WHERE sessions.id = agent_jobs.session_id
+               AND sessions.state ? 'archived_at'
+           )
          ORDER BY priority DESC, created_at ASC
          FOR UPDATE SKIP LOCKED
          LIMIT 1`,

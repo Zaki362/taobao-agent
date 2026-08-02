@@ -34,15 +34,22 @@ export async function GET(request: NextRequest) {
   try {
     const identity = await getRequestIdentity();
     const storedSessions = await loadSessions(identity.userId);
+    const archiveFilter = request.nextUrl.searchParams.get("archive") ?? "active";
+    const filteredSessions = storedSessions.filter((session) => {
+      if (archiveFilter === "all") return true;
+      if (archiveFilter === "archived") return Boolean(session.archived_at);
+      return !session.archived_at;
+    });
     if (request.nextUrl.searchParams.get("view") === "summary") {
       const requestedLimit = Number(request.nextUrl.searchParams.get("limit") ?? 6);
-      return apiOk({ sessions: summarizeShoppingSessions(storedSessions, requestedLimit) });
+      return apiOk({ sessions: summarizeShoppingSessions(filteredSessions, requestedLimit) });
     }
 
-    const sessions = storedSessions
+    const sessions = filteredSessions
       .sort((a, b) => sessionTimestamp(b.session_id) - sessionTimestamp(a.session_id))
       .map((session) => ({
         session_id: session.session_id,
+        archived_at: session.archived_at,
         raw_input: session.raw_input,
         current_scene_label: session.current_scene_label,
         base_template: session.base_template,

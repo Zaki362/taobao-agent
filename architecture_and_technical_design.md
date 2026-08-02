@@ -489,6 +489,7 @@ DeepSeek 在系统中不做“自由 Agent”，而做“受约束的结构化�
 - 保存整个工作流上下文
 - 支持多阶段页面恢复
 - 支持搜索结果、规划结果和已选商品持续存在
+- 管理账号级任务归档与恢复，并协调未领取 Job 的安全取消
 
 ### 输入输出
 
@@ -515,6 +516,9 @@ DeepSeek 在系统中不做“自由 Agent”，而做“受约束的结构化�
 
 - [lib/session/types.ts](./lib/session/types.ts)
 - [lib/session/store.ts](./lib/session/store.ts)
+- [lib/session/lifecycle.ts](./lib/session/lifecycle.ts)
+
+`SessionState.archived_at` 是软归档边界。归档动作在 Session 级事务锁内完成：停止 `auto_continue`、取消 pending Job、同步 pending HostedTask、记录审计事件；leased/running Job 不会被伪装成已取消，但其回填触发的工作流续跑会因归档状态返回 paused。Local 与 PostgreSQL Repository 的 Job 创建和领取路径都会拒绝已归档 Session。恢复只清除归档标记且不会自动启动工具调用：未开始搜索的规划回到 `idle`，已完成任务保持 `completed`，其余任务以 `paused` 等待用户确认后继续。
 
 ---
 
@@ -1236,6 +1240,7 @@ executor 不只负责转发工具调用，也负责把 adapter 输出归一化�
 
 - [lib/session/types.ts](./lib/session/types.ts)
 - [lib/session/store.ts](./lib/session/store.ts)
+- [lib/session/lifecycle.ts](./lib/session/lifecycle.ts)
 
 ### 场景配置
 
@@ -1513,6 +1518,7 @@ executor 不只负责转发工具调用，也负责把 adapter 输出归一化�
 - 搜索回填
 - 快捷调整
 - 执行台查看
+- 账号级历史续接、安全归档和显式恢复
 
 ### 9.5 工具层具备真实连接能力
 

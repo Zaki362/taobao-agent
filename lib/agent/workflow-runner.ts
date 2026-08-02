@@ -120,6 +120,9 @@ async function executeAdvance(
 ): Promise<AgentWorkflowAdvanceResult> {
   let state = await loadSession(sessionId, userId);
   if (!state) throw new Error("session not found");
+  if (state.archived_at) {
+    return { state, outcome: "paused" };
+  }
 
   if (options.start) {
     const continuingExistingRun =

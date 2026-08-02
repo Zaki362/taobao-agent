@@ -395,6 +395,20 @@ export function normalizeSessionState(state: SessionState): SessionState {
 
   return {
     ...state,
+    archived_at:
+      typeof (state as Partial<SessionState>).archived_at === "string" &&
+      (state as Partial<SessionState>).archived_at?.trim()
+        ? (state as Partial<SessionState>).archived_at
+        : undefined,
+    archived_from_workflow_status:
+      (state as Partial<SessionState>).archived_from_workflow_status === "idle" ||
+      (state as Partial<SessionState>).archived_from_workflow_status === "running" ||
+      (state as Partial<SessionState>).archived_from_workflow_status === "waiting_for_tools" ||
+      (state as Partial<SessionState>).archived_from_workflow_status === "completed" ||
+      (state as Partial<SessionState>).archived_from_workflow_status === "paused" ||
+      (state as Partial<SessionState>).archived_from_workflow_status === "error"
+        ? (state as Partial<SessionState>).archived_from_workflow_status
+        : undefined,
     shopping_plan: {
       ...shoppingPlan,
       execution_strategy: normalizePlanExecutionStrategy(stateWithNormalizedModules),

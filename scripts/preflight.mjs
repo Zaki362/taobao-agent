@@ -240,6 +240,35 @@ function assertDevelopmentLauncher() {
   }
 }
 
+function assertE2EServerIsolation() {
+  const playwright = tryReadText("playwright.config.ts");
+  const nextConfig = tryReadText("next.config.ts");
+  const server = tryReadText("scripts/e2e-server.mjs");
+  const tsconfig = tryReadText("tsconfig.e2e.json");
+  if (!playwright || !nextConfig || !server || !tsconfig) return;
+
+  if (
+    !playwright.includes("scripts/e2e-server.mjs") ||
+    !playwright.includes('NEXT_DIST_DIR: ".next-e2e"') ||
+    !playwright.includes('NEXT_TSCONFIG_PATH: "tsconfig.e2e.json"') ||
+    !playwright.includes('AUTH_COOKIE_SECURE: "false"') ||
+    !playwright.includes("APP_ORIGIN: baseURL") ||
+    !nextConfig.includes("NEXT_TSCONFIG_PATH") ||
+    !server.includes('runNext(["build"') ||
+    !server.includes("buildTimeoutMs = 90_000") ||
+    !server.includes("buildWithOneRetry") ||
+    !server.includes("prepareStandaloneAssets") ||
+    !server.includes("standaloneServer") ||
+    !server.includes("originalNextEnv") ||
+    !server.includes("originalTsconfig") ||
+    !server.includes("restore(nextEnvPath") ||
+    !server.includes("restore(e2eTsconfigPath") ||
+    !tsconfig.includes('".next-e2e/types/**/*.ts"')
+  ) {
+    fail("E2E 必须使用隔离的 distDir/tsconfig 构建不可变测试服务器，并在构建后恢复 Next.js 生成的配置文件");
+  }
+}
+
 function assertDeploymentAssets() {
   const dockerfile = tryReadText("Dockerfile");
   const compose = tryReadText("docker-compose.yml");
@@ -292,6 +321,7 @@ function assertRequiredFiles() {
     "app/api/session/budget-reallocation/route.ts",
     "app/api/session/search-strategy/route.ts",
     "app/api/session/purchase-bundle/route.ts",
+    "app/api/session/archive/route.ts",
     "app/api/session/state/route.ts",
     "app/api/runtime/readiness/route.ts",
     "app/api/internal/runtime-readiness/route.ts",
@@ -307,6 +337,7 @@ function assertRequiredFiles() {
     "lib/agent/decision-engine.ts",
     "lib/agent/completion-review.ts",
     "lib/session/bundle-adoption.ts",
+    "lib/session/lifecycle.ts",
     "app/api/agent/remediate/route.ts",
     "lib/agent/runtime-v2.ts",
     "lib/agent/orchestrator.ts",
@@ -337,6 +368,7 @@ function assertRequiredFiles() {
     "lib/security/rate-limit.ts",
     "scripts/local-executor.mjs",
     "scripts/dev-server.mjs",
+    "scripts/e2e-server.mjs",
     "scripts/configure-executor.mjs",
     "scripts/executor-config-utils.mjs",
     "scripts/executor-doctor.mjs",
@@ -349,6 +381,7 @@ function assertRequiredFiles() {
     "docs/deployment.md",
     "vitest.evaluation.config.ts",
     "tests/evaluation/new-car-agent-quality.test.ts",
+    "tsconfig.e2e.json",
     "lib/mcp/qoder.ts",
     "lib/session/guards.ts",
     "lib/session/summaries.ts",
@@ -439,6 +472,7 @@ function assertArchitectureContracts() {
   const budgetReallocationRoute = tryReadText("app/api/session/budget-reallocation/route.ts");
   const searchStrategyRoute = tryReadText("app/api/session/search-strategy/route.ts");
   const purchaseBundleRoute = tryReadText("app/api/session/purchase-bundle/route.ts");
+  const sessionArchiveRoute = tryReadText("app/api/session/archive/route.ts");
   const sessionsRoute = tryReadText("app/api/sessions/route.ts");
   const sessionStateRoute = tryReadText("app/api/session/state/route.ts");
   const hostedTasksRoute = tryReadText("app/api/hosted/tasks/route.ts");
@@ -448,11 +482,13 @@ function assertArchitectureContracts() {
   const runtimeDatabase = tryReadText("lib/runtime/database.ts");
   const runtimeIndex = tryReadText("lib/runtime/index.ts");
   const localRuntimeRepository = tryReadText("lib/runtime/local-repository.ts");
+  const postgresRuntimeRepository = tryReadText("lib/runtime/postgres-repository.ts");
   const authRequest = tryReadText("lib/auth/request.ts");
   const runtimeJobs = tryReadText("lib/runtime/jobs.ts");
   const sessionStore = tryReadText("lib/session/store.ts");
   const sessionGuards = tryReadText("lib/session/guards.ts");
   const sessionSummaries = tryReadText("lib/session/summaries.ts");
+  const sessionLifecycle = tryReadText("lib/session/lifecycle.ts");
   const scenarioIndex = tryReadText("lib/scenarios/index.ts");
   const scenarioNormalize = tryReadText("lib/scenarios/normalize.ts");
   const releaseAudit = tryReadText("scripts/release-audit.mjs");
@@ -496,6 +532,7 @@ function assertArchitectureContracts() {
     !agentRemediateRoute ||
     !agentResumeRoute ||
     !purchaseBundleRoute ||
+    !sessionArchiveRoute ||
     !responses ||
     !hostedWorkerAuth ||
     !cart ||
@@ -523,11 +560,13 @@ function assertArchitectureContracts() {
     !runtimeDatabase ||
     !runtimeIndex ||
     !localRuntimeRepository ||
+    !postgresRuntimeRepository ||
     !authRequest ||
     !runtimeJobs ||
     !sessionStore ||
     !sessionGuards ||
     !sessionSummaries ||
+    !sessionLifecycle ||
     !scenarioIndex ||
     !scenarioNormalize ||
     !releaseAudit
@@ -1090,6 +1129,23 @@ function assertArchitectureContracts() {
     },
     {
       ok:
+        types.includes("archived_at?: string") &&
+        types.includes("archived_from_workflow_status?") &&
+        sessionArchiveRoute.includes("confirmed !== true") &&
+        sessionArchiveRoute.includes("updateShoppingSessionLifecycle") &&
+        sessionLifecycle.includes("withWorkflowSessionTransaction") &&
+        sessionLifecycle.includes('event_type: "session.archived"') &&
+        sessionLifecycle.includes('event_type: "session.restored"') &&
+        sessionLifecycle.includes("repository.cancelJob") &&
+        sessionsRoute.includes('archiveFilter === "archived"') &&
+        localRuntimeRepository.includes("!getSession(item.session_id)?.archived_at") &&
+        postgresRuntimeRepository.includes("sessions.state ? 'archived_at'") &&
+        dashboardIntake.includes("已归档任务") &&
+        dashboard.includes('action: "archive" | "restore"'),
+      message: "购物任务必须支持账号隔离的安全归档与恢复，并阻止执行器继续领取已归档会话任务"
+    },
+    {
+      ok:
         scenarioIndex.includes("export function isScenarioId") &&
         scenarioNormalize.includes("isScenarioId") &&
         parseRoute.includes("isScenarioId(body.scenario_id)") &&
@@ -1169,6 +1225,7 @@ function run() {
   assertGitignore();
   assertExecutorConfigurator();
   assertDevelopmentLauncher();
+  assertE2EServerIsolation();
   assertDeploymentAssets();
   assertRequiredFiles();
   assertRemovedLegacyFiles();

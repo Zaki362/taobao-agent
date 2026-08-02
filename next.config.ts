@@ -6,6 +6,9 @@ const nextConfig: NextConfig = {
     ? { distDir: process.env.NEXT_DIST_DIR.trim() }
     : {}),
   typedRoutes: false,
+  ...(process.env.NEXT_TSCONFIG_PATH?.trim()
+    ? { typescript: { tsconfigPath: process.env.NEXT_TSCONFIG_PATH.trim() } }
+    : {}),
   output: "standalone",
   allowedDevOrigins: ["127.0.0.1", "localhost"],
   outputFileTracingRoot: path.join(__dirname),

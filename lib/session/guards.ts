@@ -534,6 +534,14 @@ export function isSessionState(value: unknown): value is SessionState {
 
   return (
     typeof value.session_id === "string" &&
+    (value.archived_at === undefined || typeof value.archived_at === "string") &&
+    (value.archived_from_workflow_status === undefined ||
+      value.archived_from_workflow_status === "idle" ||
+      value.archived_from_workflow_status === "running" ||
+      value.archived_from_workflow_status === "waiting_for_tools" ||
+      value.archived_from_workflow_status === "completed" ||
+      value.archived_from_workflow_status === "paused" ||
+      value.archived_from_workflow_status === "error") &&
     typeof value.raw_input === "string" &&
     isRecord(value.scene_brief) &&
     Array.isArray(value.base_template) &&

@@ -27,14 +27,17 @@ export default defineConfig({
     }
   ],
   webServer: {
-    command: `npm run dev:web -- --port ${port}`,
+    command: `node scripts/e2e-server.mjs --port ${port}`,
     url: baseURL,
-    timeout: 120_000,
+    timeout: 210_000,
     reuseExistingServer: !process.env.CI,
     env: {
       ...process.env,
       NEXT_DIST_DIR: ".next-e2e",
+      NEXT_TSCONFIG_PATH: "tsconfig.e2e.json",
       AUTH_REQUIRED: "true",
+      AUTH_COOKIE_SECURE: "false",
+      APP_ORIGIN: baseURL,
       RUNTIME_STORE: "local",
       SCENECART_LOCAL_RUNTIME_PERSIST: "false",
       TAOBAO_EXECUTION_BACKEND: "local_executor",

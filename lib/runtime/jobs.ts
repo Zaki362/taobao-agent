@@ -149,6 +149,7 @@ export async function enqueueModuleSearchJob(
   state: SessionState,
   input: { moduleId: string; moduleName: string; keyword: string }
 ) {
+  if (state.archived_at) throw new Error("session archived");
   const repository = getRuntimeRepository();
   const existingTask = state.hosted_tasks.find(
     (task) =>
@@ -212,6 +213,7 @@ export async function enqueueAddToCartJob(
   state: SessionState,
   input: { productId: string; title: string; moduleId: string; moduleName?: string }
 ) {
+  if (state.archived_at) throw new Error("session archived");
   const repository = getRuntimeRepository();
   const idempotencyKey = `add-to-cart:${state.session_id}:${input.productId}`;
   const payload = {

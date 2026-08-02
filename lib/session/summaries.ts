@@ -4,6 +4,7 @@ export type SessionResumeStage = "confirm_plan" | "searching" | "review_results"
 
 export interface ShoppingSessionSummary {
   session_id: string;
+  archived_at?: string;
   requirement: string;
   scene_label: string;
   budget: number;
@@ -47,6 +48,7 @@ function latestIso(values: Array<string | undefined>, fallback: string) {
 }
 
 function statusLabel(state: SessionState, coveredModuleCount: number) {
+  if (state.archived_at) return "已归档";
   const status = state.agent_runtime.workflow_status;
   if (status === "running") return "Agent 执行中";
   if (status === "waiting_for_tools") return "等待本地执行器";
@@ -78,6 +80,7 @@ export function summarizeShoppingSession(state: SessionState): ShoppingSessionSu
     new Date(0).toISOString();
   const lastActivityAt = latestIso(
     [
+      state.archived_at,
       state.agent_runtime.last_transition_at,
       state.agent_runtime.last_decision_at,
       state.completion_report?.generated_at,
@@ -92,6 +95,7 @@ export function summarizeShoppingSession(state: SessionState): ShoppingSessionSu
 
   return {
     session_id: state.session_id,
+    archived_at: state.archived_at,
     requirement: state.raw_input.trim() || state.scene_brief.optional_notes || "未命名购物任务",
     scene_label: state.current_scene_label || state.scene_brief.scene_type,
     budget: state.scene_brief.budget,
