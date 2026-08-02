@@ -6,11 +6,13 @@ import process from "node:process";
 import { promisify } from "node:util";
 import nextEnv from "@next/env";
 import protocol from "../lib/runtime/executor-protocol.json" with { type: "json" };
+import { discoverExecutorApiUrl } from "./executor-config-utils.mjs";
 
 nextEnv.loadEnvConfig(process.cwd());
 
 const execFileAsync = promisify(execFile);
-const apiBaseUrl = (process.env.SCENECART_API_URL || "http://127.0.0.1:3000").replace(/\/$/, "");
+const configuredApiBaseUrl = (process.env.SCENECART_API_URL || "http://127.0.0.1:3000").replace(/\/$/, "");
+const apiBaseUrl = await discoverExecutorApiUrl(configuredApiBaseUrl);
 const qoderPath = process.env.QODERCLI_PATH || `${os.homedir()}/.local/bin/qodercli`;
 const deviceToken = process.env.SCENECART_DEVICE_TOKEN;
 const checks = [];

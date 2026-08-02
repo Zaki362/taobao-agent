@@ -4,12 +4,22 @@ import { describe, expect, it } from "vitest";
 import * as executorConfig from "../../scripts/executor-config-utils.mjs";
 
 const {
+  discoverExecutorApiUrl,
   normalizeExecutorApiUrl,
   preferredExecutorApiUrl,
   readEnvValue,
   updateExecutorEnv,
   validateExecutorDeviceToken
 } = executorConfig as {
+  discoverExecutorApiUrl: (
+    preferredUrl: string,
+    options?: {
+      fetchImpl?: typeof fetch;
+      firstPort?: number;
+      lastPort?: number;
+      timeoutMs?: number;
+    }
+  ) => Promise<string>;
   normalizeExecutorApiUrl: (value: string) => string;
   preferredExecutorApiUrl: (content: string, environmentValue?: string) => string;
   readEnvValue: (content: string, key: string) => string;
@@ -37,6 +47,41 @@ describe("local executor configuration", () => {
       "http://127.0.0.1:3001"
     );
     expect(preferredExecutorApiUrl(existing)).toBe("http://127.0.0.1:3000");
+  });
+
+  it("discovers SceneCart when another local app occupies the saved port", async () => {
+    const requested: string[] = [];
+    const fetchImpl = (async (input: string | URL | Request) => {
+      const url = String(input);
+      requested.push(url);
+      const isSceneCart = url === "http://127.0.0.1:3001/api/runtime/health";
+      return new Response(JSON.stringify(isSceneCart
+        ? { status: "healthy", executor_protocol_version: "1" }
+        : { error: "not found" }), {
+        status: isSceneCart ? 200 : 404,
+        headers: { "Content-Type": "application/json" }
+      });
+    }) as typeof fetch;
+
+    await expect(discoverExecutorApiUrl("http://127.0.0.1:3000", {
+      fetchImpl,
+      firstPort: 3000,
+      lastPort: 3002
+    })).resolves.toBe("http://127.0.0.1:3001");
+    expect(requested).toContain("http://127.0.0.1:3000/api/runtime/health");
+    expect(requested).toContain("http://127.0.0.1:3001/api/runtime/health");
+  });
+
+  it("does not probe alternate ports for a remote production origin", async () => {
+    let calls = 0;
+    const fetchImpl = (async () => {
+      calls += 1;
+      throw new Error("should not run");
+    }) as typeof fetch;
+
+    await expect(discoverExecutorApiUrl("https://shop.example.com", { fetchImpl }))
+      .resolves.toBe("https://shop.example.com");
+    expect(calls).toBe(0);
   });
 
   it("updates only managed values, removes duplicates and preserves unrelated secrets", () => {

@@ -78,7 +78,7 @@ npm run start
 默认 `npm run dev` 同时承担本地执行器管理：已有合法设备令牌时会等待 Web 健康后启动 `worker:local`；首次注册时可以保持命令运行，`executor:configure` 原子更新 `.env.local` 后，启动器会在数秒内发现令牌并接入 Worker。令牌不会输出到日志，Worker 启动失败也不会无限重试。纯网页调试或自动化测试使用 `npm run dev:web`，正式部署中的用户设备仍建议由进程守护器独立运行 `worker:local`。
 
 1. 在 SceneCart AI 注册并登录。执行器设备必须绑定账号；匿名访问设置页会安全跳转到登录页，成功后返回原设置页。
-2. 打开 `/settings/executor`。
+2. 打开 `npm run dev` 在终端打印的页面地址，再进入 `/settings/executor`；本地端口可能因占用自动变化。
 3. 输入设备名并注册。
 4. 立即保存页面只展示一次的 `SCENECART_DEVICE_TOKEN`。
 

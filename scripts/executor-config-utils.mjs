@@ -62,6 +62,47 @@ export function preferredExecutorApiUrl(content, environmentValue = "") {
   );
 }
 
+function isLocalExecutorUrl(value) {
+  const parsed = new URL(value);
+  return parsed.protocol === "http:" && ["127.0.0.1", "localhost", "::1"].includes(parsed.hostname);
+}
+
+async function isSceneCartApi(value, fetchImpl, timeoutMs) {
+  try {
+    const response = await fetchImpl(`${value}/api/runtime/health`, {
+      signal: AbortSignal.timeout(timeoutMs)
+    });
+    if (!response.ok) return false;
+    const payload = await response.json().catch(() => ({}));
+    return payload.status === "healthy" && typeof payload.executor_protocol_version === "string";
+  } catch {
+    return false;
+  }
+}
+
+export async function discoverExecutorApiUrl(
+  preferredUrl,
+  { fetchImpl = fetch, firstPort = 3000, lastPort = 3019, timeoutMs = 800 } = {}
+) {
+  const preferred = normalizeExecutorApiUrl(preferredUrl);
+  if (!isLocalExecutorUrl(preferred) || await isSceneCartApi(preferred, fetchImpl, timeoutMs)) {
+    return preferred;
+  }
+
+  const candidates = [];
+  for (let port = firstPort; port <= lastPort; port += 1) {
+    const candidate = `http://127.0.0.1:${port}`;
+    if (candidate !== preferred) candidates.push(candidate);
+  }
+  const checks = await Promise.all(
+    candidates.map(async (candidate) => ({
+      candidate,
+      available: await isSceneCartApi(candidate, fetchImpl, timeoutMs)
+    }))
+  );
+  return checks.find((check) => check.available)?.candidate ?? preferred;
+}
+
 export function validateExecutorDeviceToken(value) {
   const candidate = value.trim();
   if (candidate.length < 32 || candidate.length > 256) {

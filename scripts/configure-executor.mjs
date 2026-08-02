@@ -4,6 +4,7 @@ import path from "node:path";
 import process from "node:process";
 import readline from "node:readline/promises";
 import {
+  discoverExecutorApiUrl,
   normalizeExecutorApiUrl,
   preferredExecutorApiUrl,
   readEnvValue,
@@ -96,7 +97,9 @@ async function main() {
   }
 
   const existing = await readExisting();
-  const currentApiUrl = preferredExecutorApiUrl(existing, process.env.SCENECART_API_URL);
+  const currentApiUrl = await discoverExecutorApiUrl(
+    preferredExecutorApiUrl(existing, process.env.SCENECART_API_URL)
+  );
   const currentQoderPath = readEnvValue(existing, "QODERCLI_PATH") || path.join(os.homedir(), ".local/bin/qodercli");
   const currentToken = readEnvValue(existing, "SCENECART_DEVICE_TOKEN");
   const input = readline.createInterface({ input: process.stdin, output: process.stdout });

@@ -15,7 +15,7 @@ DEEPSEEK_API_KEY='你的密钥' \
 docker compose up --build
 ```
 
-打开 `http://127.0.0.1:3000`，注册账号后前往 `/settings/executor` 注册本机执行器。
+打开 `npm run dev` 在终端打印的“页面地址”，注册账号后前往同一地址下的 `/settings/executor` 注册本机执行器。若 `3000` 已被占用，开发启动器会自动选择其他端口，配置脚本和 Doctor 会自动识别实际 SceneCart 实例。
 
 ## HTTPS 正式环境
 

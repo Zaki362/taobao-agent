@@ -70,7 +70,7 @@ npm run dev
 
 启动器会同时检查 IPv4 loopback 和 Next.js 的 IPv6 默认监听地址。若 3000 被其他应用占用，会自动选择下一个真正可用的端口，并在终端打印准确的首页与执行器设置地址；不要继续使用旧的固定书签。需要固定端口时设置 `SCENECART_DEV_PORT`，或运行 `npm run dev -- --port 3001`。
 
-`npm run dev` 现在是一命令开发入口：它先启动网页；如果 `.env.local` 已配置 `SCENECART_DEVICE_TOKEN`，会在网页健康后自动启动正式 `worker:local`。首次使用时可以保持该命令运行，完成设备注册和 `executor:configure` 后，启动器会热发现新令牌并自动接入 Worker，不需要重启网页或再开第二个终端。`npm run dev:web` 只启动 Next.js，供 E2E、纯 UI 调试或需要手动管理 Worker 时使用；`dev:auto` 保留为 `dev` 的兼容别名。
+`npm run dev` 现在是一命令开发入口：它先启动网页；如果 `.env.local` 已配置 `SCENECART_DEVICE_TOKEN`，会在网页健康后自动启动正式 `worker:local`。首次使用时可以保持该命令运行，完成设备注册和 `executor:configure` 后，启动器会热发现新令牌并自动接入 Worker，不需要重启网页或再开第二个终端。`npm run dev:web` 只启动 Next.js，供 E2E、纯 UI 调试或需要手动管理 Worker 时使用；`dev:auto` 保留为 `dev` 的兼容别名。若 `3000` 已被其他应用占用，启动器会选择下一个可用端口并在终端打印准确地址；配置脚本和 Doctor 会自动识别该 SceneCart 实例。
 
 首次连接本地执行器时，在 `/settings/executor` 注册设备并复制一次性令牌。设备始终需要绑定 SceneCart 账号；即使主购物流程处于本地匿名开发模式，设置页也会先引导登录/注册，并在成功后自动返回。然后在项目目录运行：
 
