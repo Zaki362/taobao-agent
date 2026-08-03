@@ -1,0 +1,13 @@
+.git
+.next
+.next-verify
+.next-e2e
+.data
+.env
+.env.*
+node_modules
+coverage
+playwright-report
+test-results
+*.log
+*.jsonl
