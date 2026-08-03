@@ -5,7 +5,7 @@ import {
   toRestorableStage
 } from "@/components/dashboard-workflow";
 
-describe("new-car workflow persistence", () => {
+describe("shopping workflow persistence", () => {
   it("restores interrupted execution to review rather than restarting", () => {
     expect(toRestorableStage({
       stage: "searching",
@@ -33,5 +33,26 @@ describe("new-car workflow persistence", () => {
     expect(restored?.sessionId).toBe("session-persisted");
     expect(restored?.stage).toBe("confirm_plan");
     expect(restored?.selectedScenario).toBe("new-car");
+  });
+
+  it("persists a non-car scenario selection before a session is created", () => {
+    const snapshot = buildDashboardPersistenceSnapshot({
+      stage: "input_requirement",
+      selectedScenario: "camping",
+      sceneInput: "双人露营，预算 2000",
+      parsedScene: null,
+      parseDeepSeekMode: null,
+      sessionId: null,
+      selectedModuleId: "",
+      expandedLogs: false,
+      expandedModel: false,
+      statusMessage: "等待提交",
+      searchSummary: []
+    });
+    const restored = restoreDashboardSnapshot(JSON.stringify(snapshot), "fallback");
+
+    expect(restored?.selectedScenario).toBe("camping");
+    expect(restored?.stage).toBe("input_requirement");
+    expect(restored?.sceneInput).toContain("双人露营");
   });
 });

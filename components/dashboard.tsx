@@ -5,10 +5,11 @@ import { useSearchParams } from "next/navigation";
 import { jsonFetch } from "@/components/dashboard-api";
 import { StatusPage } from "@/components/dashboard-common";
 import { ConfirmPlanPage, ConfirmScenePage } from "@/components/dashboard-confirmation";
-import { CartReviewPage, SearchSummaryPage } from "@/components/dashboard-execution";
+import { CartReviewPage } from "@/components/dashboard-execution";
+import { SearchProgressPage } from "@/components/dashboard-search-progress";
 import { buildSceneInputFromBrief, getExecutionModeLabel, isHostedMode, isQueuedExecutionMode } from "@/components/dashboard-helpers";
 import { LandingPage, RequirementPage, ResumeBanner, TopHeader } from "@/components/dashboard-intake";
-import { ResultsPage } from "@/components/dashboard-results";
+import { ResultsPage } from "@/components/dashboard-results-simple";
 import { CartReviewItem, HostedWorkerStatus, MpcStatus } from "@/components/dashboard-types";
 import {
   ResumeSnapshot,
@@ -30,6 +31,7 @@ import {
   ProductCandidate,
   QuickAction,
   RefinementImpactSummary,
+  ScenarioId,
   SessionState,
   WorkflowStage
 } from "@/lib/session/types";
@@ -208,25 +210,6 @@ export function Dashboard() {
     refreshRecentSessions().catch(() => undefined);
   }
 
-  async function enterScenario() {
-    setResumeSnapshot(null);
-    setSelectedScenario("new-car");
-    setStage("input_requirement");
-    setErrorMessage("");
-    setStatusMessage("请选择你的场景需求并开始理解");
-    try {
-      await refreshMcpStatus();
-      setHostedInstruction("");
-    } catch {
-      setMcpStatus({
-        mode: "local_executor",
-        available: false,
-        message: "本地执行器状态检查失败，请刷新页面后重试。",
-        permissions_scope: ["淘宝搜索", "详情提取", "加入购物车需显式确认"]
-      });
-    }
-  }
-
   useEffect(() => {
     setInteractiveReady(true);
     refreshRecentSessions().catch(() => undefined);
@@ -368,7 +351,7 @@ export function Dashboard() {
             hasScenario: true
           })
         );
-        setSelectedScenario("new-car");
+        setSelectedScenario(data.scene_brief.scenario_id);
         setParsedScene(data.scene_brief);
         setParseDeepSeekMode(data.deepseek_status);
         setSelectedModuleId(
@@ -386,7 +369,7 @@ export function Dashboard() {
         stage: resumeSnapshot.stage,
         hasSession: false,
         hasParsedScene: Boolean(resumeSnapshot.parsedScene),
-        hasScenario: resumeSnapshot.selectedScenario === "new-car"
+        hasScenario: Boolean(resumeSnapshot.selectedScenario)
       })
     );
   }
@@ -405,7 +388,7 @@ export function Dashboard() {
         data.shopping_plan.modules[0];
 
       setResumeSnapshot(null);
-      setSelectedScenario("new-car");
+      setSelectedScenario(data.scene_brief.scenario_id);
       setSceneInput(data.raw_input || buildSceneInputFromBrief(data.scene_brief));
       setParsedScene(data.scene_brief);
       setParseDeepSeekMode(data.deepseek_status);
@@ -575,7 +558,15 @@ export function Dashboard() {
     };
   }, [mcpStatus?.mode, session?.session_id]);
 
-  async function startParsing() {
+  async function startParsing(inputOverride?: string, scenarioOverride?: ScenarioId) {
+    const rawInput = (inputOverride ?? sceneInput).trim();
+    const scenarioId = scenarioOverride ?? selectedScenario ?? "new-car";
+    if (rawInput.length < 6) {
+      setErrorMessage("请再具体描述一下场景、预算或购物偏好。");
+      return;
+    }
+    setSceneInput(rawInput);
+    setSelectedScenario(scenarioId);
     setResumeSnapshot(null);
     setBusy(true);
     setErrorMessage("");
@@ -587,7 +578,7 @@ export function Dashboard() {
         deepseek_mode: SessionState["deepseek_status"];
       }>("/api/scene/parse", {
         method: "POST",
-        body: JSON.stringify({ raw_input: sceneInput }),
+        body: JSON.stringify({ raw_input: rawInput, scenario_id: scenarioId }),
         timeoutMs: 30_000
       });
       if (
@@ -624,6 +615,7 @@ export function Dashboard() {
         body: JSON.stringify({
           raw_input: buildSceneInputFromBrief(parsedScene),
           scene_brief: parsedScene,
+          scenario_id: parsedScene.scenario_id,
           parse_deepseek_mode: parseDeepSeekMode
         }),
         timeoutMs: 45_000
@@ -1343,9 +1335,9 @@ export function Dashboard() {
   return (
     <main className="min-h-screen">
       <div className="page-shell">
-        <TopHeader currentStage={stageLabels[stage]} />
+        {stage !== "landing" && stage !== "scenario_select" ? <TopHeader currentStage={stageLabels[stage]} /> : null}
 
-        {resumeSnapshot ? (
+        {resumeSnapshot && stage !== "landing" && stage !== "scenario_select" ? (
           <ResumeBanner
             snapshot={resumeSnapshot}
             onResume={resumeWorkflow}
@@ -1355,8 +1347,19 @@ export function Dashboard() {
 
         {stage === "landing" || stage === "scenario_select" ? (
           <LandingPage
-            onEnterScenario={enterScenario}
+            selectedScenario={selectedScenario ?? "new-car"}
+            onScenarioChange={(scenarioId) => {
+              setSelectedScenario(scenarioId);
+              setSceneInput("");
+              setErrorMessage("");
+            }}
+            sceneInput={sceneInput}
+            onSceneInputChange={setSceneInput}
+            onStart={() => startParsing(undefined, selectedScenario ?? "new-car")}
+            onExampleStart={(value, scenarioId) => startParsing(value, scenarioId)}
             interactiveReady={interactiveReady}
+            busy={busy}
+            errorMessage={errorMessage}
             recentSessions={recentSessions.filter((item) => item.session_id !== resumeSnapshot?.sessionId)}
             archivedSessions={archivedSessions}
             recentSessionsLoading={recentSessionsLoading}
@@ -1368,13 +1371,22 @@ export function Dashboard() {
           />
         ) : null}
 
+        {resumeSnapshot && (stage === "landing" || stage === "scenario_select") ? (
+          <ResumeBanner
+            snapshot={resumeSnapshot}
+            onResume={resumeWorkflow}
+            onRestart={restartWorkflowFromBanner}
+          />
+        ) : null}
+
         {stage === "input_requirement" ? (
           <RequirementPage
+            scenarioId={selectedScenario ?? "new-car"}
             sceneInput={sceneInput}
             onSceneInputChange={setSceneInput}
             onExampleClick={setSceneInput}
             onBack={resetWorkflow}
-            onContinue={startParsing}
+            onContinue={() => startParsing()}
             errorMessage={errorMessage}
             busy={busy}
           />
@@ -1413,7 +1425,7 @@ export function Dashboard() {
         ) : null}
 
         {stage === "searching" && session ? (
-          <SearchSummaryPage
+          <SearchProgressPage
             session={session}
             mcpStatus={mcpStatus}
             workerStatus={workerStatus}

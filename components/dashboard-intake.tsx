@@ -1,21 +1,77 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { Archive, ArchiveRestore, ArrowRight, ChevronRight, Clock3, Loader2, PackageCheck, Sparkles } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import {
+  Archive,
+  ArchiveRestore,
+  ArrowRight,
+  BedDouble,
+  Boxes,
+  CarFront,
+  ChevronRight,
+  Clock3,
+  GraduationCap,
+  History,
+  Loader2,
+  PackageCheck,
+  SendHorizontal,
+  Settings2,
+  ShoppingBag,
+  Sparkles,
+  TentTree
+} from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Textarea } from "@/components/ui/textarea";
 import {
-  requirementExamples,
-  requirementPlaceholder,
   scenarioOptions,
   stageLabels,
-  startButtonText
 } from "@/components/dashboard-config";
-import { WorkflowStage } from "@/lib/session/types";
+import { getScenarioConfig } from "@/lib/scenarios";
+import { ScenarioId, WorkflowStage } from "@/lib/session/types";
 import type { ShoppingSessionSummary } from "@/lib/session/summaries";
 import { formatCurrency } from "@/lib/utils";
+
+const scenarioIcons = {
+  "new-car": CarFront,
+  camping: TentTree,
+  "room-decor": BedDouble,
+  "dorm-move-in": GraduationCap,
+  "moving-setup": Boxes
+} satisfies Record<ScenarioId, typeof CarFront>;
+
+function BrandMark() {
+  return (
+    <span className="brand-mark" aria-hidden="true">
+      <ShoppingBag className="h-4 w-4" strokeWidth={2.2} />
+    </span>
+  );
+}
+
+function SceneSpirit({ compact = false }: { compact?: boolean }) {
+  return (
+    <div className={compact ? "scene-spirit scene-spirit-compact" : "scene-spirit"} aria-hidden="true">
+      <span className="spirit-orbit spirit-orbit-left">预算</span>
+      <span className="spirit-orbit spirit-orbit-right">偏好</span>
+      <span className="spirit-spark spirit-spark-left">✦</span>
+      <span className="spirit-spark spirit-spark-right">✦</span>
+      <div className="spirit-body">
+        <div className="spirit-antenna">
+          <Sparkles className="h-3.5 w-3.5" />
+        </div>
+        <div className="spirit-face">
+          <span className="spirit-eye" />
+          <span className="spirit-smile" />
+          <span className="spirit-eye" />
+        </div>
+        <div className="spirit-bag">
+          <ShoppingBag className="h-5 w-5" strokeWidth={2.1} />
+        </div>
+      </div>
+    </div>
+  );
+}
 
 export function TopHeader({ currentStage }: { currentStage: string }) {
   const [authenticated, setAuthenticated] = useState(false);
@@ -33,64 +89,45 @@ export function TopHeader({ currentStage }: { currentStage: string }) {
   }
 
   return (
-    <Card className="hero-card">
-      <CardContent className="flex flex-col gap-5 px-6 py-6 md:flex-row md:items-end md:justify-between md:px-8 md:py-7">
-        <div className="max-w-3xl">
-          <div className="flex items-center gap-2">
-            <Badge>SceneCart AI</Badge>
-            <Badge variant="outline">场景化购物 Agent</Badge>
-          </div>
-          <h1 className="mt-4 text-balance text-[34px] font-semibold leading-[1.12] tracking-tight text-foreground md:text-[42px]">
-            帮你分阶段完成场景化购物决策
-          </h1>
-          <p className="mt-3 max-w-2xl text-[15px] leading-7 text-muted-foreground md:text-base">
-            不只是给你一堆商品，而是先理解场景，再规划清单，最后执行搜索与购物。
-          </p>
-        </div>
-        <div className="flex flex-col items-start gap-3 md:items-end">
-          <div className="subtle-card px-4 py-3">
-            <p className="label-text">当前步骤</p>
-            <p className="mt-2 text-base font-semibold">{currentStage}</p>
-          </div>
-          <div className="flex flex-wrap justify-end gap-2">
-            <a
-              href="/hosted"
-              className="inline-flex h-11 items-center justify-center rounded-full border border-border/80 bg-white px-4 text-sm font-medium text-foreground shadow-sm transition hover:border-primary/30 hover:bg-white"
-            >
-              后端执行台
-            </a>
-            <a
-              href="/settings/executor"
-              className="inline-flex h-11 items-center justify-center rounded-full border border-border/80 bg-white px-4 text-sm font-medium text-foreground shadow-sm transition hover:border-primary/30 hover:bg-white"
-            >
-              本地执行器
-            </a>
-            {authenticated ? (
-              <button
-                type="button"
-                onClick={logout}
-                className="inline-flex h-11 items-center justify-center rounded-full border border-border/80 bg-white px-4 text-sm font-medium text-muted-foreground shadow-sm transition hover:border-primary/30 hover:text-foreground"
-              >
-                退出登录
-              </button>
-            ) : (
-              <a
-                href="/login"
-                className="inline-flex h-11 items-center justify-center rounded-full border border-border/80 bg-white px-4 text-sm font-medium text-muted-foreground shadow-sm transition hover:border-primary/30 hover:text-foreground"
-              >
-                登录
-              </a>
-            )}
-          </div>
-        </div>
-      </CardContent>
-    </Card>
+    <header className="workflow-header">
+      <button type="button" className="flex min-w-0 items-center gap-3 text-left" onClick={() => window.location.assign("/")}>
+        <BrandMark />
+        <span>
+          <span className="block text-[15px] font-semibold leading-none tracking-tight">SceneCart</span>
+          <span className="mt-1 block text-[11px] text-muted-foreground">场景化购物助手</span>
+        </span>
+      </button>
+      <div className="hidden items-center gap-2 sm:flex">
+        <span className="text-xs text-muted-foreground">当前</span>
+        <Badge variant="secondary">{currentStage}</Badge>
+      </div>
+      <nav className="ml-auto flex items-center gap-1.5">
+        <a href="/hosted" className="header-icon-link" title="执行详情" aria-label="执行详情">
+          <History className="h-4 w-4" />
+        </a>
+        <a href="/settings/executor" className="header-icon-link" title="执行器设置" aria-label="执行器设置">
+          <Settings2 className="h-4 w-4" />
+        </a>
+        {authenticated ? (
+          <button type="button" onClick={logout} className="header-text-link">退出</button>
+        ) : (
+          <a href="/login" className="header-text-link">登录</a>
+        )}
+      </nav>
+    </header>
   );
 }
 
 export function LandingPage({
-  onEnterScenario,
+  selectedScenario,
+  onScenarioChange,
+  sceneInput,
+  onSceneInputChange,
+  onStart,
+  onExampleStart,
   interactiveReady,
+  busy,
+  errorMessage,
   recentSessions,
   archivedSessions,
   recentSessionsLoading,
@@ -100,8 +137,15 @@ export function LandingPage({
   onArchiveSession,
   onRestoreSession
 }: {
-  onEnterScenario: () => void;
+  selectedScenario: ScenarioId;
+  onScenarioChange: (scenarioId: ScenarioId) => void;
+  sceneInput: string;
+  onSceneInputChange: (value: string) => void;
+  onStart: () => void;
+  onExampleStart: (value: string, scenarioId: ScenarioId) => void;
   interactiveReady: boolean;
+  busy: boolean;
+  errorMessage: string;
   recentSessions: ShoppingSessionSummary[];
   archivedSessions: ShoppingSessionSummary[];
   recentSessionsLoading: boolean;
@@ -111,192 +155,240 @@ export function LandingPage({
   onArchiveSession: (session: ShoppingSessionSummary) => void;
   onRestoreSession: (session: ShoppingSessionSummary) => void;
 }) {
+  const inputRef = useRef<HTMLTextAreaElement>(null);
+  const canStart = sceneInput.trim().length >= 6 && interactiveReady && !busy;
+  const scenario = getScenarioConfig(selectedScenario);
+
   return (
-    <Card className="section-card">
-      <CardContent className="space-y-8 px-6 py-8 md:px-8 md:py-9">
-        <div className="max-w-3xl">
-          <p className="label-text">Scene Entry</p>
-          <h2 className="mt-4 section-heading text-balance">选择一个购物场景，Agent 会带你一步步完成决策</h2>
-          <p className="mt-3 max-w-2xl section-subheading">
-            从场景切入，而不是从单品搜索开始。先明确任务、预算和阶段，再逐步得到清单和推荐结果。
+    <div className="landing-shell">
+      <header className="landing-nav">
+        <a href="/" className="flex items-center gap-3">
+          <BrandMark />
+          <span className="text-[15px] font-semibold tracking-tight">SceneCart</span>
+          <span className="hidden text-xs text-muted-foreground sm:inline">场景化购物助手</span>
+        </a>
+        <nav className="flex items-center gap-1.5">
+          <a href="#recent-tasks" className="header-icon-link" title="最近任务" aria-label="最近任务">
+            <History className="h-4 w-4" />
+          </a>
+          <a href="/settings/executor" className="header-icon-link" title="设置" aria-label="设置">
+            <Settings2 className="h-4 w-4" />
+          </a>
+          <a href="/login" className="header-text-link">账户</a>
+        </nav>
+      </header>
+
+      <section className="landing-hero">
+        <div className="landing-kicker">
+          <Sparkles className="h-3.5 w-3.5" />
+          先想清楚怎么买，再开始找商品
+        </div>
+        <SceneSpirit />
+        <div className="mx-auto max-w-3xl text-center">
+          <h1 className="landing-title">今天想完成什么购物任务？</h1>
+          <p className="landing-subtitle">
+            说清场景、预算和偏好，SceneCart 会帮你整理需求、规划清单，再去淘宝逐项寻找。
           </p>
         </div>
 
-        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
-          {scenarioOptions.map((scenario) => (
+        <div className="scene-input-wrap">
+          <div className="scene-input-shell">
+            <Textarea
+              ref={inputRef}
+              value={sceneInput}
+              aria-label="描述你的购物场景"
+              placeholder={scenario.input_placeholder}
+              onChange={(event) => onSceneInputChange(event.target.value)}
+              onKeyDown={(event) => {
+                if ((event.metaKey || event.ctrlKey) && event.key === "Enter" && canStart) {
+                  event.preventDefault();
+                  onStart();
+                }
+              }}
+              className="min-h-[112px] resize-none border-0 bg-transparent px-1 py-1 text-[16px] leading-7 shadow-none focus:border-0 focus:shadow-none md:text-[17px]"
+            />
+            <div className="mt-4 flex flex-col gap-3 border-t border-border/65 pt-4 sm:flex-row sm:items-center sm:justify-between">
+              <button
+                type="button"
+                onClick={() => inputRef.current?.focus()}
+                className="inline-flex items-center gap-2 text-xs font-medium text-muted-foreground transition hover:text-foreground"
+                aria-label={scenario.name}
+              >
+                {(() => {
+                  const SceneIcon = scenarioIcons[selectedScenario];
+                  return <SceneIcon className="h-4 w-4 text-primary" />;
+                })()}
+                {scenario.name} · 已选择
+              </button>
+              <Button size="lg" onClick={onStart} disabled={!canStart} className="w-full sm:w-auto" aria-label={scenario.start_button_text}>
+                {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <SendHorizontal className="h-4 w-4" />}
+                开始规划
+              </Button>
+            </div>
+          </div>
+          {errorMessage ? (
+            <div className="mt-3 rounded-[18px] border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+              {errorMessage}
+            </div>
+          ) : null}
+        </div>
+
+        <div className="scenario-picker" aria-label="选择购物场景">
+          {scenarioOptions.map((option) => {
+            const SceneIcon = scenarioIcons[option.id];
+            const active = selectedScenario === option.id;
+            return (
+              <button
+                key={option.id}
+                type="button"
+                disabled={!option.enabled || busy}
+                onClick={() => onScenarioChange(option.id)}
+                className={`scenario-picker-item ${active ? "scenario-picker-item-active" : ""}`}
+                aria-pressed={active}
+              >
+                <span className="scenario-picker-icon"><SceneIcon className="h-4 w-4" /></span>
+                <span className="min-w-0 text-left">
+                  <strong className="block text-sm font-semibold">{option.label}</strong>
+                  <span className="mt-0.5 block truncate text-[11px] text-muted-foreground">{option.description}</span>
+                </span>
+              </button>
+            );
+          })}
+        </div>
+
+        <div className="example-grid" aria-label="示例购物场景">
+          {scenario.example_prompts.slice(0, 3).map((example, index) => (
             <button
-              key={scenario.id}
-              className={`min-h-[168px] rounded-[28px] border p-5 text-left transition ${
-                scenario.enabled && interactiveReady
-                  ? "border-primary/15 bg-white hover:-translate-y-0.5 hover:border-primary/35 hover:shadow-card"
-                  : "cursor-not-allowed border-border/70 bg-muted/45 opacity-70"
-              }`}
-              onClick={scenario.enabled && interactiveReady ? onEnterScenario : undefined}
-              disabled={!scenario.enabled || !interactiveReady}
+              key={example}
+              type="button"
+              disabled={!interactiveReady || busy}
+              onClick={() => onExampleStart(example, selectedScenario)}
+              className="example-prompt"
             >
-              <div className="flex items-center justify-between">
-                <p className="text-lg font-semibold">{scenario.label}</p>
-                {scenario.enabled ? (
-                  interactiveReady ? (
-                    <ChevronRight className="h-4 w-4 text-primary" />
-                  ) : (
-                    <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
-                  )
-                ) : (
-                  <Badge variant="outline">即将支持</Badge>
-                )}
-              </div>
-              <p className="mt-8 text-sm text-muted-foreground">
-                {scenario.enabled && !interactiveReady ? "正在准备交互..." : scenario.description}
-              </p>
+              <span className="example-number">0{index + 1}</span>
+              <span className="min-w-0 flex-1">
+                <span className="block text-sm font-semibold text-foreground">{scenario.name}方案 {index + 1}</span>
+                <span className="mt-1 block line-clamp-2 text-xs leading-5 text-muted-foreground">{example}</span>
+              </span>
+              <ChevronRight className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground/70" />
             </button>
           ))}
         </div>
+        <p className="mt-5 text-center text-xs text-muted-foreground/80">点击示例会直接开始，也可以用 ⌘ Enter 提交</p>
+      </section>
 
-        {recentSessionsLoading || recentSessions.length > 0 || archivedSessions.length > 0 ? (
-          <div className="border-t border-border/70 pt-8">
-            <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
-              <div>
-                <p className="label-text">Recent Tasks</p>
-                <h3 className="mt-2 text-xl font-semibold tracking-tight">最近购物任务</h3>
-                <p className="mt-1 text-sm leading-6 text-muted-foreground">
-                  任务保存在服务端，换浏览器后也可以从原进度继续。
-                </p>
-              </div>
-              <Badge variant="outline">最多展示 6 条</Badge>
+      {recentSessionsLoading || recentSessions.length > 0 || archivedSessions.length > 0 ? (
+        <section id="recent-tasks" className="recent-tasks-panel">
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+            <div>
+              <p className="label-text">最近购物任务</p>
+              <h2 className="mt-2 text-xl font-semibold tracking-tight">从上次进度继续</h2>
             </div>
+            <p className="text-xs text-muted-foreground">任务会保存在你的账户中</p>
+          </div>
 
-            {recentSessionsLoading ? (
-              <div className="mt-5 flex min-h-28 items-center justify-center rounded-[24px] border border-dashed border-border bg-muted/25 text-sm text-muted-foreground">
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                正在读取最近任务
-              </div>
-            ) : (
-              <div className="mt-5 grid gap-3 lg:grid-cols-2">
-                {recentSessions.map((session) => {
-                  const progress = session.module_count > 0
-                    ? Math.round((session.covered_module_count / session.module_count) * 100)
-                    : 0;
-                  const isResuming = resumingSessionId === session.session_id;
-                  const isUpdatingLifecycle = lifecycleSessionId === session.session_id;
-                  return (
-                    <article
-                      key={session.session_id}
-                      className="rounded-[24px] border border-border/75 bg-white p-5 shadow-sm transition hover:border-primary/25 hover:shadow-card"
-                    >
-                      <div className="flex items-start justify-between gap-3">
-                        <div className="min-w-0">
-                          <div className="flex flex-wrap items-center gap-2">
-                            <Badge>{session.scene_label}</Badge>
-                            <Badge variant="outline">{session.status_label}</Badge>
-                          </div>
-                          <p className="mt-3 line-clamp-2 text-[15px] font-medium leading-6 text-foreground">
-                            {session.requirement}
-                          </p>
+          {recentSessionsLoading ? (
+            <div className="mt-5 flex min-h-24 items-center justify-center rounded-[22px] border border-dashed border-border bg-muted/25 text-sm text-muted-foreground">
+              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              正在读取最近任务
+            </div>
+          ) : (
+            <div className="mt-5 grid gap-3 lg:grid-cols-2">
+              {recentSessions.map((session) => {
+                const progress = session.module_count > 0
+                  ? Math.round((session.covered_module_count / session.module_count) * 100)
+                  : 0;
+                const isResuming = resumingSessionId === session.session_id;
+                const isUpdatingLifecycle = lifecycleSessionId === session.session_id;
+                return (
+                  <article key={session.session_id} className="recent-task-card">
+                    <div className="flex items-start justify-between gap-4">
+                      <div className="min-w-0">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <Badge>{session.scene_label}</Badge>
+                          <span className="text-xs text-muted-foreground">{session.status_label}</span>
                         </div>
-                        <div className="flex shrink-0 flex-wrap justify-end gap-2">
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            disabled={Boolean(resumingSessionId || lifecycleSessionId)}
-                            onClick={() => onArchiveSession(session)}
-                          >
-                            {isUpdatingLifecycle ? <Loader2 className="h-4 w-4 animate-spin" /> : <Archive className="h-4 w-4" />}
-                            归档
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            disabled={Boolean(resumingSessionId || lifecycleSessionId)}
-                            onClick={() => onResumeSession(session)}
-                          >
-                            {isResuming ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-                            继续任务
-                            {!isResuming ? <ArrowRight className="h-4 w-4" /> : null}
-                          </Button>
-                        </div>
+                        <p className="mt-3 line-clamp-2 text-sm font-medium leading-6 text-foreground">{session.requirement}</p>
                       </div>
-
-                      <div className="mt-4 grid grid-cols-3 gap-2 text-xs text-muted-foreground">
-                        <span>{formatCurrency(session.budget)} 预算</span>
-                        <span>{session.covered_module_count}/{session.module_count} 模块</span>
-                        <span>{session.candidate_count} 个候选</span>
-                      </div>
-                      <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-muted">
-                        <div
-                          className="h-full rounded-full bg-primary transition-[width]"
-                          style={{ width: `${progress}%` }}
-                        />
-                      </div>
-                      <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
-                        <span className="inline-flex items-center gap-1.5">
-                          <Clock3 className="h-3.5 w-3.5" />
-                          {new Date(session.last_activity_at).toLocaleString("zh-CN", {
-                            month: "numeric",
-                            day: "numeric",
-                            hour: "2-digit",
-                            minute: "2-digit",
-                            hour12: false
-                          })}
-                        </span>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        disabled={Boolean(resumingSessionId || lifecycleSessionId)}
+                        onClick={() => onResumeSession(session)}
+                      >
+                        {isResuming ? <Loader2 className="h-4 w-4 animate-spin" /> : <ArrowRight className="h-4 w-4" />}
+                        继续
+                      </Button>
+                    </div>
+                    <div className="mt-4 flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-muted-foreground">
+                      <span>{formatCurrency(session.budget)}</span>
+                      <span>{session.covered_module_count}/{session.module_count} 模块</span>
+                      <span>{session.candidate_count} 个候选</span>
+                      <span className="ml-auto inline-flex items-center gap-1.5">
+                        <Clock3 className="h-3.5 w-3.5" />
+                        {new Date(session.last_activity_at).toLocaleString("zh-CN", {
+                          month: "numeric",
+                          day: "numeric",
+                          hour: "2-digit",
+                          minute: "2-digit",
+                          hour12: false
+                        })}
+                      </span>
+                    </div>
+                    <div className="mt-3 h-1 overflow-hidden rounded-full bg-muted">
+                      <div className="h-full rounded-full bg-primary transition-[width]" style={{ width: `${progress}%` }} />
+                    </div>
+                    <div className="mt-3 flex items-center justify-between">
+                      <span className="text-xs text-muted-foreground">
                         {session.selected_item_count > 0 ? (
                           <span className="inline-flex items-center gap-1.5 text-primary">
-                            <PackageCheck className="h-3.5 w-3.5" />
-                            已选 {session.selected_item_count} 件
+                            <PackageCheck className="h-3.5 w-3.5" /> 已选 {session.selected_item_count} 件
                           </span>
-                        ) : (
-                          <span>{session.priority_style}</span>
-                        )}
-                      </div>
-                    </article>
-                  );
-                })}
-              </div>
-            )}
+                        ) : session.priority_style}
+                      </span>
+                      <button
+                        type="button"
+                        className="inline-flex items-center gap-1.5 text-xs text-muted-foreground transition hover:text-foreground"
+                        disabled={Boolean(resumingSessionId || lifecycleSessionId)}
+                        onClick={() => onArchiveSession(session)}
+                      >
+                        {isUpdatingLifecycle ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Archive className="h-3.5 w-3.5" />}
+                        归档
+                      </button>
+                    </div>
+                  </article>
+                );
+              })}
+            </div>
+          )}
 
-            {archivedSessions.length > 0 ? (
-              <details className="mt-5 rounded-[24px] border border-border/70 bg-muted/20 px-5 py-4">
-                <summary className="cursor-pointer text-sm font-medium text-muted-foreground transition hover:text-foreground">
-                  已归档任务（{archivedSessions.length}）
-                </summary>
-                <div className="mt-4 grid gap-3 lg:grid-cols-2">
-                  {archivedSessions.map((session) => {
-                    const isRestoring = lifecycleSessionId === session.session_id;
-                    return (
-                      <article key={session.session_id} className="rounded-[22px] border border-border/70 bg-white p-4">
-                        <div className="flex items-start justify-between gap-3">
-                          <div className="min-w-0">
-                            <div className="flex flex-wrap items-center gap-2">
-                              <Badge variant="outline">{session.scene_label}</Badge>
-                              <Badge variant="outline">已归档</Badge>
-                            </div>
-                            <p className="mt-3 line-clamp-2 text-sm font-medium leading-6 text-foreground">
-                              {session.requirement}
-                            </p>
-                            <p className="mt-2 text-xs text-muted-foreground">
-                              {session.candidate_count} 个候选 · 已选 {session.selected_item_count} 件
-                            </p>
-                          </div>
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            disabled={Boolean(lifecycleSessionId || resumingSessionId)}
-                            onClick={() => onRestoreSession(session)}
-                          >
-                            {isRestoring ? <Loader2 className="h-4 w-4 animate-spin" /> : <ArchiveRestore className="h-4 w-4" />}
-                            恢复
-                          </Button>
-                        </div>
-                      </article>
-                    );
-                  })}
-                </div>
-              </details>
-            ) : null}
-          </div>
-        ) : null}
-      </CardContent>
-    </Card>
+          {archivedSessions.length > 0 ? (
+            <details className="mt-4 rounded-[20px] border border-border/70 bg-muted/20 px-4 py-3">
+              <summary className="cursor-pointer text-xs font-medium text-muted-foreground">已归档任务（{archivedSessions.length}）</summary>
+              <div className="mt-3 grid gap-2 lg:grid-cols-2">
+                {archivedSessions.map((session) => (
+                  <article key={session.session_id} className="flex items-center justify-between gap-3 rounded-[18px] border border-border/70 bg-white p-3">
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-medium">{session.requirement}</p>
+                      <p className="mt-1 text-xs text-muted-foreground">{session.candidate_count} 个候选 · 已选 {session.selected_item_count} 件</p>
+                    </div>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      disabled={Boolean(lifecycleSessionId || resumingSessionId)}
+                      onClick={() => onRestoreSession(session)}
+                    >
+                      {lifecycleSessionId === session.session_id ? <Loader2 className="h-4 w-4 animate-spin" /> : <ArchiveRestore className="h-4 w-4" />}
+                      恢复
+                    </Button>
+                  </article>
+                ))}
+              </div>
+            </details>
+          ) : null}
+        </section>
+      ) : null}
+    </div>
   );
 }
 
@@ -305,26 +397,22 @@ export function ResumeBanner({
   onResume,
   onRestart
 }: {
-  snapshot: {
-    stage: WorkflowStage;
-    sceneInput: string;
-  };
+  snapshot: { stage: WorkflowStage; sceneInput: string };
   onResume: () => void;
   onRestart: () => void;
 }) {
   return (
-    <Card className="section-card border-primary/10">
-      <CardContent className="flex flex-col gap-4 px-6 py-5 md:flex-row md:items-center md:justify-between">
+    <Card className="resume-banner">
+      <CardContent className="flex flex-col gap-4 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
         <div className="min-w-0">
-          <p className="text-sm font-semibold text-foreground">发现上次未完成的会话</p>
-          <p className="mt-1 text-sm leading-7 text-muted-foreground">
-            上次停留在「{stageLabels[snapshot.stage]}」，需求为「{snapshot.sceneInput.slice(0, 36)}
-            {snapshot.sceneInput.length > 36 ? "..." : ""}」。
+          <p className="text-sm font-semibold text-foreground">上次任务还没有完成</p>
+          <p className="mt-1 line-clamp-1 text-xs leading-6 text-muted-foreground">
+            停留在「{stageLabels[snapshot.stage]}」 · {snapshot.sceneInput}
           </p>
         </div>
-        <div className="flex gap-3">
-          <Button variant="outline" onClick={onRestart}>重新开始</Button>
-          <Button onClick={onResume}>继续上次会话</Button>
+        <div className="flex shrink-0 gap-2">
+          <Button size="sm" variant="ghost" onClick={onRestart}>开启新任务</Button>
+          <Button size="sm" onClick={onResume}>继续上次任务</Button>
         </div>
       </CardContent>
     </Card>
@@ -332,6 +420,7 @@ export function ResumeBanner({
 }
 
 export function RequirementPage({
+  scenarioId,
   sceneInput,
   onSceneInputChange,
   onExampleClick,
@@ -340,6 +429,7 @@ export function RequirementPage({
   errorMessage,
   busy
 }: {
+  scenarioId: ScenarioId;
   sceneInput: string;
   onSceneInputChange: (value: string) => void;
   onExampleClick: (value: string) => void;
@@ -349,36 +439,40 @@ export function RequirementPage({
   busy: boolean;
 }) {
   const canContinue = sceneInput.trim().length >= 6;
+  const scenario = getScenarioConfig(scenarioId);
 
   return (
-    <Card className="section-card">
-      <CardHeader>
-        <CardTitle>新车选购</CardTitle>
+    <Card className="section-card mx-auto w-full max-w-4xl">
+      <CardHeader className="px-6 pt-7 md:px-8 md:pt-8">
+        <div className="flex items-center gap-3">
+          <SceneSpirit compact />
+          <div>
+            <p className="label-text">修改需求</p>
+            <CardTitle className="mt-1 text-xl">再告诉我一点你的{scenario.name}需求</CardTitle>
+          </div>
+        </div>
       </CardHeader>
-      <CardContent className="space-y-6">
+      <CardContent className="space-y-5 px-6 pb-7 pt-5 md:px-8 md:pb-8">
         <Textarea
           value={sceneInput}
-          placeholder={requirementPlaceholder}
+          aria-label="描述你的购物场景"
+          placeholder={scenario.input_placeholder}
           onChange={(event) => onSceneInputChange(event.target.value)}
-          className="min-h-40 text-base"
+          className="min-h-36 text-base"
         />
-        <div className="flex flex-wrap gap-2.5">
-          {requirementExamples.map((example) => (
-            <button
-              key={example}
-              className="rounded-full border border-border/80 bg-white px-4 py-2 text-sm text-muted-foreground shadow-sm transition hover:border-primary/30 hover:text-foreground"
-              onClick={() => onExampleClick(example)}
-            >
-              {example}
+        <div className="flex flex-wrap gap-2">
+          {scenario.example_prompts.map((example, index) => (
+            <button key={example} type="button" className="prompt-chip" onClick={() => onExampleClick(example)}>
+              示例 {index + 1}
             </button>
           ))}
         </div>
-        {errorMessage ? <div className="rounded-[22px] border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{errorMessage}</div> : null}
-        <div className="flex gap-3">
-          <Button variant="outline" onClick={onBack}>返回场景入口</Button>
+        {errorMessage ? <div className="rounded-[18px] border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{errorMessage}</div> : null}
+        <div className="flex flex-col-reverse gap-3 sm:flex-row sm:justify-between">
+          <Button variant="ghost" onClick={onBack}>返回首页</Button>
           <Button onClick={onContinue} disabled={busy || !canContinue}>
-            {busy ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Sparkles className="mr-2 h-4 w-4" />}
-            {startButtonText}
+            {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
+            {scenario.start_button_text}
           </Button>
         </div>
       </CardContent>

@@ -1,6 +1,7 @@
-import { SessionState, WorkflowStage } from "@/lib/session/types";
+import { isScenarioId } from "@/lib/scenarios";
+import { ScenarioId, SessionState, WorkflowStage } from "@/lib/session/types";
 
-export type SelectedScenario = "new-car" | null;
+export type SelectedScenario = ScenarioId | null;
 
 export type PersistedDashboardState = {
   stage: WorkflowStage;
@@ -136,7 +137,7 @@ export function statusMessageForRestoredStage(stage: WorkflowStage | string, fal
 export function restoreDashboardSnapshot(raw: string, fallbackSceneInput: string): ResumeSnapshot {
   try {
     const persisted = JSON.parse(raw) as Partial<PersistedDashboardState>;
-    const selectedScenario = persisted.selectedScenario === "new-car" ? "new-car" : null;
+    const selectedScenario = isScenarioId(persisted.selectedScenario) ? persisted.selectedScenario : null;
     const parsedScene = persisted.parsedScene ?? null;
     const parseDeepSeekMode =
       persisted.parseDeepSeekMode === "connected" || persisted.parseDeepSeekMode === "mock"

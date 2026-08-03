@@ -1,13 +1,12 @@
-import { getScenarioConfig } from "@/lib/scenarios";
+import { getScenarioConfig, SCENARIO_LIST } from "@/lib/scenarios";
 import { PriorityStyle, QuickAction, WorkflowStage } from "@/lib/session/types";
 
-export const scenarioOptions = [
-  { id: "new-car", label: "新车选购", description: "已支持", enabled: true },
-  { id: "camping", label: "露营准备", description: "即将支持", enabled: false },
-  { id: "room-decor", label: "房间装饰", description: "即将支持", enabled: false },
-  { id: "dorm-move-in", label: "宿舍入学", description: "即将支持", enabled: false },
-  { id: "moving-setup", label: "搬家置办", description: "即将支持", enabled: false }
-] as const;
+export const scenarioOptions = SCENARIO_LIST.map((scenario) => ({
+  id: scenario.id,
+  label: scenario.name,
+  description: scenario.short_description,
+  enabled: scenario.enabled && !scenario.coming_soon
+}));
 
 const newCarConfig = getScenarioConfig("new-car");
 
@@ -36,5 +35,5 @@ export const stageLabels: Record<WorkflowStage, string> = {
   carting: "加入购物车"
 };
 
-export const defaultInput = newCarConfig.example_prompts[0];
+export const defaultInput = "";
 export const WORKFLOW_STORAGE_KEY = "scenecart-dashboard-state";

@@ -27,7 +27,10 @@ function normalizeConfiguredOption(value: string, options: string[] | undefined,
   return value || fallback;
 }
 
-function normalizeVehicleType(value: string, fallback: string, options?: string[]) {
+function normalizeVehicleType(value: string, fallback: string, options?: string[], scenarioId = "new-car") {
+  if (scenarioId !== "new-car") {
+    return normalizeConfiguredOption(value, options, fallback);
+  }
   if (/新能源|电车|纯电/.test(value)) {
     return options?.find((option) => option.includes("新能源")) ?? "新能源车";
   }
@@ -40,7 +43,10 @@ function normalizeVehicleType(value: string, fallback: string, options?: string[
   return normalizeConfiguredOption(value, options, fallback);
 }
 
-function normalizeUserStage(value: string, fallback: string, options?: string[]) {
+function normalizeUserStage(value: string, fallback: string, options?: string[], scenarioId = "new-car") {
+  if (scenarioId !== "new-car") {
+    return normalizeConfiguredOption(value, options, fallback);
+  }
   if (/刚提|提车|新车/.test(value)) {
     return options?.find((option) => option.includes("提车初期")) ?? "提车初期";
   }
@@ -77,12 +83,14 @@ export function normalizeSceneBriefOptions(scene: SceneBrief, fallback?: SceneBr
     vehicle_type: normalizeVehicleType(
       scene.vehicle_type,
       fallbackScene.vehicle_type,
-      optionSets.vehicle_type
+      optionSets.vehicle_type,
+      scenarioId
     ),
     user_stage: normalizeUserStage(
       scene.user_stage,
       fallbackScene.user_stage,
-      optionSets.user_stage
+      optionSets.user_stage,
+      scenarioId
     ),
     priority_style: normalizePriorityStyle(
       scene.priority_style,

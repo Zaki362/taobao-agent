@@ -1,17 +1,28 @@
 "use client";
 
-import { CheckCircle2, Loader2 } from "lucide-react";
+import { CheckCircle2, ShoppingBag, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { formatCurrency } from "@/lib/utils";
 
 export function StatusPage({ title, description, loading }: { title: string; description: string; loading?: boolean }) {
   return (
-    <Card className="section-card">
-      <CardContent className="flex min-h-[360px] flex-col items-center justify-center gap-4 px-6 py-8 text-center">
-        {loading ? <Loader2 className="h-6 w-6 animate-spin text-primary" /> : <CheckCircle2 className="h-6 w-6 text-primary" />}
-        <h2 className="text-balance text-2xl font-semibold md:text-[30px]">{title}</h2>
-        <p className="max-w-xl text-[15px] leading-7 text-muted-foreground">{description}</p>
+    <Card className="section-card mx-auto w-full max-w-4xl overflow-hidden">
+      <CardContent className="relative flex min-h-[430px] flex-col items-center justify-center gap-4 px-6 py-10 text-center">
+        <div className="absolute inset-x-0 top-0 h-36 bg-[radial-gradient(circle_at_center,rgba(247,123,38,0.12),transparent_66%)]" />
+        <div className={`status-orb ${loading ? "status-orb-loading" : ""}`}>
+          {loading ? <ShoppingBag className="h-6 w-6" /> : <CheckCircle2 className="h-6 w-6" />}
+          {loading ? <Sparkles className="status-orb-spark h-4 w-4" /> : null}
+        </div>
+        <h2 className="relative mt-2 text-balance text-2xl font-semibold md:text-[30px]">{title}</h2>
+        <p className="relative max-w-xl text-[15px] leading-7 text-muted-foreground">{description}</p>
+        {loading ? (
+          <div className="relative mt-3 flex items-center gap-1.5" aria-label="处理中">
+            <span className="loading-dot" />
+            <span className="loading-dot [animation-delay:160ms]" />
+            <span className="loading-dot [animation-delay:320ms]" />
+          </div>
+        ) : null}
       </CardContent>
     </Card>
   );
