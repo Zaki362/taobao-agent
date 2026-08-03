@@ -8,6 +8,15 @@ import process from "node:process";
 import nextEnv from "@next/env";
 import protocol from "../lib/runtime/executor-protocol.json" with { type: "json" };
 import { ExecutorLeaseGuard } from "./executor-lease-guard.mjs";
+import {
+  buildSearchEvidencePrompt,
+  isQoderCreditError,
+  isRepeatedToolCallError,
+  isTaobaoLoginError,
+  normalizeTaobaoSearchEvidence,
+  qoderPrintArgs,
+  searchEvidencePath
+} from "./local-executor-utils.mjs";
 
 nextEnv.loadEnvConfig(process.cwd());
 
@@ -20,6 +29,7 @@ const qoderTimeoutMs = Math.max(Number(process.env.EXECUTOR_QODER_TIMEOUT_MS || 
 const apiTimeoutMs = Math.max(Number(process.env.EXECUTOR_API_TIMEOUT_MS || 20000), 5000);
 const leaseFailureLimit = Math.max(Number(process.env.EXECUTOR_LEASE_FAILURE_LIMIT || 3), 1);
 const resultDir = path.join(process.cwd(), ".data", "local-executor", "results");
+const evidenceDir = path.join(process.cwd(), ".data", "local-executor", "evidence");
 const executorProtocolVersion = protocol.version;
 
 if (!deviceToken) {
@@ -68,22 +78,15 @@ async function verifyStartup() {
     throw new Error(`Qoder CLI is not executable at ${qoderPath}. Set QODERCLI_PATH to the installed binary.`);
   });
   try {
-    const { stdout, stderr } = await execFileAsync(qoderPath, [
-      "-p",
-      "只返回严格 JSON：{\"ok\":true}",
-      "-q",
-      "--yolo",
-      "--allowed-tools",
-      "Read",
-      "--max-turns",
-      "2",
-      "-f",
-      "text"
-    ], {
+    const { stdout, stderr } = await execFileAsync(
+      qoderPath,
+      qoderPrintArgs("只返回严格 JSON：{\"ok\":true}", ["Read"]),
+      {
       env: process.env,
       timeout: 20_000,
       maxBuffer: 1024 * 1024
-    });
+      }
+    );
     if (!stdout.trim()) {
       throw qoderJobError(undefined, stdout, stderr);
     }
@@ -147,6 +150,12 @@ function processOutput(error, stdout = "", stderr = "") {
 
 function qoderJobError(error, stdout = "", stderr = "") {
   const output = processOutput(error, stdout, stderr);
+  if (isQoderCreditError(output)) {
+    return new ExecutorJobError(
+      "Qoder CLI 账户额度已用尽，当前无法调用淘宝 skill。请等待额度恢复或升级 Qoder 订阅后重试。",
+      false
+    );
+  }
   if (/upgrade required|update available/i.test(output)) {
     return new ExecutorJobError(
       "Qoder CLI 版本已过期，请先运行 qodercli update，确认 qodercli --version 正常后再启动执行器。",
@@ -159,15 +168,34 @@ function qoderJobError(error, stdout = "", stderr = "") {
       false
     );
   }
+  if (isTaobaoLoginError(output)) {
+    return new ExecutorJobError(
+      "淘宝桌面版当前未登录。请在淘宝桌面版完成登录并保持主界面打开，然后重新执行当前搜索。",
+      false
+    );
+  }
+  if (isRepeatedToolCallError(output)) {
+    return new ExecutorJobError(
+      "Qoder 拒绝了重复工具调用。当前任务已停止，避免继续产生不确定结果。",
+      false
+    );
+  }
   if (!output) {
     return new ExecutorJobError("Qoder CLI 未返回内容。", true);
   }
   return new ExecutorJobError(output.slice(0, 1000), true);
 }
 
-async function readCachedResult(jobId) {
+async function readCachedResult(job) {
   try {
-    return JSON.parse(await fs.readFile(path.join(resultDir, `${jobId}.json`), "utf-8"));
+    const result = JSON.parse(await fs.readFile(path.join(resultDir, `${job.id}.json`), "utf-8"));
+    if (job.job_type === "module_search" && result?.evidence?.source !== "taobao-native") {
+      process.stderr.write(
+        `[local-executor] ignored unverified legacy search cache for ${job.id}\n`
+      );
+      return null;
+    }
+    return result;
   } catch {
     return null;
   }
@@ -197,39 +225,6 @@ async function reportResult(jobId, payload) {
   throw lastError;
 }
 
-function searchPrompt(job) {
-  const payload = job.payload || {};
-  return [
-    "你是 SceneCart AI 的本地淘宝搜索执行器。",
-    "必须使用当前已安装的淘宝 skill 执行真实搜索，不要编造商品。",
-    `搜索词：${payload.keyword}`,
-    `模块：${payload.module_name}（${payload.module_id}）`,
-    `模块预算：${payload.budget ?? "未指定"} 元`,
-    "选择最多 3 个有代表性的候选，覆盖稳妥推荐、性价比推荐、升级推荐；不足 3 个时返回真实可用数量。",
-    "只返回严格 JSON，不要解释。格式：",
-    JSON.stringify({
-      summary: "完成真实淘宝搜索",
-      candidates: [
-        {
-          product_id: "string",
-          title: "string",
-          price: 0,
-          source: "淘宝",
-          shop_name: "string",
-          image_url: "string",
-          detail_url: "string",
-          shop_badges: ["string"],
-          highlights: ["string"],
-          risk_notes: ["当前为搜索摘要，请在商品页确认规格"],
-          fit_reason: "string",
-          recommendation_type: "稳妥推荐",
-          module_id: payload.module_id
-        }
-      ]
-    }, null, 2)
-  ].join("\n");
-}
-
 function cartPrompt(job) {
   const payload = job.payload || {};
   return [
@@ -244,29 +239,70 @@ function cartPrompt(job) {
 }
 
 async function executeJob(job, signal) {
-  const prompt = job.job_type === "module_search" ? searchPrompt(job) : cartPrompt(job);
+  const payload = job.payload || {};
+  const evidencePath = job.job_type === "module_search"
+    ? searchEvidencePath(evidenceDir, job.id)
+    : null;
+  if (evidencePath) {
+    await fs.mkdir(evidenceDir, { recursive: true });
+    await fs.rm(evidencePath, { force: true });
+  }
+  const startedAt = Date.now();
+  const prompt = job.job_type === "module_search"
+    ? buildSearchEvidencePrompt({
+        keyword: payload.keyword,
+        moduleName: payload.module_name,
+        moduleId: payload.module_id,
+        evidencePath
+      })
+    : cartPrompt(job);
   let stdout = "";
   let stderr = "";
+  let commandError;
   try {
-    const output = await execFileAsync(qoderPath, [
-      "-p", prompt,
-      "-q",
-      "--yolo",
-      "--allowed-tools", "Skill,Bash,Read",
-      "--max-turns", job.job_type === "module_search" ? "6" : "5",
-      "-f", "text"
-    ], {
+    const output = await execFileAsync(
+      qoderPath,
+      qoderPrintArgs(prompt, job.job_type === "module_search" ? ["Bash"] : ["Skill", "Bash", "Read"]),
+      {
       env: process.env,
       timeout: qoderTimeoutMs,
       maxBuffer: 8 * 1024 * 1024,
       signal
-    });
+      }
+    );
     stdout = output.stdout ?? "";
     stderr = output.stderr ?? "";
   } catch (error) {
-    throw qoderJobError(error);
+    commandError = error;
   }
 
+  if (job.job_type === "module_search" && evidencePath) {
+    try {
+      const stat = await fs.stat(evidencePath);
+      if (stat.mtimeMs + 1000 < startedAt) {
+        throw new Error("淘宝搜索证据不是当前任务生成的，已拒绝复用旧结果。");
+      }
+      const raw = JSON.parse(await fs.readFile(evidencePath, "utf-8"));
+      const result = normalizeTaobaoSearchEvidence(raw, {
+        keyword: String(payload.keyword ?? "").trim(),
+        moduleId: String(payload.module_id ?? "").trim()
+      });
+      process.stdout.write(
+        `[local-executor] verified ${result.candidates.length} Taobao candidates from evidence for ${job.id}\n`
+      );
+      return result;
+    } catch (evidenceError) {
+      if (!commandError) {
+        const message = evidenceError?.code === "ENOENT"
+          ? "Qoder 未生成淘宝搜索证据文件，已拒绝使用模型输出作为商品结果。"
+          : evidenceError.message;
+        throw new ExecutorJobError(message, false);
+      }
+    }
+    throw qoderJobError(commandError, stdout, stderr);
+  }
+
+  if (commandError) throw qoderJobError(commandError, stdout, stderr);
   if (!stdout.trim()) {
     throw qoderJobError(undefined, stdout, stderr);
   }
@@ -321,7 +357,7 @@ async function loop() {
       try {
         await heartbeat();
         if (leaseGuard.lossReason) throw new Error(leaseGuard.lossReason);
-        const cached = await readCachedResult(job.id);
+        const cached = await readCachedResult(job);
         result = cached ?? await executeJob(job, jobSignal);
         if (!cached) await cacheResult(job.id, result);
       } catch (error) {
@@ -332,6 +368,9 @@ async function loop() {
           leaseGuard.clear(job.id);
           continue;
         }
+        // The Taobao operation has stopped. Detach heartbeat renewal before the
+        // terminal callback so a completed failure is not misreported as lease loss.
+        leaseGuard.clear(job.id);
         await reportResult(job.id, {
           status: "failed",
           error: error.message,
@@ -340,10 +379,12 @@ async function loop() {
           process.stderr.write(`[local-executor] failed to report ${job.id}: ${resolveError.message}\n`);
         });
         process.stderr.write(`[local-executor] job ${job.id} failed: ${error.message}\n`);
-        leaseGuard.clear(job.id);
         continue;
       }
 
+      // From this point the local operation is immutable and cached. Result
+      // acknowledgement no longer needs to keep the execution lease alive.
+      leaseGuard.clear(job.id);
       if (result?.success === false) {
         await reportResult(job.id, {
           status: "failed",
@@ -363,7 +404,6 @@ async function loop() {
         }
       }
       // Keep the result ledger: an expired lease can replay acknowledgement without repeating Taobao actions.
-      leaseGuard.clear(job.id);
     } catch (error) {
       process.stderr.write(`[local-executor] polling failed: ${error.message}\n`);
       await sleep(Math.max(pollMs, 3000));

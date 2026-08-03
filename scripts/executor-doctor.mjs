@@ -7,6 +7,7 @@ import { promisify } from "node:util";
 import nextEnv from "@next/env";
 import protocol from "../lib/runtime/executor-protocol.json" with { type: "json" };
 import { discoverExecutorApiUrl } from "./executor-config-utils.mjs";
+import { isQoderCreditError, qoderPrintArgs } from "./local-executor-utils.mjs";
 
 nextEnv.loadEnvConfig(process.cwd());
 
@@ -38,27 +39,32 @@ await check("qoder_cli", async () => {
 
 await check("qoder_session", async () => {
   try {
-    const { stdout, stderr } = await execFileAsync(qoderPath, [
-      "-p",
-      "只返回严格 JSON：{\"ok\":true}",
-      "-q",
-      "--yolo",
-      "--allowed-tools",
-      "Read",
-      "--max-turns",
-      "2",
-      "-f",
-      "text"
-    ], {
-      timeout: 20_000,
+    const status = await execFileAsync(qoderPath, ["status"], {
+      timeout: 8_000,
       maxBuffer: 1024 * 1024
     });
+    const statusOutput = `${status.stdout ?? ""}\n${status.stderr ?? ""}`.trim();
+    if (/account:\s*not logged in|not logged in|please run \/login/i.test(statusOutput)) {
+      throw new Error("Qoder CLI 未登录，请运行配置中显示的 Qoder CLI 路径并执行 login");
+    }
+
+    const { stdout, stderr } = await execFileAsync(
+      qoderPath,
+      qoderPrintArgs("只返回严格 JSON：{\"ok\":true}", ["Read"]),
+      {
+      timeout: 20_000,
+      maxBuffer: 1024 * 1024
+      }
+    );
     const output = `${stdout ?? ""}\n${stderr ?? ""}`.trim();
     if (/upgrade required|update available/i.test(output)) {
       throw new Error("Qoder CLI 需要升级，请运行 qodercli update");
     }
+    if (isQoderCreditError(output)) {
+      throw new Error("Qoder CLI 账户额度已用尽，请等待额度恢复或升级订阅");
+    }
     if (/not logged in|please run \/login|authentication required|unauthorized/i.test(output)) {
-      throw new Error("Qoder CLI 未登录，请运行 qodercli 后输入 /login");
+      throw new Error("Qoder CLI 未登录，请运行配置中显示的 Qoder CLI 路径并执行 login");
     }
     if (!stdout.trim()) {
       throw new Error("Qoder CLI headless 调用未返回内容");
@@ -72,8 +78,11 @@ await check("qoder_session", async () => {
     if (/upgrade required|update available/i.test(output)) {
       throw new Error("Qoder CLI 需要升级，请运行 qodercli update");
     }
+    if (isQoderCreditError(output)) {
+      throw new Error("Qoder CLI 账户额度已用尽，请等待额度恢复或升级订阅");
+    }
     if (/not logged in|please run \/login|authentication required|unauthorized/i.test(output)) {
-      throw new Error("Qoder CLI 未登录，请运行 qodercli 后输入 /login");
+      throw new Error("Qoder CLI 未登录，请运行配置中显示的 Qoder CLI 路径并执行 login");
     }
     throw error;
   }
