@@ -5,6 +5,7 @@ node_modules
 .next
 .next-verify
 .next-e2e
+.vercel
 out
 dist
 coverage
@@ -47,3 +48,4 @@ storage*.json
 # optional local screenshots / browser dumps
 playwright-report
 test-results
+.env*
