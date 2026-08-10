@@ -1,5 +1,5 @@
 import { apiOk, apiRouteError } from "@/lib/api/responses";
-import { getRequestIdentity } from "@/lib/auth/request";
+import { getRequestIdentity, isAuthenticationRequired } from "@/lib/auth/request";
 import { runtimeStoreMode } from "@/lib/runtime";
 
 export async function GET() {
@@ -7,6 +7,7 @@ export async function GET() {
     const identity = await getRequestIdentity();
     return apiOk({
       authenticated: identity.authenticated,
+      authentication_required: isAuthenticationRequired(),
       user: identity.authenticated ? { id: identity.userId, email: identity.email } : null,
       runtime_store: runtimeStoreMode()
     });

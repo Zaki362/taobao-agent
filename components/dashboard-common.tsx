@@ -1,30 +1,86 @@
 "use client";
 
-import { CheckCircle2, ShoppingBag, Sparkles } from "lucide-react";
+import { CircleDashed, ShoppingBag, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { formatCurrency } from "@/lib/utils";
 
-export function StatusPage({ title, description, loading }: { title: string; description: string; loading?: boolean }) {
+export function AgentBrief({
+  eyebrow = "SceneCart Agent",
+  title,
+  description,
+  highlights = [],
+  loading = false,
+  compact = false
+}: {
+  eyebrow?: string;
+  title: string;
+  description: string;
+  highlights?: string[];
+  loading?: boolean;
+  compact?: boolean;
+}) {
   return (
-    <Card className="section-card mx-auto w-full max-w-4xl overflow-hidden">
-      <CardContent className="relative flex min-h-[430px] flex-col items-center justify-center gap-4 px-6 py-10 text-center">
-        <div className="absolute inset-x-0 top-0 h-36 bg-[radial-gradient(circle_at_center,rgba(247,123,38,0.12),transparent_66%)]" />
-        <div className={`status-orb ${loading ? "status-orb-loading" : ""}`}>
-          {loading ? <ShoppingBag className="h-6 w-6" /> : <CheckCircle2 className="h-6 w-6" />}
-          {loading ? <Sparkles className="status-orb-spark h-4 w-4" /> : null}
+    <section
+      className={`agent-brief ${compact ? "agent-brief-compact" : ""}`}
+      role={loading ? "status" : undefined}
+      aria-live={loading ? "polite" : undefined}
+    >
+      <div className="agent-brief-mark" aria-hidden="true">
+        <Sparkles className="h-4 w-4" />
+        {loading ? <span className="agent-brief-pulse" /> : null}
+      </div>
+      <div className="min-w-0 flex-1">
+        <div className="flex flex-wrap items-center gap-2">
+          <p className="agent-brief-eyebrow">{eyebrow}</p>
+          {loading ? <span className="agent-live-label"><span />正在处理</span> : null}
         </div>
-        <h2 className="relative mt-2 text-balance text-2xl font-semibold md:text-[30px]">{title}</h2>
-        <p className="relative max-w-xl text-[15px] leading-7 text-muted-foreground">{description}</p>
-        {loading ? (
-          <div className="relative mt-3 flex items-center gap-1.5" aria-label="处理中">
-            <span className="loading-dot" />
-            <span className="loading-dot [animation-delay:160ms]" />
-            <span className="loading-dot [animation-delay:320ms]" />
+        <h2 className="agent-brief-title">{title}</h2>
+        <p className="agent-brief-description">{description}</p>
+        {highlights.length > 0 ? (
+          <div className="agent-brief-highlights">
+            {highlights.map((item) => <span key={item}>{item}</span>)}
           </div>
         ) : null}
-      </CardContent>
-    </Card>
+      </div>
+    </section>
+  );
+}
+
+export function StatusPage({ title, description, loading }: { title: string; description: string; loading?: boolean }) {
+  const isPlanning = title.includes("规划") || title.includes("调整");
+  const steps = isPlanning
+    ? ["检查预算与优先级", "重组购买模块", "生成可确认方案"]
+    : ["提取场景与约束", "识别预算和偏好", "整理成可确认需求"];
+
+  return (
+    <div className="mx-auto w-full max-w-4xl space-y-4">
+      <AgentBrief
+        eyebrow="SceneCart 正在协作"
+        title={title}
+        description={description}
+        loading={loading}
+      />
+      <Card className="section-card overflow-hidden">
+        <CardContent className="relative px-6 py-7 md:px-8 md:py-8">
+          <div className="absolute inset-x-0 top-0 h-28 bg-[radial-gradient(circle_at_center,rgba(247,123,38,0.10),transparent_68%)]" />
+          <div className="relative grid gap-3 sm:grid-cols-3">
+            {steps.map((step, index) => (
+              <div key={step} className={`agent-thinking-step ${index === 0 && loading ? "agent-thinking-step-active" : ""}`}>
+                <span className="agent-thinking-icon">
+                  {index === 0 && loading ? <ShoppingBag className="h-4 w-4" /> : <CircleDashed className="h-4 w-4" />}
+                </span>
+                <span>
+                  <strong>{step}</strong>
+                  <small>{index === 0 && loading ? "正在进行" : "接下来"}</small>
+                </span>
+              </div>
+            ))}
+          </div>
+          <p className="relative mt-6 text-center text-xs text-muted-foreground">完成后不会自动跳过，你可以先检查结果再继续。</p>
+        </CardContent>
+      </Card>
+    </div>
   );
 }
 
@@ -80,9 +136,8 @@ export function EditableChoiceField({
           <button
             key={option}
             type="button"
-            className={`rounded-full px-3 py-1.5 text-xs transition ${
-              option === value ? "bg-primary text-white" : "border border-border bg-white text-muted-foreground hover:text-foreground"
-            }`}
+            aria-pressed={option === value}
+            className={`choice-chip ${option === value ? "choice-chip-active" : ""}`}
             onClick={() => onSelect(option)}
           >
             {option}
@@ -117,9 +172,8 @@ export function EditableTagField({
             <button
               key={option}
               type="button"
-              className={`rounded-full px-3 py-1.5 text-xs transition ${
-                active ? "bg-primary text-white" : "border border-border bg-white text-muted-foreground hover:text-foreground"
-              }`}
+              aria-pressed={active}
+              className={`choice-chip ${active ? "choice-chip-active" : ""}`}
               onClick={() => onToggle(option)}
             >
               {option}

@@ -14,7 +14,12 @@ async function returnToLandingWithoutLocalSnapshot(page: Page) {
   if (await restartButton.isVisible()) {
     await restartButton.click();
   }
-  await expect(page.getByRole("heading", { name: "最近购物任务" })).toBeVisible();
+  const recentTasks = page.locator("#recent-tasks");
+  await expect(recentTasks).toBeVisible();
+  if (!(await recentTasks.evaluate((element) => (element as HTMLDetailsElement).open))) {
+    await recentTasks.locator("summary").click();
+  }
+  await expect(recentTasks.getByText("继续未完成的方案", { exact: true })).toBeVisible();
 }
 
 function candidatesFor(job: { id: string; payload: Record<string, unknown> }) {
@@ -152,7 +157,7 @@ test("authenticated new-car workflow reaches recommendations through the durable
   expect(heartbeat.protocol_version).toBe(protocol.version);
 
   await page.goto("/settings/executor");
-  await expect(page.getByRole("heading", { name: "连接这台电脑上的 Qoder 与淘宝" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "连接这台电脑上的淘宝执行器" })).toBeVisible();
   await page.getByRole("button", { name: "注册当前设备" }).click();
   await expect(page.getByRole("heading", { name: "保存一次性设备令牌" })).toBeVisible();
   await expect(page.getByText(
@@ -226,15 +231,15 @@ test("authenticated new-car workflow reaches recommendations through the durable
   let executor: Promise<void> | null = null;
 
   try {
-    await page.getByRole("button", { name: /新车选购/ }).click();
+    await page.getByRole("button", { name: "新车选购 提车初期分阶段补齐高频车用品" }).click();
     await page.locator("textarea").fill(
       "刚提新能源 SUV，预算 3000，经常带 3 岁孩子长途出行，已有行车记录仪，希望优先准备儿童乘车安全用品。"
     );
     await page.getByRole("button", { name: "开始理解需求" }).click();
-    await expect(page.getByText("确认场景理解结果")).toBeVisible();
-    await page.getByRole("button", { name: "确认需求，开始生成购物规划" }).click();
-    await expect(page.getByText("确认购物规划")).toBeVisible();
-    await expect(page.getByText("儿童安全出行", { exact: true })).toBeVisible();
+    await expect(page.getByText("确认新车选购需求")).toBeVisible();
+    await page.getByRole("button", { name: "确认无误，生成购买路线" }).click();
+    await expect(page.getByText("确认新车购物规划")).toBeVisible();
+    await expect(page.getByText("儿童安全出行", { exact: true }).first()).toBeVisible();
     await expect(page.getByText("AI 新增", { exact: true }).first()).toBeVisible();
     const persistedSessionId = await page.evaluate(() => {
       const raw = window.localStorage.getItem("scenecart-dashboard-state");
@@ -242,9 +247,9 @@ test("authenticated new-car workflow reaches recommendations through the durable
       return String((JSON.parse(raw) as { sessionId?: string }).sessionId ?? "");
     });
     expect(persistedSessionId).not.toBe("");
-    await page.getByRole("button", { name: "确认规划，开始搜索推荐商品" }).click();
+    await page.getByRole("button", { name: "就按这个方案开始找商品" }).click();
 
-    await expect(page.getByText("搜索执行摘要")).toBeVisible();
+    await expect(page.getByText("Agent 正在行动", { exact: true })).toBeVisible();
     await expect.poll(async () => {
       const response = await page.request.get(`/api/session/state?session_id=${persistedSessionId}`);
       const state = await response.json() as {
@@ -254,8 +259,8 @@ test("authenticated new-car workflow reaches recommendations through the durable
     }, { timeout: 30_000 }).toBe("waiting_for_tools");
 
     page.once("dialog", (dialog) => dialog.accept());
-    await page.getByRole("button", { name: "完成当前模块后暂停" }).click();
-    await expect(page.getByRole("button", { name: "从当前进度继续" })).toBeEnabled();
+    await page.getByRole("button", { name: "完成当前项后暂停" }).click();
+    await expect(page.getByRole("button", { name: "继续搜索" })).toBeEnabled();
     const pausedResponse = await page.request.get(`/api/session/state?session_id=${persistedSessionId}`);
     const pausedState = await pausedResponse.json() as {
       agent_runtime: { workflow_status: string; auto_continue: boolean; workflow_run_id?: string };
@@ -265,7 +270,7 @@ test("authenticated new-car workflow reaches recommendations through the durable
 
     executor = runExecutorUntilStopped(page.request, deviceToken, () => stopExecutor, executorBehavior);
     page.once("dialog", (dialog) => dialog.accept());
-    await page.getByRole("button", { name: "从当前进度继续" }).click();
+    await page.getByRole("button", { name: "继续搜索" }).click();
     await expect.poll(async () => {
       const response = await page.request.get(`/api/session/state?session_id=${persistedSessionId}`);
       const state = await response.json() as {
@@ -334,16 +339,13 @@ test("authenticated new-car workflow reaches recommendations through the durable
     )).toBe(true);
 
     await page.goto("/?resume=1");
-    await expect(page.getByText("搜索执行摘要")).toBeVisible();
+    await expect(page.getByText("Agent 正在行动", { exact: true })).toBeVisible();
     await expect(page.getByRole("button", { name: "查看推荐结果" })).toBeEnabled();
     await page.getByRole("button", { name: "查看推荐结果" }).click();
-    await expect(page.getByText("当前模块搜索未形成可用候选")).toBeVisible();
-    await expect(page.getByText("Agent 完成报告")).toBeVisible();
-    await expect(page.getByText("Agent 建议购买组合")).toBeVisible();
-    await expect(page.getByText("AI 上下文建议", { exact: true })).toBeVisible();
-    await expect(page.getByText("本地执行器", { exact: false }).first()).toBeVisible();
-    await expect(page.getByText(/\[[^\]]+\] local_executor/).first()).toBeVisible();
-    await expect(page.getByText(/SUCCESS · 0ms/).first()).toBeVisible();
+    await expect(page.getByText("这个模块暂时没有可用商品")).toBeVisible();
+    await expect(page.getByText("还有可以补强的地方")).toBeVisible();
+    await expect(page.getByText("Agent 建议清单")).toBeVisible();
+    await expect(page.getByText("换个思路", { exact: true })).toBeVisible();
 
     const completedSessionListResponse = await page.request.get("/api/sessions");
     const completedSessionList = await completedSessionListResponse.json() as {
@@ -386,8 +388,8 @@ test("authenticated new-car workflow reaches recommendations through the durable
     await returnToLandingWithoutLocalSnapshot(page);
     const recentTask = page.locator("article").filter({ hasText: completedState.raw_input }).first();
     await expect(recentTask).toContainText("推荐已生成");
-    await recentTask.getByRole("button", { name: "继续任务" }).click();
-    await expect(page.getByText("Agent 完成报告")).toBeVisible();
+    await recentTask.getByRole("button", { name: "继续" }).click();
+    await expect(page.getByText("还有可以补强的地方")).toBeVisible();
 
     const unconfirmedRecovery = await page.request.post("/api/agent/remediate", {
       headers: { Origin: "http://127.0.0.1:3100" },
@@ -396,7 +398,7 @@ test("authenticated new-car workflow reaches recommendations through the durable
     expect(unconfirmedRecovery.status()).toBe(400);
 
     page.once("dialog", (dialog) => dialog.accept());
-    await page.getByRole("button", { name: /继续补齐 1 个缺口模块/ }).click();
+    await page.getByRole("button", { name: "补齐 1 个缺口" }).click();
     await expect.poll(async () => {
       const response = await page.request.get(`/api/session/state?session_id=${persistedSessionId}`);
       const state = await response.json() as {
@@ -415,7 +417,7 @@ test("authenticated new-car workflow reaches recommendations through the durable
       uncovered: 0
     });
     await expect(page.getByText(/E2E 真实链路候选/).first()).toBeVisible();
-    await expect(page.getByRole("button", { name: /继续补齐/ })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "补齐 1 个缺口" })).toHaveCount(0);
 
     const bundleReadyResponse = await page.request.get(`/api/session/state?session_id=${persistedSessionId}`);
     const bundleReadyState = await bundleReadyResponse.json() as {
@@ -432,7 +434,7 @@ test("authenticated new-car workflow reaches recommendations through the durable
     expect(unconfirmedBundle.status()).toBe(400);
 
     page.once("dialog", (dialog) => dialog.accept());
-    await page.getByRole("button", { name: "采用这套组合" }).click();
+    await page.getByRole("button", { name: "采用这套清单" }).click();
     await expect(page.getByText("组合已加入产品内待处理清单")).toBeVisible();
     const adoptedResponse = await page.request.get(`/api/session/state?session_id=${persistedSessionId}`);
     const adoptedState = await adoptedResponse.json() as {
@@ -442,13 +444,12 @@ test("authenticated new-car workflow reaches recommendations through the durable
     expect(adoptedState.bundle_adoption.pending_product_ids).toEqual(adoptedState.bundle_adoption.product_ids);
 
     page.once("dialog", (dialog) => dialog.accept());
-    await page.getByRole("button", { name: "逐件确认加购" }).first().click();
-    await expect(page.getByRole("button", { name: "加入购物车成功" }).first()).toBeVisible({
+    await page.getByRole("button", { name: "加入购物车" }).first().click();
+    await expect(page.getByRole("button", { name: "已加入购物车" }).first()).toBeVisible({
       timeout: 30_000
     });
-    await expect(page.getByText(/已处理 1\/\d+ 件/)).toBeVisible();
 
-    await page.getByRole("button", { name: "进入下单购买" }).click();
+    await page.getByRole("button", { name: "进入购买确认" }).click();
     await expect(page.getByText("确认下单清单")).toBeVisible();
     await expect(page.getByText(/E2E 真实链路候选/).first()).toBeVisible();
     await expect(page.getByRole("button", { name: "在淘宝购物车中管理" }).first()).toBeVisible();
@@ -530,7 +531,7 @@ test("authenticated new-car workflow reaches recommendations through the durable
     await expect(page.getByRole("button", { name: "确认调配并查看新规划" })).toBeVisible();
     page.once("dialog", (dialog) => dialog.accept());
     await page.getByRole("button", { name: "确认调配并查看新规划" }).click();
-    await expect(page.getByText("确认购物规划")).toBeVisible();
+    await expect(page.getByText("确认新车购物规划")).toBeVisible();
 
     const reallocatedResponse = await page.request.get(`/api/session/state?session_id=${persistedSessionId}`);
     const reallocatedState = await reallocatedResponse.json() as typeof feedbackState & {
@@ -608,7 +609,7 @@ test("authenticated new-car workflow reaches recommendations through the durable
     await expect(page.getByRole("button", { name: "取消待执行" }).first()).toBeVisible();
 
     await page.getByRole("button", { name: "返回当前进度" }).click();
-    await expect(page.getByText("确认购物规划")).toBeVisible();
+    await expect(page.getByText("确认新车购物规划")).toBeVisible();
 
     const unconfirmedArchive = await page.request.post("/api/session/archive", {
       headers: { Origin: "http://127.0.0.1:3100" },
@@ -650,7 +651,7 @@ test("authenticated new-car workflow reaches recommendations through the durable
     page.once("dialog", (dialog) => dialog.accept());
     await archivedTaskCard.getByRole("button", { name: "恢复" }).click();
     const restoredTaskCard = page.locator("article").filter({ hasText: completedState.raw_input }).first();
-    await expect(restoredTaskCard.getByRole("button", { name: "继续任务" })).toBeVisible();
+    await expect(restoredTaskCard.getByRole("button", { name: "继续" })).toBeVisible();
 
     const restoredStateResponse = await page.request.get(`/api/session/state?session_id=${persistedSessionId}`);
     const restoredLifecycleState = await restoredStateResponse.json() as {

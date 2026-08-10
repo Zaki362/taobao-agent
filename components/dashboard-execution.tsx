@@ -1,7 +1,7 @@
 "use client";
 
 import { ExternalLink, Pause, Play, ShoppingCart, Store, Trash2 } from "lucide-react";
-import { HostedInstructionCard, InfoBlock } from "@/components/dashboard-common";
+import { AgentBrief, HostedInstructionCard, InfoBlock } from "@/components/dashboard-common";
 import { hasRealDetailUrl, isHostedMode, isQueuedExecutionMode } from "@/components/dashboard-helpers";
 import { CartReviewItem, HostedWorkerStatus, MpcStatus } from "@/components/dashboard-types";
 import { Badge } from "@/components/ui/badge";
@@ -172,7 +172,7 @@ export function SearchSummaryPage({
           </div>
         ) : mcpStatus?.mode === "local_executor" ? (
           <div className="rounded-[22px] bg-emerald-50 p-4 text-sm text-emerald-700">
-            当前为本地执行器队列模式。网页请求结束后 Qoder/Taobao 任务仍会在后台运行，完成结果通过执行事件自动回填。
+            当前为本地执行器队列模式。网页请求结束后，淘宝 Skill 搜索仍会在本机后台运行，完成结果通过执行事件自动回填。
           </div>
         ) : (
           <div className="rounded-[22px] bg-sky-50 p-4 text-sm text-sky-700">
@@ -258,7 +258,15 @@ export function CartReviewPage({
   const demoItemCount = items.length - taobaoItemCount;
 
   return (
-    <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_320px]">
+    <div className="space-y-4">
+      <AgentBrief
+        compact
+        eyebrow="最后一步"
+        title={items.length > 0 ? `你的购买清单里有 ${items.length} 件商品` : "购买清单还是空的"}
+        description={items.length > 0 ? "我已经把本轮选中的商品整理在一起。请确认价格和规格，再决定是否前往淘宝完成结算。" : "返回推荐页选择商品后，我会在这里帮你做最后一次汇总。"}
+        highlights={[`${taobaoItemCount} 件真实加购`, `${demoItemCount} 件演示清单`, `预计 ${formatCurrency(total)}`]}
+      />
+      <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_320px]">
       <Card className="section-card">
         <CardHeader>
           <CardTitle>确认下单清单</CardTitle>
@@ -345,10 +353,10 @@ export function CartReviewPage({
               {hasTaobaoCartItems ? "打开淘宝购物车结算" : "当前仅有演示购物车商品"}
             </Button>
           </div>
-          <div className="panel-muted p-4 text-sm text-muted-foreground">
-            当前页展示的是本产品已加入购物车的商品清单。标记为“淘宝购物车”的商品表示真实加购已成功；标记为“演示购物车”的商品表示真实加购失败后已自动回退到产品内演示清单。
-            演示项可以直接从本页移除；真实淘宝商品必须前往淘宝购物车管理，本产品不会伪装删除或影响购物车里的其他商品。
-          </div>
+          <details className="panel-muted p-4 text-sm text-muted-foreground">
+            <summary className="cursor-pointer font-medium text-foreground">购物车状态说明</summary>
+            <p className="mt-2 leading-6">“淘宝购物车”表示真实加购已成功；“演示购物车”表示真实加购失败后自动回退到产品内清单。演示项可直接移除，真实商品需前往淘宝管理。</p>
+          </details>
         </CardContent>
       </Card>
 
@@ -371,6 +379,7 @@ export function CartReviewPage({
           />
         </CardContent>
       </Card>
+      </div>
     </div>
   );
 }

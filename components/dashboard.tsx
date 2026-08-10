@@ -21,7 +21,6 @@ import {
 import {
   WORKFLOW_STORAGE_KEY,
   defaultInput,
-  stageLabels,
 } from "@/components/dashboard-config";
 import { formatCurrency } from "@/lib/utils";
 import { isRenderableSessionState } from "@/lib/session/guards";
@@ -1335,7 +1334,7 @@ export function Dashboard() {
   return (
     <main className="min-h-screen">
       <div className="page-shell">
-        {stage !== "landing" && stage !== "scenario_select" ? <TopHeader currentStage={stageLabels[stage]} /> : null}
+        {stage !== "landing" && stage !== "scenario_select" ? <TopHeader currentStage={stage} /> : null}
 
         {resumeSnapshot && stage !== "landing" && stage !== "scenario_select" ? (
           <ResumeBanner

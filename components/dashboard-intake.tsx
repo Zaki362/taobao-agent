@@ -52,6 +52,7 @@ function BrandMark() {
 function SceneSpirit({ compact = false }: { compact?: boolean }) {
   return (
     <div className={compact ? "scene-spirit scene-spirit-compact" : "scene-spirit"} aria-hidden="true">
+      {!compact ? <span className="spirit-message">先规划，再挑选</span> : null}
       <span className="spirit-orbit spirit-orbit-left">预算</span>
       <span className="spirit-orbit spirit-orbit-right">偏好</span>
       <span className="spirit-spark spirit-spark-left">✦</span>
@@ -73,19 +74,31 @@ function SceneSpirit({ compact = false }: { compact?: boolean }) {
   );
 }
 
-export function TopHeader({ currentStage }: { currentStage: string }) {
+const workflowPhases: Array<{ label: string; stages: WorkflowStage[] }> = [
+  { label: "理解", stages: ["input_requirement", "parsing", "confirm_scene"] },
+  { label: "规划", stages: ["planning", "confirm_plan", "refining"] },
+  { label: "搜索", stages: ["searching"] },
+  { label: "推荐", stages: ["review_results", "carting", "cart_review"] }
+];
+
+export function TopHeader({ currentStage }: { currentStage: WorkflowStage }) {
   const [authenticated, setAuthenticated] = useState(false);
+  const [authenticationRequired, setAuthenticationRequired] = useState(false);
+  const activePhaseIndex = Math.max(0, workflowPhases.findIndex((phase) => phase.stages.includes(currentStage)));
 
   useEffect(() => {
     fetch("/api/auth/me")
       .then((response) => response.json())
-      .then((payload) => setAuthenticated(payload.authenticated === true))
+      .then((payload) => {
+        setAuthenticated(payload.authenticated === true);
+        setAuthenticationRequired(payload.authentication_required === true);
+      })
       .catch(() => undefined);
   }, []);
 
   async function logout() {
     await fetch("/api/auth/logout", { method: "POST" }).catch(() => undefined);
-    window.location.assign("/login");
+    window.location.assign(authenticationRequired ? "/login" : "/");
   }
 
   return (
@@ -97,10 +110,18 @@ export function TopHeader({ currentStage }: { currentStage: string }) {
           <span className="mt-1 block text-[11px] text-muted-foreground">场景化购物助手</span>
         </span>
       </button>
-      <div className="hidden items-center gap-2 sm:flex">
-        <span className="text-xs text-muted-foreground">当前</span>
-        <Badge variant="secondary">{currentStage}</Badge>
+      <div className="workflow-rail" aria-label={`当前步骤：${stageLabels[currentStage]}`}>
+        {workflowPhases.map((phase, index) => (
+          <span
+            key={phase.label}
+            className={`workflow-rail-step ${index === activePhaseIndex ? "workflow-rail-step-active" : ""} ${index < activePhaseIndex ? "workflow-rail-step-done" : ""}`}
+          >
+            <i>{index < activePhaseIndex ? "✓" : index + 1}</i>
+            <b>{phase.label}</b>
+          </span>
+        ))}
       </div>
+      <span className="workflow-stage-pill lg:hidden">{stageLabels[currentStage]}</span>
       <nav className="ml-auto flex items-center gap-1.5">
         <a href="/hosted" className="header-icon-link" title="执行详情" aria-label="执行详情">
           <History className="h-4 w-4" />
@@ -108,11 +129,13 @@ export function TopHeader({ currentStage }: { currentStage: string }) {
         <a href="/settings/executor" className="header-icon-link" title="执行器设置" aria-label="执行器设置">
           <Settings2 className="h-4 w-4" />
         </a>
-        {authenticated ? (
-          <button type="button" onClick={logout} className="header-text-link">退出</button>
-        ) : (
-          <a href="/login" className="header-text-link">登录</a>
-        )}
+        {authenticationRequired ? (
+          authenticated ? (
+            <button type="button" onClick={logout} className="header-text-link">退出</button>
+          ) : (
+            <a href="/login" className="header-text-link">登录</a>
+          )
+        ) : null}
       </nav>
     </header>
   );
@@ -156,8 +179,16 @@ export function LandingPage({
   onRestoreSession: (session: ShoppingSessionSummary) => void;
 }) {
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const [authenticationRequired, setAuthenticationRequired] = useState(false);
   const canStart = sceneInput.trim().length >= 6 && interactiveReady && !busy;
   const scenario = getScenarioConfig(selectedScenario);
+
+  useEffect(() => {
+    fetch("/api/auth/me")
+      .then((response) => response.json())
+      .then((payload) => setAuthenticationRequired(payload.authentication_required === true))
+      .catch(() => undefined);
+  }, []);
 
   return (
     <div className="landing-shell">
@@ -174,20 +205,16 @@ export function LandingPage({
           <a href="/settings/executor" className="header-icon-link" title="设置" aria-label="设置">
             <Settings2 className="h-4 w-4" />
           </a>
-          <a href="/login" className="header-text-link">账户</a>
+          {authenticationRequired ? <a href="/login" className="header-text-link">账户</a> : null}
         </nav>
       </header>
 
       <section className="landing-hero">
-        <div className="landing-kicker">
-          <Sparkles className="h-3.5 w-3.5" />
-          先想清楚怎么买，再开始找商品
-        </div>
         <SceneSpirit />
         <div className="mx-auto max-w-3xl text-center">
-          <h1 className="landing-title">今天想完成什么购物任务？</h1>
+          <h1 className="landing-title">把一句需求，变成买得明白的方案</h1>
           <p className="landing-subtitle">
-            说清场景、预算和偏好，SceneCart 会帮你整理需求、规划清单，再去淘宝逐项寻找。
+            描述场景、预算和偏好，Agent 会先规划，再帮你找到合适商品。
           </p>
         </div>
 
@@ -205,7 +232,7 @@ export function LandingPage({
                   onStart();
                 }
               }}
-              className="min-h-[112px] resize-none border-0 bg-transparent px-1 py-1 text-[16px] leading-7 shadow-none focus:border-0 focus:shadow-none md:text-[17px]"
+              className="min-h-[88px] resize-none border-0 bg-transparent px-1 py-1 text-[15px] leading-7 shadow-none focus:border-0 focus:shadow-none md:text-[16px]"
             />
             <div className="mt-4 flex flex-col gap-3 border-t border-border/65 pt-4 sm:flex-row sm:items-center sm:justify-between">
               <button
@@ -222,7 +249,7 @@ export function LandingPage({
               </button>
               <Button size="lg" onClick={onStart} disabled={!canStart} className="w-full sm:w-auto" aria-label={scenario.start_button_text}>
                 {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <SendHorizontal className="h-4 w-4" />}
-                开始规划
+                让 Agent 开始理解
               </Button>
             </div>
           </div>
@@ -249,7 +276,7 @@ export function LandingPage({
                 <span className="scenario-picker-icon"><SceneIcon className="h-4 w-4" /></span>
                 <span className="min-w-0 text-left">
                   <strong className="block text-sm font-semibold">{option.label}</strong>
-                  <span className="mt-0.5 block truncate text-[11px] text-muted-foreground">{option.description}</span>
+                  <span className="sr-only">{option.description}</span>
                 </span>
               </button>
             );
@@ -257,7 +284,7 @@ export function LandingPage({
         </div>
 
         <div className="example-grid" aria-label="示例购物场景">
-          {scenario.example_prompts.slice(0, 3).map((example, index) => (
+          {scenario.example_prompts.slice(0, 3).map((example) => (
             <button
               key={example}
               type="button"
@@ -265,28 +292,29 @@ export function LandingPage({
               onClick={() => onExampleStart(example, selectedScenario)}
               className="example-prompt"
             >
-              <span className="example-number">0{index + 1}</span>
               <span className="min-w-0 flex-1">
-                <span className="block text-sm font-semibold text-foreground">{scenario.name}方案 {index + 1}</span>
-                <span className="mt-1 block line-clamp-2 text-xs leading-5 text-muted-foreground">{example}</span>
+                <span className="block line-clamp-2 text-sm leading-5 text-foreground/80">{example}</span>
               </span>
               <ChevronRight className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground/70" />
             </button>
           ))}
         </div>
-        <p className="mt-5 text-center text-xs text-muted-foreground/80">点击示例会直接开始，也可以用 ⌘ Enter 提交</p>
       </section>
 
       {recentSessionsLoading || recentSessions.length > 0 || archivedSessions.length > 0 ? (
-        <section id="recent-tasks" className="recent-tasks-panel">
-          <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
-            <div>
-              <p className="label-text">最近购物任务</p>
-              <h2 className="mt-2 text-xl font-semibold tracking-tight">从上次进度继续</h2>
-            </div>
-            <p className="text-xs text-muted-foreground">任务会保存在你的账户中</p>
-          </div>
+        <details id="recent-tasks" className="recent-tasks-panel group">
+          <summary className="recent-tasks-summary">
+            <span>
+              <span className="label-text">最近购物任务</span>
+              <strong>继续未完成的方案</strong>
+            </span>
+            <span className="inline-flex items-center gap-2 text-xs text-muted-foreground">
+              {recentSessions.length} 个进行中
+              <ChevronRight className="h-4 w-4 transition group-open:rotate-90" />
+            </span>
+          </summary>
 
+          <div className="recent-tasks-content">
           {recentSessionsLoading ? (
             <div className="mt-5 flex min-h-24 items-center justify-center rounded-[22px] border border-dashed border-border bg-muted/25 text-sm text-muted-foreground">
               <Loader2 className="mr-2 h-4 w-4 animate-spin" />
@@ -386,7 +414,8 @@ export function LandingPage({
               </div>
             </details>
           ) : null}
-        </section>
+          </div>
+        </details>
       ) : null}
     </div>
   );

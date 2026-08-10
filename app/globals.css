@@ -67,7 +67,7 @@ body {
 
 @layer components {
   .page-shell {
-    @apply mx-auto flex w-full max-w-[1360px] flex-col gap-5 px-4 py-4 md:px-6 md:py-6;
+    @apply mx-auto flex w-full max-w-[1360px] flex-col gap-4 px-4 py-4 md:gap-5 md:px-6 md:py-6;
   }
 
   .landing-shell {
@@ -79,7 +79,7 @@ body {
   }
 
   .landing-nav {
-    @apply relative z-10 flex h-[72px] items-center justify-between border-b border-border/55;
+    @apply relative z-10 flex h-16 items-center justify-between border-b border-border/55;
   }
 
   .brand-mark {
@@ -95,33 +95,70 @@ body {
   }
 
   .workflow-header {
-    @apply flex min-h-[68px] items-center gap-4 rounded-[24px] border border-white/80 px-4 shadow-card md:px-5;
+    @apply sticky top-3 z-30 flex min-h-[68px] items-center gap-4 rounded-[24px] border border-white/80 px-4 shadow-card md:px-5;
     background: rgba(255, 255, 255, 0.9);
     backdrop-filter: blur(18px);
   }
 
-  .landing-hero {
-    @apply relative z-10 mx-auto flex min-h-[680px] max-w-[980px] flex-col items-center justify-center py-12 md:py-16;
+  .workflow-rail {
+    @apply mx-auto hidden items-center gap-0 lg:flex;
   }
 
-  .landing-kicker {
-    @apply mb-5 inline-flex items-center gap-2 rounded-full border border-primary/15 bg-primary/[0.055] px-3 py-1.5 text-xs font-medium text-primary;
+  .workflow-rail-step {
+    @apply relative flex min-w-[88px] items-center gap-2 text-xs font-medium text-muted-foreground;
+  }
+
+  .workflow-rail-step:not(:last-child)::after {
+    content: "";
+    @apply mx-3 h-px w-7 bg-border;
+  }
+
+  .workflow-rail-step i {
+    @apply inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full border border-border bg-white text-[10px] not-italic transition;
+  }
+
+  .workflow-rail-step b {
+    @apply font-medium;
+  }
+
+  .workflow-rail-step-active {
+    @apply text-foreground;
+  }
+
+  .workflow-rail-step-active i {
+    @apply border-primary bg-primary text-white shadow-sm;
+  }
+
+  .workflow-rail-step-done {
+    @apply text-foreground/70;
+  }
+
+  .workflow-rail-step-done i {
+    @apply border-emerald-100 bg-emerald-50 text-emerald-700;
+  }
+
+  .workflow-stage-pill {
+    @apply ml-auto max-w-[112px] truncate rounded-full border border-primary/15 bg-primary/[0.055] px-3 py-1.5 text-[11px] font-semibold text-primary;
+  }
+
+  .landing-hero {
+    @apply relative z-10 mx-auto flex max-w-[980px] flex-col items-center py-12 md:py-14;
   }
 
   .landing-title {
-    @apply text-balance text-[34px] font-semibold leading-[1.12] tracking-[-0.04em] text-foreground sm:text-[42px] md:text-[52px];
+    @apply max-w-[820px] text-balance text-[30px] font-semibold leading-[1.18] tracking-[-0.035em] text-foreground sm:text-[34px] md:text-[40px];
   }
 
   .landing-subtitle {
-    @apply mx-auto mt-4 max-w-2xl text-balance text-sm leading-7 text-muted-foreground md:text-base;
+    @apply mx-auto mt-3 max-w-2xl text-balance text-sm leading-6 text-muted-foreground md:text-[15px];
   }
 
   .scene-input-wrap {
-    @apply mt-8 w-full max-w-[820px];
+    @apply mt-6 w-full max-w-[820px];
   }
 
   .scene-input-shell {
-    @apply rounded-[26px] border border-border/80 p-4 shadow-[0_18px_55px_rgba(60,45,30,0.10)] transition duration-300 focus-within:-translate-y-0.5 focus-within:border-primary/35 focus-within:shadow-[0_22px_65px_rgba(60,45,30,0.14)] md:p-5;
+    @apply rounded-[24px] border border-border/80 p-4 shadow-[0_14px_42px_rgba(60,45,30,0.09)] transition duration-300 focus-within:-translate-y-0.5 focus-within:border-primary/35 focus-within:shadow-[0_18px_50px_rgba(60,45,30,0.12)] md:p-5;
     background: rgba(255, 255, 255, 0.96);
   }
 
@@ -130,7 +167,7 @@ body {
   }
 
   .scenario-picker-item {
-    @apply flex min-w-0 items-center gap-2.5 rounded-[18px] border border-border/70 bg-white/65 px-3 py-3 text-foreground transition hover:-translate-y-0.5 hover:border-primary/25 hover:bg-white disabled:cursor-not-allowed disabled:opacity-45;
+    @apply flex min-w-0 items-center justify-center gap-2.5 rounded-[16px] border border-border/70 bg-white/65 px-3 py-2.5 text-foreground transition hover:-translate-y-0.5 hover:border-primary/25 hover:bg-white disabled:cursor-not-allowed disabled:opacity-45;
   }
 
   .scenario-picker-item-active {
@@ -138,7 +175,7 @@ body {
   }
 
   .scenario-picker-icon {
-    @apply inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-[12px] bg-muted text-muted-foreground transition;
+    @apply inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-[10px] bg-muted text-muted-foreground transition;
   }
 
   .scenario-picker-item-active .scenario-picker-icon {
@@ -146,19 +183,31 @@ body {
   }
 
   .example-grid {
-    @apply mt-5 grid w-full max-w-[820px] gap-2.5 md:grid-cols-3;
+    @apply mt-3 grid w-full max-w-[820px] gap-2 md:grid-cols-3;
   }
 
   .example-prompt {
-    @apply flex min-h-[92px] items-start gap-3 rounded-[20px] border border-border/70 bg-white/70 p-4 text-left transition hover:-translate-y-0.5 hover:border-primary/25 hover:bg-white hover:shadow-card disabled:cursor-not-allowed disabled:opacity-60;
-  }
-
-  .example-number {
-    @apply shrink-0 pt-0.5 text-[10px] font-semibold tracking-[0.12em] text-primary/70;
+    @apply flex min-h-[66px] items-center gap-3 rounded-[17px] border border-border/70 bg-white/55 px-4 py-3 text-left transition hover:-translate-y-0.5 hover:border-primary/25 hover:bg-white hover:shadow-card disabled:cursor-not-allowed disabled:opacity-60;
   }
 
   .recent-tasks-panel {
-    @apply relative z-10 mx-auto max-w-[1100px] border-t border-border/60 pt-8;
+    @apply relative z-10 mx-auto block max-w-[1100px] rounded-[24px] border border-border/70 bg-white/65 px-5 py-4;
+  }
+
+  .recent-tasks-summary {
+    @apply flex cursor-pointer list-none items-center justify-between gap-4;
+  }
+
+  .recent-tasks-summary::-webkit-details-marker {
+    display: none;
+  }
+
+  .recent-tasks-summary strong {
+    @apply mt-1 block text-sm font-semibold tracking-tight text-foreground;
+  }
+
+  .recent-tasks-content {
+    @apply mt-4 border-t border-border/60 pt-1;
   }
 
   .recent-task-card {
@@ -235,7 +284,27 @@ body {
   }
 
   .product-image-frame {
-    @apply aspect-square w-full overflow-hidden rounded-[18px] bg-muted sm:aspect-auto sm:h-[210px];
+    @apply relative aspect-square w-full overflow-hidden rounded-[18px] bg-muted sm:aspect-auto sm:h-[210px];
+  }
+
+  .product-result-card-featured {
+    @apply border-primary/25 bg-[#fffdfb] shadow-card;
+  }
+
+  .product-ai-pick {
+    @apply absolute left-2.5 top-2.5 z-10 inline-flex items-center gap-1 rounded-full bg-foreground/90 px-2.5 py-1.5 text-[10px] font-medium text-white shadow-sm backdrop-blur;
+  }
+
+  .product-fit-note {
+    @apply mt-3 flex items-start gap-2 rounded-[16px] border border-primary/10 bg-primary/[0.035] px-3 py-2.5 text-sm leading-6 text-muted-foreground;
+  }
+
+  .product-fit-note > svg {
+    @apply text-primary;
+  }
+
+  .product-fit-note span {
+    @apply mr-1.5 font-medium text-foreground;
   }
 
   .product-image-placeholder {
@@ -276,18 +345,27 @@ body {
   }
 
   .scene-spirit {
-    @apply relative mb-6 h-[108px] w-[140px];
+    @apply relative mb-5 mt-6 h-[82px] w-[118px];
     animation: spirit-float 4.2s ease-in-out infinite;
   }
 
+  .spirit-message {
+    @apply absolute -top-7 left-1/2 z-20 -translate-x-1/2 whitespace-nowrap rounded-full border border-primary/15 bg-white px-2.5 py-1 text-[10px] font-medium text-foreground shadow-card;
+  }
+
+  .spirit-message::after {
+    content: "";
+    @apply absolute left-1/2 top-full h-2 w-2 -translate-x-1/2 -translate-y-1/2 rotate-45 border-b border-r border-primary/15 bg-white;
+  }
+
   .scene-spirit-compact {
-    @apply mb-0 h-14 w-16 shrink-0;
+    @apply mb-0 mt-0 h-14 w-16 shrink-0;
     transform: scale(0.56);
     transform-origin: left center;
   }
 
   .spirit-body {
-    @apply absolute left-1/2 top-3 h-[86px] w-[82px] -translate-x-1/2 rounded-[29px] border border-[#f1cfb8] bg-white shadow-[0_15px_35px_rgba(184,105,54,0.16)];
+    @apply absolute left-1/2 top-3 h-[70px] w-[68px] -translate-x-1/2 rounded-[24px] border border-[#f1cfb8] bg-white shadow-[0_12px_30px_rgba(184,105,54,0.14)];
   }
 
   .spirit-antenna {
@@ -295,7 +373,7 @@ body {
   }
 
   .spirit-face {
-    @apply absolute left-1/2 top-7 flex -translate-x-1/2 items-center gap-2;
+    @apply absolute left-1/2 top-6 flex -translate-x-1/2 items-center gap-2;
   }
 
   .spirit-eye {
@@ -308,7 +386,7 @@ body {
   }
 
   .spirit-bag {
-    @apply absolute bottom-2 left-1/2 flex h-8 w-10 -translate-x-1/2 items-center justify-center rounded-[12px] bg-[#fff1e7] text-primary;
+    @apply absolute bottom-1.5 left-1/2 flex h-7 w-9 -translate-x-1/2 items-center justify-center rounded-[10px] bg-[#fff1e7] text-primary;
   }
 
   .spirit-orbit {
@@ -369,12 +447,124 @@ body {
   }
 
   .info-grid-card {
-    @apply rounded-[22px] border border-border/80 bg-white px-4 py-4 shadow-sm;
+    @apply rounded-[22px] border border-border/80 bg-white px-4 py-4 shadow-sm transition hover:border-primary/15;
+  }
+
+  .choice-chip {
+    @apply rounded-full border border-border bg-white px-3 py-1.5 text-xs text-muted-foreground transition hover:border-primary/25 hover:text-foreground;
+  }
+
+  .choice-chip-active {
+    @apply border-primary bg-primary text-white shadow-sm hover:border-primary hover:text-white;
   }
 
   .panel-muted {
     @apply rounded-[22px] border border-border/70 bg-muted/55;
   }
+
+  .agent-brief {
+    @apply relative flex w-full items-start gap-4 overflow-hidden rounded-[28px] border border-primary/10 px-5 py-5 shadow-card md:gap-5 md:px-6 md:py-6;
+    background:
+      radial-gradient(circle at 93% 20%, rgba(28, 157, 140, 0.08), transparent 32%),
+      linear-gradient(135deg, rgba(255, 249, 244, 0.98), rgba(255, 255, 255, 0.96));
+  }
+
+  .agent-brief::after {
+    content: "";
+    @apply pointer-events-none absolute -right-12 -top-12 h-32 w-32 rounded-full border border-primary/10;
+  }
+
+  .agent-brief-compact {
+    @apply rounded-[22px] px-4 py-4;
+  }
+
+  .agent-brief-compact .agent-brief-mark {
+    @apply h-9 w-9 rounded-[13px];
+  }
+
+  .agent-brief-compact .agent-brief-title {
+    @apply mt-1 text-lg leading-6 md:text-xl md:leading-7;
+  }
+
+  .agent-brief-compact .agent-brief-description {
+    @apply mt-1.5 line-clamp-2 text-[13px] leading-6;
+  }
+
+  .agent-brief-compact .agent-brief-highlights {
+    @apply mt-2;
+  }
+
+  .agent-brief-compact .agent-brief-highlights span {
+    @apply px-2.5 py-1 text-[10px];
+  }
+
+  .agent-brief-mark {
+    @apply relative z-10 flex h-11 w-11 shrink-0 items-center justify-center rounded-[16px] bg-primary text-white shadow-[0_10px_25px_rgba(239,91,36,0.22)];
+  }
+
+  .agent-brief-pulse {
+    @apply absolute inset-0 rounded-[16px] border border-primary/30;
+    animation: agent-pulse 1.8s ease-out infinite;
+  }
+
+  .agent-brief-eyebrow {
+    @apply text-[10px] font-semibold uppercase tracking-[0.16em] text-primary;
+  }
+
+  .agent-live-label {
+    @apply inline-flex items-center gap-1.5 rounded-full bg-white/80 px-2 py-1 text-[10px] font-medium text-muted-foreground;
+  }
+
+  .agent-live-label > span {
+    @apply h-1.5 w-1.5 rounded-full bg-emerald-500;
+    animation: soft-breathe 1.4s ease-in-out infinite;
+  }
+
+  .agent-brief-title {
+    @apply mt-1.5 text-balance text-xl font-semibold leading-7 tracking-tight text-foreground md:text-[24px] md:leading-8;
+  }
+
+  .agent-brief-description {
+    @apply mt-2 max-w-4xl text-sm leading-6 text-muted-foreground md:text-[15px] md:leading-7;
+  }
+
+  .agent-brief-highlights {
+    @apply mt-3 flex flex-wrap gap-2;
+  }
+
+  .agent-brief-highlights span {
+    @apply rounded-full border border-primary/10 bg-white/80 px-3 py-1.5 text-[11px] font-medium text-foreground/75;
+  }
+
+  .agent-thinking-step {
+    @apply flex items-center gap-3 rounded-[18px] border border-border/70 bg-white/70 px-4 py-3 text-muted-foreground;
+  }
+
+  .agent-thinking-step-active {
+    @apply border-primary/20 bg-primary/[0.04] text-foreground;
+  }
+
+  .agent-thinking-icon {
+    @apply inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-[12px] bg-muted text-muted-foreground;
+  }
+
+  .agent-thinking-step-active .agent-thinking-icon {
+    @apply bg-primary text-white;
+    animation: soft-breathe 1.8s ease-in-out infinite;
+  }
+
+  .agent-thinking-step strong {
+    @apply block text-xs font-medium;
+  }
+
+  .agent-thinking-step small {
+    @apply mt-0.5 block text-[10px] text-muted-foreground;
+  }
+}
+
+@keyframes agent-pulse {
+  0% { transform: scale(1); opacity: 0.6; }
+  100% { transform: scale(1.45); opacity: 0; }
 }
 
 @keyframes spirit-float {
@@ -410,7 +600,10 @@ body {
   }
 
   .status-orb-loading,
-  .loading-dot {
+  .loading-dot,
+  .agent-brief-pulse,
+  .agent-live-label > span,
+  .agent-thinking-step-active .agent-thinking-icon {
     animation: none;
   }
 }

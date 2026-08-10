@@ -1,6 +1,8 @@
 "use client";
 
-import { ArrowRight, ExternalLink, Loader2, RefreshCw, Search, ShoppingCart, Sparkles, Store, Wand2 } from "lucide-react";
+import { useState } from "react";
+import { ArrowRight, CheckCircle2, ExternalLink, Loader2, RefreshCw, Search, ShoppingCart, Sparkles, Store, Wand2 } from "lucide-react";
+import { AgentBrief } from "@/components/dashboard-common";
 import { hasRealDetailUrl } from "@/components/dashboard-helpers";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -16,7 +18,10 @@ import type {
 } from "@/lib/session/types";
 
 function ProductImage({ product }: { product: ProductCandidate }) {
-  if (!product.image_url?.trim()) {
+  const [failed, setFailed] = useState(false);
+  const imageUrl = product.image_url?.trim().replace(/^http:\/\//, "https://");
+
+  if (!imageUrl || failed) {
     return (
       <div className="product-image-placeholder">
         <ShoppingCart className="h-6 w-6 text-primary/60" />
@@ -25,7 +30,15 @@ function ProductImage({ product }: { product: ProductCandidate }) {
     );
   }
 
-  return <img src={product.image_url} alt={product.title} className="h-full w-full object-cover" />;
+  return (
+    <img
+      src={imageUrl}
+      alt={product.title}
+      className="h-full w-full object-cover transition duration-500 hover:scale-[1.025]"
+      loading="lazy"
+      onError={() => setFailed(true)}
+    />
+  );
 }
 
 export function ResultsPage({
@@ -81,6 +94,10 @@ export function ResultsPage({
   const purchaseBundle = completionReport?.purchase_bundle;
   const refinementSuggestions = purchaseBundle?.refinement_suggestions ?? [];
   const suggestedActions = new Set(refinementSuggestions.map((suggestion) => suggestion.action));
+  const resultTypes = new Set(selectedProducts.map((product) => product.recommendation_type)).size;
+  const hasCompletionGaps = Boolean(
+    completionReport && (completionReport.uncovered_module_ids.length > 0 || completionReport.thin_module_ids.length > 0)
+  );
 
   const addToCartStateForProduct = (productId: string) => {
     const task = session.hosted_tasks.find((entry) => entry.task_type === "add_to_cart" && entry.product_id === productId);
@@ -91,16 +108,27 @@ export function ResultsPage({
   };
 
   return (
-    <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_320px]">
+    <div className="space-y-4">
+      <AgentBrief
+        compact
+        eyebrow="Agent 已完成筛选"
+        title={`我为「${selectedModule?.module_name ?? "当前模块"}」留下了 ${selectedProducts.length} 个值得看的选择`}
+        description={selectedReview?.summary || completionReport?.summary || selectedModule?.rationale || scenario.results_intro_text}
+        highlights={[
+          `模块预算 ${formatCurrency(selectedModule?.budget_allocation ?? 0)}`,
+          `${resultTypes || 0} 种推荐方向`,
+          session.selected_items.length > 0 ? `已选 ${session.selected_items.length} 件` : "还未加入购物车"
+        ]}
+      />
+      <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_320px]">
       <div className="min-w-0 space-y-4">
         <Card className="section-card overflow-hidden">
           <CardContent className="px-0 pb-0">
             <div className="result-heading">
               <div>
-                <p className="label-text">第 4 步 · 商品推荐</p>
+                <p className="label-text">为你筛选的商品</p>
                 <h1 className="mt-2 text-2xl font-semibold tracking-tight">{scenario.results_page_title}</h1>
-                <p className="mt-2 text-sm text-muted-foreground">{scenario.results_intro_text}</p>
-                <p className="mt-1 text-xs text-muted-foreground">当前模块：{selectedModule?.module_name ?? "推荐结果"} · 预算 {formatCurrency(selectedModule?.budget_allocation ?? 0)} · {selectedProducts.length} 个候选</p>
+                <p className="mt-2 text-sm text-muted-foreground">先看 Agent 首选，也可以切换模块比较其他方案。</p>
               </div>
               <div className="rounded-[18px] bg-white px-4 py-3 text-right shadow-sm">
                 <span className="text-xs text-muted-foreground">已选</span>
@@ -126,15 +154,18 @@ export function ResultsPage({
         </Card>
 
         <div className="grid gap-3">
-          {selectedProducts.map((product) => {
+          {selectedProducts.map((product, index) => {
             const cartState = addToCartStateForProduct(product.product_id);
             return (
-              <article key={product.product_id} className="product-result-card">
-                <div className="product-image-frame"><ProductImage product={product} /></div>
+              <article key={product.product_id} className={`product-result-card ${index === 0 ? "product-result-card-featured" : ""}`}>
+                <div className="product-image-frame">
+                  {index === 0 ? <span className="product-ai-pick"><Sparkles className="h-3 w-3" />Agent 首选</span> : null}
+                  <ProductImage product={product} />
+                </div>
                 <div className="flex min-w-0 flex-1 flex-col justify-between gap-4">
                   <div>
                     <div className="flex flex-wrap items-center gap-2">
-                      <Badge>{product.recommendation_type}</Badge>
+                      <Badge variant={index === 0 ? "default" : "secondary"}>{product.recommendation_type}</Badge>
                       {product.shop_badges.slice(0, 2).map((badge) => <Badge key={badge} variant="outline">{badge}</Badge>)}
                     </div>
                     <h2 className="mt-3 line-clamp-2 text-[16px] font-semibold leading-6 text-foreground md:text-[17px]">{product.title}</h2>
@@ -145,7 +176,7 @@ export function ResultsPage({
                         {product.highlights.slice(0, 4).map((item) => <span key={item} className="product-highlight">{item}</span>)}
                       </div>
                     ) : null}
-                    <p className="mt-3 text-sm leading-6 text-muted-foreground"><span className="font-medium text-foreground">适合你：</span>{product.fit_reason}</p>
+                    <div className="product-fit-note"><Sparkles className="mt-0.5 h-3.5 w-3.5 shrink-0" /><p><span>为什么适合你</span>{product.fit_reason}</p></div>
                     <p className="mt-2 text-xs leading-5 text-muted-foreground">风险提示：{product.risk_notes[0] ?? scenario.product_risk_style}</p>
                   </div>
                   <div className="flex flex-col gap-2 sm:flex-row">
@@ -202,19 +233,19 @@ export function ResultsPage({
         {purchaseBundle ? (
           <Card className="section-card border-primary/15">
             <CardHeader>
-              <div className="flex items-start justify-between gap-2"><CardTitle>推荐组合</CardTitle><Badge variant={purchaseBundle.status === "ready" ? "success" : "secondary"}>{purchaseBundle.items.length} 件</Badge></div>
+              <div className="flex items-start justify-between gap-2"><CardTitle>Agent 建议清单</CardTitle><Badge variant={purchaseBundle.status === "ready" ? "success" : "secondary"}>{purchaseBundle.items.length} 件</Badge></div>
             </CardHeader>
             <CardContent className="space-y-3">
               <p className="text-sm leading-6 text-muted-foreground">{purchaseBundle.summary}</p>
               <div className="rounded-[16px] bg-[#fff5ef] px-3 py-2 text-sm"><span className="text-muted-foreground">组合价</span><strong className="float-right text-[#ef5b24]">{formatCurrency(purchaseBundle.estimated_total)}</strong></div>
-              {!session.bundle_adoption ? <Button className="w-full" variant="outline" disabled={busy || purchaseBundle.items.length === 0} onClick={onAcceptPurchaseBundle}><Sparkles className="h-4 w-4" />采用这套组合</Button> : <Badge variant="success">组合已采纳</Badge>}
+              {!session.bundle_adoption ? <Button className="w-full" variant="outline" disabled={busy || purchaseBundle.items.length === 0} onClick={onAcceptPurchaseBundle}><Sparkles className="h-4 w-4" />采用这套清单</Button> : <div className="flex items-center gap-2 text-sm font-medium text-emerald-700"><CheckCircle2 className="h-4 w-4" />已采用这套清单</div>}
             </CardContent>
           </Card>
         ) : null}
 
-        {completionReport ? (
+        {completionReport && hasCompletionGaps ? (
           <Card className="section-card">
-            <CardHeader><div className="flex items-start justify-between gap-2"><CardTitle>Agent 完成报告</CardTitle><Badge variant={completionReport.status === "ready" ? "success" : "secondary"}>{completionReport.status === "ready" ? "可用" : "待完善"}</Badge></div></CardHeader>
+            <CardHeader><div className="flex items-start justify-between gap-2"><CardTitle>还有可以补强的地方</CardTitle><Badge variant="secondary">可选</Badge></div></CardHeader>
             <CardContent className="space-y-3">
               <p className="text-sm leading-6 text-muted-foreground">{completionReport.summary}</p>
               {completionReport.uncovered_module_ids.length > 0 ? <Button className="w-full" size="sm" disabled={busy} onClick={onRecoverCompletionGaps}>补齐 {completionReport.uncovered_module_ids.length} 个缺口</Button> : null}
@@ -234,23 +265,33 @@ export function ResultsPage({
         ) : null}
 
         <Card className="section-card">
-          <CardHeader><CardTitle>调整推荐</CardTitle></CardHeader>
+          <CardHeader><CardTitle>换个思路</CardTitle></CardHeader>
           <CardContent className="space-y-2">
-            {refinementSuggestions.slice(0, 2).map((suggestion) => (
+            <p className="pb-1 text-xs leading-5 text-muted-foreground">调整后会先生成一版新规划，确认后再重新搜索，不会直接覆盖当前结果。</p>
+            {refinementSuggestions.slice(0, 1).map((suggestion) => (
               <button key={suggestion.action} type="button" disabled={busy} onClick={() => onQuickAction(suggestion.action)} className="quick-adjust-row">
                 <Wand2 className="h-4 w-4 shrink-0 text-primary" /><span><strong className="block text-sm">{suggestion.action}</strong><span className="mt-1 block text-xs leading-5 text-muted-foreground">{suggestion.reason}</span></span>
               </button>
             ))}
             <div className="flex flex-wrap gap-2 pt-1">
-              {scenario.quick_actions.filter((action) => !suggestedActions.has(action)).slice(0, 6).map((action) => (
+              {scenario.quick_actions.filter((action) => !suggestedActions.has(action)).slice(0, 4).map((action) => (
                 <button key={action} type="button" disabled={busy} onClick={() => onQuickAction(action)} className="prompt-chip">{action}</button>
               ))}
             </div>
+            {scenario.quick_actions.filter((action) => !suggestedActions.has(action)).length > 4 ? (
+              <details className="pt-2 text-xs text-muted-foreground">
+                <summary className="cursor-pointer font-medium hover:text-foreground">更多调整方式</summary>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {scenario.quick_actions.filter((action) => !suggestedActions.has(action)).slice(4).map((action) => (
+                    <button key={action} type="button" disabled={busy} onClick={() => onQuickAction(action)} className="prompt-chip">{action}</button>
+                  ))}
+                </div>
+              </details>
+            ) : null}
           </CardContent>
         </Card>
-
-        <a href="/hosted" className="flex items-center justify-center gap-2 py-2 text-xs font-medium text-muted-foreground transition hover:text-foreground"><ExternalLink className="h-3.5 w-3.5" />查看后台执行详情</a>
       </aside>
+      </div>
     </div>
   );
 }

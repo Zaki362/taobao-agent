@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { ArrowRight, CheckCircle2, ChevronLeft, Loader2, Search, WalletCards } from "lucide-react";
 import {
+  AgentBrief,
   EditableBudgetField,
   EditableChoiceField,
   EditableTagField
@@ -74,6 +75,7 @@ export function ConfirmScenePage({
 }) {
   const scenario = getScenarioConfig(scene.scenario_id);
   const options = scenario.field_option_sets;
+  const excludedSummary = scene.avoid_items.length > 0 ? `暂不考虑${scene.avoid_items.slice(0, 2).join("、")}` : "没有额外排除项";
   const updateScene = (patch: Partial<SessionState["scene_brief"]>) => {
     const next = { ...scene, ...patch };
     onSceneChange(next);
@@ -81,39 +83,48 @@ export function ConfirmScenePage({
   };
 
   return (
-    <Card className="section-card mx-auto w-full max-w-5xl">
-      <CardHeader className="px-6 pt-7 md:px-8 md:pt-8">
-        <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
-          <div>
-            <p className="label-text">确认场景理解结果</p>
-            <CardTitle className="mt-2 text-2xl">{scenario.confirm_scene_title}</CardTitle>
-            <p className="mt-2 text-sm leading-6 text-muted-foreground">{scenario.confirm_scene_description} 点击选项即可修改。</p>
+    <div className="mx-auto w-full max-w-5xl space-y-4">
+      <AgentBrief
+        compact
+        eyebrow="我对需求的理解"
+        title={`${scene.vehicle_type} · ${scene.user_stage}，预算 ${formatCurrency(scene.budget)}`}
+        description={`${statusMessage} 我会以「${scene.priority_style}」作为取舍标准，${excludedSummary}。`}
+        highlights={[
+          `预算 ${formatCurrency(scene.budget)}`,
+          scene.priority_style,
+          scene.already_have.length > 0 ? `已有 ${scene.already_have.length} 类物品` : "从基础清单开始"
+        ]}
+      />
+      <Card className="section-card w-full">
+        <CardHeader className="px-6 pt-7 md:px-8 md:pt-8">
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+            <div>
+              <p className="label-text">需要你确认</p>
+              <CardTitle className="mt-2 text-2xl">{scenario.confirm_scene_title}</CardTitle>
+              <p className="mt-2 text-sm leading-6 text-muted-foreground">点击任一选项即可修正，我会使用更新后的信息重新组织方案。</p>
+            </div>
+            <Badge variant="success"><CheckCircle2 className="mr-1.5 h-3.5 w-3.5" />可直接编辑</Badge>
           </div>
-          <Badge variant="success"><CheckCircle2 className="mr-1.5 h-3.5 w-3.5" />已整理完成</Badge>
-        </div>
-      </CardHeader>
-      <CardContent className="space-y-6 px-6 pb-7 pt-6 md:px-8 md:pb-8">
-        <div className="grid gap-4 md:grid-cols-2">
-          <EditableChoiceField label={scenario.field_labels.vehicle_type} value={scene.vehicle_type} options={options.vehicle_type ?? [scene.vehicle_type]} onSelect={(value) => updateScene({ vehicle_type: value })} />
-          <EditableBudgetField label={scenario.field_labels.budget} value={scene.budget} onChange={(value) => updateScene({ budget: value })} />
-          <EditableChoiceField label={scenario.field_labels.priority_style} value={scene.priority_style} options={options.priority_style ?? [scene.priority_style]} onSelect={(value) => updateScene({ priority_style: value as PriorityStyle })} />
-          <EditableChoiceField label={scenario.field_labels.user_stage} value={scene.user_stage} options={options.user_stage ?? [scene.user_stage]} onSelect={(value) => updateScene({ user_stage: value })} />
-          <EditableTagField label={scenario.field_labels.avoid_items} selected={scene.avoid_items} options={options.avoid_items ?? []} emptyLabel="暂无排除项" onToggle={(value) => updateScene({ avoid_items: toggleMultiValue(scene.avoid_items, value) })} />
-          <EditableTagField label={scenario.field_labels.already_have} selected={scene.already_have} options={options.already_have ?? []} emptyLabel="暂无已有物品" onToggle={(value) => updateScene({ already_have: toggleMultiValue(scene.already_have, value) })} />
-        </div>
-        <div className="flex items-center gap-2 rounded-[18px] bg-muted/55 px-4 py-3 text-xs text-muted-foreground">
-          <CheckCircle2 className="h-4 w-4 shrink-0 text-accent" />
-          {statusMessage}
-        </div>
-        <div className="flex flex-col-reverse gap-3 border-t border-border/60 pt-5 sm:flex-row sm:justify-between">
-          <Button variant="ghost" onClick={onBack}><ChevronLeft className="h-4 w-4" />返回修改原需求</Button>
-          <Button onClick={onConfirm} disabled={busy}>
-            {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <ArrowRight className="h-4 w-4" />}
-            确认需求，开始生成购物规划
-          </Button>
-        </div>
-      </CardContent>
-    </Card>
+        </CardHeader>
+        <CardContent className="space-y-6 px-6 pb-7 pt-6 md:px-8 md:pb-8">
+          <div className="grid gap-4 md:grid-cols-2">
+            <EditableChoiceField label={scenario.field_labels.vehicle_type} value={scene.vehicle_type} options={options.vehicle_type ?? [scene.vehicle_type]} onSelect={(value) => updateScene({ vehicle_type: value })} />
+            <EditableBudgetField label={scenario.field_labels.budget} value={scene.budget} onChange={(value) => updateScene({ budget: value })} />
+            <EditableChoiceField label={scenario.field_labels.priority_style} value={scene.priority_style} options={options.priority_style ?? [scene.priority_style]} onSelect={(value) => updateScene({ priority_style: value as PriorityStyle })} />
+            <EditableChoiceField label={scenario.field_labels.user_stage} value={scene.user_stage} options={options.user_stage ?? [scene.user_stage]} onSelect={(value) => updateScene({ user_stage: value })} />
+            <EditableTagField label={scenario.field_labels.avoid_items} selected={scene.avoid_items} options={options.avoid_items ?? []} emptyLabel="暂无排除项" onToggle={(value) => updateScene({ avoid_items: toggleMultiValue(scene.avoid_items, value) })} />
+            <EditableTagField label={scenario.field_labels.already_have} selected={scene.already_have} options={options.already_have ?? []} emptyLabel="暂无已有物品" onToggle={(value) => updateScene({ already_have: toggleMultiValue(scene.already_have, value) })} />
+          </div>
+          <div className="flex flex-col-reverse gap-3 border-t border-border/60 pt-5 sm:flex-row sm:justify-between">
+            <Button variant="ghost" onClick={onBack}><ChevronLeft className="h-4 w-4" />返回修改原需求</Button>
+            <Button onClick={onConfirm} disabled={busy}>
+              {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <ArrowRight className="h-4 w-4" />}
+              确认无误，生成购买路线
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+    </div>
   );
 }
 
@@ -171,14 +182,26 @@ export function ConfirmPlanPage({
   }
 
   return (
-    <Card className="section-card mx-auto w-full max-w-6xl">
+    <div className="mx-auto w-full max-w-6xl space-y-4">
+      <AgentBrief
+        compact
+        eyebrow="我给出的购买路线"
+        title={topModules.length > 0 ? `先解决「${topModules.join("、")}」` : "先解决最影响使用的需求"}
+        description={session.shopping_plan.personalization_summary || session.shopping_plan.overall_rationale}
+        highlights={[
+          `${modules.length} 个购买模块`,
+          `总预算 ${formatCurrency(totalAllocated)}`,
+          `${modules.filter((module) => module.priority <= 2).length} 项优先处理`
+        ]}
+      />
+      <Card className="section-card w-full">
       <CardHeader className="px-6 pt-7 md:px-8 md:pt-8">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
           <div>
-            <p className="label-text">确认购物规划</p>
+            <p className="label-text">需要你确认</p>
             <CardTitle className="mt-2 text-2xl">{scenario.confirm_plan_title}</CardTitle>
             <p className="mt-2 max-w-2xl text-sm leading-6 text-muted-foreground">
-              {scenario.confirm_plan_description} 已按优先级拆成 {modules.length} 个模块。
+              我已经把需求拆成可执行的搜索任务。你只需检查优先级和预算是否符合预期。
             </p>
           </div>
           <Badge variant="success">规划已就绪</Badge>
@@ -303,10 +326,11 @@ export function ConfirmPlanPage({
           </div>
           <Button onClick={onConfirm} disabled={busy}>
             {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}
-            确认规划，开始搜索推荐商品
+            就按这个方案开始找商品
           </Button>
         </div>
       </CardContent>
-    </Card>
+      </Card>
+    </div>
   );
 }

@@ -1,9 +1,9 @@
 "use client";
 
-import { Check, CircleDashed, ExternalLink, Loader2, Pause, Play, RefreshCw, Search } from "lucide-react";
-import { Badge } from "@/components/ui/badge";
+import { Check, CircleDashed, Loader2, Pause, Play, RefreshCw, Search } from "lucide-react";
+import { AgentBrief } from "@/components/dashboard-common";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import type { HostedWorkerStatus, MpcStatus } from "@/components/dashboard-types";
 import type { SessionState } from "@/lib/session/types";
 import { getScenarioConfig } from "@/lib/scenarios";
@@ -43,25 +43,33 @@ export function SearchProgressPage({
   const workflowActive = session.agent_runtime.workflow_status === "running" || session.agent_runtime.workflow_status === "waiting_for_tools";
   const workflowPaused = session.agent_runtime.workflow_status === "paused";
   const currentModule = modules.find((module) => !(session.module_candidates[module.module_id] ?? []).length);
-  const executorReady = mcpStatus?.available === true;
+  const agentTitle = workflowPaused
+    ? "搜索已暂停，已有结果不会丢失"
+    : workflowActive && currentModule
+      ? `我正在比较「${currentModule.module_name}」的候选商品`
+      : `我已经完成 ${completedModules.length} 个模块的搜索`;
 
   return (
-    <Card className="section-card mx-auto w-full max-w-5xl">
-      <CardHeader className="px-6 pt-7 md:px-8 md:pt-8">
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
-          <div>
-            <p className="label-text">第 3 步 · 搜索商品</p>
-            <CardTitle className="mt-2 text-2xl">搜索执行摘要</CardTitle>
-            <p className="mt-2 text-sm leading-6 text-muted-foreground">{scenario.searching_status_text}。每个模块完成后都会自动保存。</p>
+    <div className="mx-auto w-full max-w-5xl space-y-4">
+      <AgentBrief
+        compact
+        eyebrow="Agent 正在行动"
+        title={agentTitle}
+        description={`${scenario.searching_status_text}。我会按规划逐项搜索、筛掉明显不合适的结果，再把值得看的候选交给你。`}
+        highlights={[`${completedModules.length}/${modules.length} 个模块`, `${candidateCount} 个候选`, "结果实时保存"]}
+        loading={workflowActive}
+      />
+      <Card className="section-card w-full">
+        <CardContent className="space-y-5 px-6 py-6 md:px-8 md:py-7">
+        {mcpStatus?.available === false ? (
+          <div className="rounded-[18px] border border-amber-200 bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-800">
+            购物执行能力暂未连接，当前进度会保留。连接恢复后可以从这里继续。
           </div>
-          <Badge variant={executorReady ? "success" : "secondary"}>{executorReady ? "购物能力已连接" : "等待执行器"}</Badge>
-        </div>
-      </CardHeader>
-      <CardContent className="space-y-6 px-6 pb-7 pt-6 md:px-8 md:pb-8">
+        ) : null}
         <div className="search-progress-hero">
           <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
             <div>
-              <p className="text-sm font-medium text-muted-foreground">{workflowPaused ? "搜索已暂停" : currentModule ? `正在准备「${currentModule.module_name}」` : "模块搜索已完成"}</p>
+              <p className="text-sm font-medium text-muted-foreground">{workflowPaused ? "搜索已暂停" : workflowActive && currentModule ? `正在处理「${currentModule.module_name}」` : "本轮搜索已完成"}</p>
               <p className="mt-2 text-3xl font-semibold tracking-tight text-foreground">{progress}%</p>
             </div>
             <div className="flex gap-6 text-sm">
@@ -86,7 +94,7 @@ export function SearchProgressPage({
                 </span>
                 <div className="min-w-0 flex-1">
                   <p className="text-sm font-medium text-foreground">{module.module_name}</p>
-                  <p className="mt-0.5 truncate text-xs text-muted-foreground">{done ? `${(session.module_candidates[module.module_id] ?? []).length} 个候选已就绪` : current ? "正在搜索" : "等待搜索"}</p>
+                  <p className="mt-0.5 truncate text-xs text-muted-foreground">{done ? `${(session.module_candidates[module.module_id] ?? []).length} 个候选已就绪` : current ? "正在比较候选" : workflowActive ? "等待处理" : "本轮未找到合适结果"}</p>
                 </div>
               </div>
             );
@@ -94,15 +102,14 @@ export function SearchProgressPage({
         </div>
 
         {searchSummary.length > 0 ? (
-          <p className="rounded-[18px] bg-muted/55 px-4 py-3 text-sm leading-6 text-muted-foreground">{searchSummary[searchSummary.length - 1]}</p>
+          <div className="rounded-[18px] bg-muted/55 px-4 py-3 text-sm leading-6 text-muted-foreground">
+            <span className="mr-2 font-medium text-foreground">刚刚完成</span>{searchSummary[searchSummary.length - 1]}
+          </div>
         ) : null}
 
         <div className="flex flex-col-reverse gap-3 border-t border-border/60 pt-5 sm:flex-row sm:items-center sm:justify-between">
           <div className="flex flex-wrap gap-2">
             <Button variant="ghost" onClick={onRefresh}><RefreshCw className="h-4 w-4" />刷新进度</Button>
-            <a href="/hosted" className="inline-flex h-11 items-center gap-2 rounded-full px-4 text-sm font-medium text-muted-foreground transition hover:bg-muted hover:text-foreground">
-              <ExternalLink className="h-4 w-4" />执行详情
-            </a>
             {mcpStatus?.mode === "local_executor" && workflowActive ? (
               <Button variant="outline" onClick={onPauseWorkflow} disabled={workflowControlBusy}>
                 <Pause className="h-4 w-4" />{workflowControlBusy ? "正在暂停" : "完成当前项后暂停"}
@@ -120,6 +127,7 @@ export function SearchProgressPage({
           </Button>
         </div>
       </CardContent>
-    </Card>
+      </Card>
+    </div>
   );
 }
