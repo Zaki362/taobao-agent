@@ -538,15 +538,17 @@ function readSessionFromDisk(sessionId: string) {
 export function getSession(sessionId: string) {
   const inMemory = store.get(sessionId);
   if (inMemory) {
-    const normalized = normalizeSessionState(inMemory);
-    store.set(sessionId, normalized);
-    return normalized;
+    // Readers must not share a mutable object with an in-flight workflow.
+    // A dashboard poll used to normalize and replace the singleton entry while
+    // executor callbacks were still mutating it, which could resurrect a stale
+    // snapshot and drop freshly persisted candidates.
+    return normalizeSessionState(structuredClone(inMemory));
   }
 
   const persisted = readSessionFromDisk(sessionId);
   if (persisted) {
     store.set(sessionId, persisted);
-    return persisted;
+    return structuredClone(persisted);
   }
 
   return null;
@@ -585,8 +587,12 @@ export function listSessions() {
     .filter((item): item is SessionState => Boolean(item));
 
   for (const session of fromDisk) {
-    store.set(session.session_id, session);
+    if (!store.has(session.session_id)) {
+      store.set(session.session_id, session);
+    }
   }
 
-  return Array.from(store.values());
+  return Array.from(store.values(), (session) =>
+    normalizeSessionState(structuredClone(session))
+  );
 }

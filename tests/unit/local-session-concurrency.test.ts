@@ -67,4 +67,25 @@ describe("local session write serialization", () => {
     expect(new Set(jobs.filter((job) => job.job_type === "add_to_cart").map((job) => job.payload.product_id)))
       .toEqual(new Set(["local-cart-a", "local-cart-b"]));
   });
+
+  it("returns isolated snapshots so dashboard reads cannot mutate an active workflow", async () => {
+    const sessionId = `session-local-read-${randomUUID()}`;
+    sessionFiles.add(sessionId);
+    const state = createSessionFixture({ session_id: sessionId });
+    await localRuntimeRepository.saveSession(state);
+
+    const firstRead = await localRuntimeRepository.getSession(sessionId, state.owner_id);
+    const secondRead = await localRuntimeRepository.getSession(sessionId, state.owner_id);
+    expect(firstRead).not.toBe(secondRead);
+
+    firstRead!.agent_runtime.workflow_status = "completed";
+    firstRead!.agent_runtime.workflow_message = "只修改调用方快照";
+    firstRead!.module_candidates[state.shopping_plan.modules[0].module_id] = [
+      candidate(state.shopping_plan.modules[0].module_id, "isolated-candidate", "隔离候选", 99)
+    ];
+
+    const stored = await localRuntimeRepository.getSession(sessionId, state.owner_id);
+    expect(stored?.agent_runtime.workflow_status).toBe("idle");
+    expect(stored?.module_candidates[state.shopping_plan.modules[0].module_id]).toBeUndefined();
+  });
 });
