@@ -85,6 +85,18 @@ export function validateModelProposal(
     if (module && proposal.action === "search_module" && (state.module_candidates[module.module_id]?.length ?? 0) > 0) {
       notes.push("已有候选池时不能重复执行首轮搜索");
     }
+    if (
+      module &&
+      proposal.action === "search_module" &&
+      state.hosted_tasks.some(
+        (task) =>
+          task.task_type === "module_search" &&
+          task.module_id === module.module_id &&
+          (task.status === "completed" || task.status === "failed" || task.status === "cancelled")
+      )
+    ) {
+      notes.push("该模块已结束首轮搜索，不能重复调用工具");
+    }
     if (module && proposal.action === "retry_module") {
       const searched = state.module_search_traces[module.module_id]?.searched_keywords ?? [];
       if (searched.length === 0) {
@@ -170,6 +182,7 @@ export async function decideNextAgentActionV2(
     state.module_reviews[policyDecision.module_id!]?.user_confirmed_retry === true;
   const hardPolicyAction =
     policyDecision.action === "wait_for_tools" ||
+    policyDecision.action === "skip_module" ||
     userConfirmedRetry ||
     (budgetRemaining <= 0 && policyDecision.action !== "complete_workflow") ||
     state.shopping_plan.agent_directives.autonomy_level === "保守执行";

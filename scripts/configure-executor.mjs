@@ -1,5 +1,4 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import readline from "node:readline/promises";
@@ -21,13 +20,6 @@ async function readExisting() {
     if (error && typeof error === "object" && error.code === "ENOENT") return "";
     throw error;
   }
-}
-
-function expandHome(value) {
-  const trimmed = value.trim();
-  if (trimmed === "~") return os.homedir();
-  if (trimmed.startsWith("~/")) return path.join(os.homedir(), trimmed.slice(2));
-  return trimmed;
 }
 
 async function hiddenQuestion(label) {
@@ -100,17 +92,12 @@ async function main() {
   const currentApiUrl = await discoverExecutorApiUrl(
     preferredExecutorApiUrl(existing, process.env.SCENECART_API_URL)
   );
-  const currentQoderPath = readEnvValue(existing, "QODERCLI_PATH") || path.join(os.homedir(), ".local/bin/qodercli");
   const currentToken = readEnvValue(existing, "SCENECART_DEVICE_TOKEN");
   const input = readline.createInterface({ input: process.stdin, output: process.stdout });
   let apiUrl;
-  let qoderPath;
   try {
     apiUrl = normalizeExecutorApiUrl(
       (await input.question(`SceneCart API 地址 [${currentApiUrl}]: `)).trim() || currentApiUrl
-    );
-    qoderPath = expandHome(
-      (await input.question(`Qoder CLI 路径 [${currentQoderPath}]: `)).trim() || currentQoderPath
     );
   } finally {
     input.close();
@@ -126,10 +113,10 @@ async function main() {
     throw new Error("尚未配置设备令牌，请先在 /settings/executor 注册设备");
   }
 
-  await writeAtomically(updateExecutorEnv(existing, { apiUrl, deviceToken, qoderPath }));
+  await writeAtomically(updateExecutorEnv(existing, { apiUrl, deviceToken }));
   console.log(`配置已安全写入 ${target}`);
   console.log(`API: ${apiUrl}`);
-  console.log(`Qoder: ${qoderPath}`);
+  console.log("淘宝执行通道：桌面版官方本地 HTTP MCP（无需 Qoder）");
   console.log("设备令牌：已保存但不显示");
   console.log("下一步运行：npm run executor:doctor");
 }

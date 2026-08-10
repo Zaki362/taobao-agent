@@ -12,6 +12,7 @@ import { enqueueModuleSearchJob } from "@/lib/runtime/jobs";
 import { invalidateAgentCompletionArtifacts } from "@/lib/session/bundle-adoption";
 import {
   requireValidModuleSearchKeyword,
+  toStableTaobaoSearchKeyword,
   validateAutonomousSearchKeyword
 } from "@/lib/agent/search-strategy";
 
@@ -86,9 +87,28 @@ function buildSearchKeywordQueue(
     : state.last_action === "换一批推荐" && alternates.length > 0
       ? [alternates[0], reviewSuggestedKeyword, primary, ...alternates.slice(1)]
       : [reviewSuggestedKeyword, primary, ...alternates];
-
-  return orderedKeywords
+  const previouslySearchedCategories = new Set(
+    (state.module_search_traces[module.module_id]?.searched_keywords ?? [])
+      .map((keyword) => toStableTaobaoSearchKeyword(module, keyword))
+  );
+  const stableKeywords = orderedKeywords
     .filter(Boolean)
+    .map((keyword) => toStableTaobaoSearchKeyword(module, keyword));
+  const isRecoverySearch = Boolean(override || reviewSuggestedKeyword || state.last_action === "换一批推荐");
+  const nextUnsearchedCategory = module.typical_item_types
+    .map((keyword) => toStableTaobaoSearchKeyword(module, keyword))
+    .find((keyword) => !previouslySearchedCategories.has(keyword));
+
+  if (
+    isRecoverySearch &&
+    stableKeywords[0] &&
+    previouslySearchedCategories.has(stableKeywords[0]) &&
+    nextUnsearchedCategory
+  ) {
+    stableKeywords.unshift(nextUnsearchedCategory);
+  }
+
+  return stableKeywords
     .filter((keyword, index, list) => list.indexOf(keyword) === index);
 }
 
@@ -359,6 +379,37 @@ export async function runModuleSearch(
   const searchIntent = searchKeywordQueue[0] || searchIntentForModule(state.scene_brief, module);
   const backend = getExecutionBackend();
   if (backend === "codex_hosted" || backend === "local_executor") {
+    const terminalLocalTask = backend === "local_executor"
+      ? state.hosted_tasks.find(
+          (task) =>
+            task.task_type === "module_search" &&
+            task.module_id === module.module_id &&
+            (task.status === "completed" || task.status === "failed" || task.status === "cancelled")
+        )
+      : undefined;
+    const previousTrace = state.module_search_traces[moduleId];
+    const completedAttempts = previousTrace?.attempts.filter(
+      (attempt) => attempt.status === "success" || attempt.status === "error"
+    ).length ?? 0;
+    const hasExistingCandidates = (state.module_candidates[moduleId]?.length ?? 0) > 0;
+    const previouslySearchedCategories = new Set(
+      (previousTrace?.searched_keywords ?? []).map((keyword) =>
+        toStableTaobaoSearchKeyword(module, keyword)
+      )
+    );
+    const isNewKeyword = Boolean(
+      options?.keywordOverride &&
+      !previouslySearchedCategories.has(toStableTaobaoSearchKeyword(module, searchIntent))
+    );
+    const userConfirmedRetry =
+      Boolean(options?.keywordOverride) && state.module_reviews[module.module_id]?.user_confirmed_retry === true;
+    const controlledSupplementalRetry =
+      hasExistingCandidates &&
+      isNewKeyword &&
+      completedAttempts < maxSearchAttempts(state);
+    if (terminalLocalTask && !userConfirmedRetry && !controlledSupplementalRetry) {
+      return state.module_candidates[moduleId] ?? [];
+    }
     if (backend === "local_executor") {
       await enqueueModuleSearchJob(state, {
         moduleId: module.module_id,
@@ -373,11 +424,10 @@ export async function runModuleSearch(
       });
     }
     const now = new Date().toISOString();
-    const previousTrace = state.module_search_traces[moduleId];
     const queuedAttempt: ModuleSearchAttempt = {
       keyword: searchIntent,
       reason: backend === "local_executor"
-        ? "搜索任务已进入持久化队列，等待本地 Qoder/Taobao 执行器领取。"
+        ? "搜索任务已进入持久化队列，等待本地淘宝 Skill 执行器领取。"
         : "当前处于 Codex 宿主代理模式，搜索任务已排队等待宿主执行。",
       result_count: 0,
       status: "skipped",
@@ -385,7 +435,9 @@ export async function runModuleSearch(
     };
     const previousAttempts = previousTrace?.attempts ?? [];
     const attempts = previousAttempts.some((attempt) => attempt.keyword === searchIntent)
-      ? previousAttempts.map((attempt) => attempt.keyword === searchIntent ? queuedAttempt : attempt)
+      ? previousAttempts.map((attempt) =>
+          attempt.keyword === searchIntent && attempt.status === "skipped" ? queuedAttempt : attempt
+        )
       : [...previousAttempts, queuedAttempt];
     const existingCandidateCount = state.module_candidates[moduleId]?.length ?? 0;
     state.module_search_traces[moduleId] = {

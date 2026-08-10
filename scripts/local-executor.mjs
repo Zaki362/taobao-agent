@@ -1,43 +1,39 @@
-import { execFile } from "node:child_process";
-import { constants as fsConstants } from "node:fs";
-import { promisify } from "node:util";
 import fs from "node:fs/promises";
 import path from "node:path";
-import os from "node:os";
 import process from "node:process";
 import nextEnv from "@next/env";
 import protocol from "../lib/runtime/executor-protocol.json" with { type: "json" };
 import { ExecutorLeaseGuard } from "./executor-lease-guard.mjs";
+import { TaobaoMcpClient } from "./taobao-mcp-client.mjs";
 import {
-  buildSearchEvidencePrompt,
-  isQoderCreditError,
-  isRepeatedToolCallError,
   isTaobaoLoginError,
-  normalizeTaobaoSearchEvidence,
-  qoderPrintArgs,
-  searchEvidencePath
+  normalizeTaobaoCartResult,
+  normalizeTaobaoSearchEvidence
 } from "./local-executor-utils.mjs";
 
 nextEnv.loadEnvConfig(process.cwd());
 
-const execFileAsync = promisify(execFile);
 const apiBaseUrl = (process.env.SCENECART_API_URL || "http://127.0.0.1:3000").replace(/\/$/, "");
 const deviceToken = process.env.SCENECART_DEVICE_TOKEN;
-const qoderPath = process.env.QODERCLI_PATH || `${os.homedir()}/.local/bin/qodercli`;
+const taobaoMcpUrl = process.env.TAOBAO_NATIVE_MCP_URL || "http://127.0.0.1:3654/mcp";
 const pollMs = Math.max(Number(process.env.EXECUTOR_POLL_MS || 2500), 500);
-const qoderTimeoutMs = Math.max(Number(process.env.EXECUTOR_QODER_TIMEOUT_MS || 180000), 30000);
+const taobaoSearchTimeoutMs = Math.max(Number(process.env.EXECUTOR_TAOBAO_SEARCH_TIMEOUT_MS || 60000), 15000);
+const taobaoCartTimeoutMs = Math.max(Number(process.env.EXECUTOR_TAOBAO_CART_TIMEOUT_MS || 60000), 15000);
+const taobaoSearchCooldownMs = Math.max(Number(process.env.EXECUTOR_TAOBAO_SEARCH_COOLDOWN_MS || 30000), 0);
+const taobaoSourceApp = process.env.TAOBAO_SOURCE_APP || "SceneCartAI";
 const apiTimeoutMs = Math.max(Number(process.env.EXECUTOR_API_TIMEOUT_MS || 20000), 5000);
+const resolveTimeoutMs = Math.max(Number(process.env.EXECUTOR_RESOLVE_TIMEOUT_MS || 60000), apiTimeoutMs);
 const leaseFailureLimit = Math.max(Number(process.env.EXECUTOR_LEASE_FAILURE_LIMIT || 3), 1);
 const resultDir = path.join(process.cwd(), ".data", "local-executor", "results");
-const evidenceDir = path.join(process.cwd(), ".data", "local-executor", "evidence");
 const executorProtocolVersion = protocol.version;
-
 if (!deviceToken) {
   throw new Error("SCENECART_DEVICE_TOKEN is required. Register a device at /settings/executor first.");
 }
 
 let heartbeatInFlight = false;
 let stopped = false;
+let authenticationPaused = false;
+let lastTaobaoSearchFinishedAt = 0;
 const leaseGuard = new ExecutorLeaseGuard({
   failureLimit: leaseFailureLimit,
   onLeaseLost: ({ jobId, reason }) => {
@@ -46,10 +42,11 @@ const leaseGuard = new ExecutorLeaseGuard({
 });
 
 class ExecutorJobError extends Error {
-  constructor(message, retryable = true) {
+  constructor(message, retryable = true, code = "operation_failed") {
     super(message);
     this.name = "ExecutorJobError";
     this.retryable = retryable;
+    this.code = code;
   }
 }
 
@@ -74,25 +71,10 @@ async function api(path, options = {}) {
 }
 
 async function verifyStartup() {
-  await fs.access(qoderPath, fsConstants.X_OK).catch(() => {
-    throw new Error(`Qoder CLI is not executable at ${qoderPath}. Set QODERCLI_PATH to the installed binary.`);
-  });
-  try {
-    const { stdout, stderr } = await execFileAsync(
-      qoderPath,
-      qoderPrintArgs("只返回严格 JSON：{\"ok\":true}", ["Read"]),
-      {
-      env: process.env,
-      timeout: 20_000,
-      maxBuffer: 1024 * 1024
-      }
-    );
-    if (!stdout.trim()) {
-      throw qoderJobError(undefined, stdout, stderr);
-    }
-  } catch (error) {
-    if (error instanceof ExecutorJobError) throw error;
-    throw qoderJobError(error);
+  const tools = await taobaoClient.listTools();
+  const toolNames = new Set(tools.map((tool) => tool?.name));
+  if (!toolNames.has("search_products")) {
+    throw new Error("淘宝桌面版 MCP 未暴露 search_products 工具");
   }
   const response = await fetch(`${apiBaseUrl}/api/runtime/health`, {
     signal: AbortSignal.timeout(apiTimeoutMs)
@@ -116,80 +98,49 @@ async function verifyStartup() {
   if (!capabilities.includes("module_search")) {
     throw new Error("设备令牌没有 module_search 能力，请在执行器设置页重新注册搜索设备。");
   }
+  if (capabilities.includes("add_to_cart") && !toolNames.has("add_to_cart")) {
+    throw new Error("设备声明了 add_to_cart 能力，但淘宝桌面版 MCP 未暴露加购工具。");
+  }
   if (heartbeatPayload.protocol_version !== executorProtocolVersion) {
     throw new Error("服务端未确认当前执行器协议，请更新项目代码后重启。");
   }
   process.stdout.write(
-    `[local-executor] startup checks passed; qoder=session-ready; runtime=${payload.runtime_store}; backend=${payload.effective_executor_backend}; capabilities=${capabilities.join(",")}\n`
+    `[local-executor] startup checks passed; driver=taobao-mcp-http; runtime=${payload.runtime_store}; backend=${payload.effective_executor_backend}; capabilities=${capabilities.join(",")}\n`
   );
 }
 
-function parseJson(text) {
-  const trimmed = text.trim();
-  if (!trimmed) throw new Error("Qoder CLI returned empty output");
-  try {
-    const parsed = JSON.parse(trimmed);
-    const content = parsed?.result || parsed?.content || parsed?.message?.content;
-    if (typeof content === "string") return parseJson(content);
-    return parsed;
-  } catch {
-    const start = trimmed.indexOf("{");
-    const end = trimmed.lastIndexOf("}");
-    if (start >= 0 && end > start) return JSON.parse(trimmed.slice(start, end + 1));
-    throw new Error("Qoder CLI output was not valid JSON");
-  }
-}
-
-function processOutput(error, stdout = "", stderr = "") {
+function errorOutput(error) {
   const candidate = error && typeof error === "object" ? error : {};
-  return [stdout, stderr, candidate.stdout, candidate.stderr, candidate.message]
+  return [candidate.stdout, candidate.stderr, candidate.message, String(error ?? "")]
     .filter((value) => typeof value === "string" && value.trim())
     .join("\n")
     .trim();
 }
 
-function qoderJobError(error, stdout = "", stderr = "") {
-  const output = processOutput(error, stdout, stderr);
-  if (isQoderCreditError(output)) {
-    return new ExecutorJobError(
-      "Qoder CLI 账户额度已用尽，当前无法调用淘宝 skill。请等待额度恢复或升级 Qoder 订阅后重试。",
-      false
-    );
-  }
-  if (/upgrade required|update available/i.test(output)) {
-    return new ExecutorJobError(
-      "Qoder CLI 版本已过期，请先运行 qodercli update，确认 qodercli --version 正常后再启动执行器。",
-      false
-    );
-  }
-  if (/not logged in|please run \/login|authentication required|unauthorized/i.test(output)) {
-    return new ExecutorJobError(
-      "Qoder CLI 未登录，请在终端运行 qodercli，输入 /login 完成登录后再启动执行器。",
-      false
-    );
-  }
-  if (isTaobaoLoginError(output)) {
-    return new ExecutorJobError(
-      "淘宝桌面版当前未登录。请在淘宝桌面版完成登录并保持主界面打开，然后重新执行当前搜索。",
-      false
-    );
-  }
-  if (isRepeatedToolCallError(output)) {
-    return new ExecutorJobError(
-      "Qoder 拒绝了重复工具调用。当前任务已停止，避免继续产生不确定结果。",
-      false
-    );
-  }
-  if (!output) {
-    return new ExecutorJobError("Qoder CLI 未返回内容。", true);
-  }
-  return new ExecutorJobError(output.slice(0, 1000), true);
+function operationSignal(signal, timeoutMs) {
+  const timeoutSignal = AbortSignal.timeout(timeoutMs);
+  return signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal;
 }
+
+function createTaobaoMcpClient(timeoutMs) {
+  return new TaobaoMcpClient({
+    endpoint: taobaoMcpUrl,
+    sourceApp: taobaoSourceApp,
+    timeoutMs
+  });
+}
+
+// Streamable HTTP sessions are stateful. Reuse one transport for the complete
+// worker lifetime so Taobao Desktop keeps one consistent WebView/MCP context.
+const taobaoClient = createTaobaoMcpClient(Math.max(taobaoSearchTimeoutMs, taobaoCartTimeoutMs));
 
 async function readCachedResult(job) {
   try {
     const result = JSON.parse(await fs.readFile(path.join(resultDir, `${job.id}.json`), "utf-8"));
-    if (job.job_type === "module_search" && result?.evidence?.source !== "taobao-native") {
+    if (
+      job.job_type === "module_search" &&
+      !["taobao-mcp", "taobao-native"].includes(result?.evidence?.source)
+    ) {
       process.stderr.write(
         `[local-executor] ignored unverified legacy search cache for ${job.id}\n`
       );
@@ -215,7 +166,8 @@ async function reportResult(jobId, payload) {
     try {
       return await api(`/api/executor/jobs/${jobId}/resolve`, {
         method: "POST",
-        body: JSON.stringify(payload)
+        body: JSON.stringify(payload),
+        signal: AbortSignal.timeout(resolveTimeoutMs)
       });
     } catch (error) {
       lastError = error;
@@ -225,91 +177,84 @@ async function reportResult(jobId, payload) {
   throw lastError;
 }
 
-function cartPrompt(job) {
-  const payload = job.payload || {};
-  return [
-    "你是 SceneCart AI 的淘宝加购执行器。用户已经在产品页面显式确认本次加购。",
-    "必须使用当前已安装的淘宝 skill，并且只通过 itemId 获取 SKU 后加入购物车。",
-    "禁止打开商品详情页，禁止 navigate_to_url，禁止执行任何订单提交或付款动作。",
-    `商品 ID：${payload.product_id}`,
-    `商品标题：${payload.product_title}`,
-    "成功或失败都只返回严格 JSON：",
-    JSON.stringify({ success: true, message: "已加入淘宝购物车", product_id: payload.product_id }, null, 2)
-  ].join("\n");
+function taobaoJobError(error, operation = "操作") {
+  const output = errorOutput(error);
+  if (isTaobaoLoginError(output)) {
+    return new ExecutorJobError(
+      "淘宝桌面版当前未登录。请完成登录并保持主界面打开后重试。",
+      false,
+      "auth_required"
+    );
+  }
+  if (/Tool 执行层未就绪|应用已加载完成|连接失败|cli-rpc\.sock|ECONNREFUSED/i.test(output)) {
+    return new ExecutorJobError(
+      "淘宝桌面版工具执行层暂未就绪，请保持客户端主界面打开后重试。",
+      true
+    );
+  }
+  if (/timed out|timeout|SIGTERM|SIGKILL/i.test(output)) {
+    return new ExecutorJobError(`淘宝${operation}在限定时间内未完成。`, true);
+  }
+  if (/fetch failed|ECONNREFUSED|MCP.*请求失败|会话 ID/i.test(output)) {
+    return new ExecutorJobError("淘宝桌面版 MCP 暂不可达，请保持客户端运行后重试。", true);
+  }
+  return new ExecutorJobError(output ? output.slice(0, 1000) : `淘宝 MCP 未返回${operation}结果。`, true);
 }
 
 async function executeJob(job, signal) {
   const payload = job.payload || {};
-  const evidencePath = job.job_type === "module_search"
-    ? searchEvidencePath(evidenceDir, job.id)
-    : null;
-  if (evidencePath) {
-    await fs.mkdir(evidenceDir, { recursive: true });
-    await fs.rm(evidencePath, { force: true });
-  }
-  const startedAt = Date.now();
-  const prompt = job.job_type === "module_search"
-    ? buildSearchEvidencePrompt({
-        keyword: payload.keyword,
-        moduleName: payload.module_name,
-        moduleId: payload.module_id,
-        evidencePath
-      })
-    : cartPrompt(job);
-  let stdout = "";
-  let stderr = "";
-  let commandError;
-  try {
-    const output = await execFileAsync(
-      qoderPath,
-      qoderPrintArgs(prompt, job.job_type === "module_search" ? ["Bash"] : ["Skill", "Bash", "Read"]),
-      {
-      env: process.env,
-      timeout: qoderTimeoutMs,
-      maxBuffer: 8 * 1024 * 1024,
-      signal
-      }
-    );
-    stdout = output.stdout ?? "";
-    stderr = output.stderr ?? "";
-  } catch (error) {
-    commandError = error;
-  }
-
-  if (job.job_type === "module_search" && evidencePath) {
+  if (job.job_type === "module_search") {
+    const cooldownRemaining = taobaoSearchCooldownMs - (Date.now() - lastTaobaoSearchFinishedAt);
+    if (cooldownRemaining > 0) {
+      process.stdout.write(`[local-executor] waiting ${cooldownRemaining}ms before the next Taobao search\n`);
+      await sleep(cooldownRemaining);
+    }
+    let raw;
     try {
-      const stat = await fs.stat(evidencePath);
-      if (stat.mtimeMs + 1000 < startedAt) {
-        throw new Error("淘宝搜索证据不是当前任务生成的，已拒绝复用旧结果。");
-      }
-      const raw = JSON.parse(await fs.readFile(evidencePath, "utf-8"));
+      // get_current_tab is not a passive health check in Taobao Desktop: when its
+      // internal login state is stale it navigates the app to the login page.
+      // Keep each user-approved search to one stateful shopping tool call.
+      raw = await taobaoClient.callTool("search_products", {
+        keyword: String(payload.keyword ?? "").trim(),
+        // Match the official skill's default route. The dedicated PC route can
+        // redirect an otherwise logged-in desktop WebView to login.taobao.com.
+        type: "all"
+      }, operationSignal(signal, taobaoSearchTimeoutMs));
+    } catch (error) {
+      if (error instanceof ExecutorJobError) throw error;
+      throw taobaoJobError(error, "搜索");
+    } finally {
+      lastTaobaoSearchFinishedAt = Date.now();
+    }
+    try {
       const result = normalizeTaobaoSearchEvidence(raw, {
         keyword: String(payload.keyword ?? "").trim(),
         moduleId: String(payload.module_id ?? "").trim()
       });
+      result.evidence.source = "taobao-mcp";
       process.stdout.write(
-        `[local-executor] verified ${result.candidates.length} Taobao candidates from evidence for ${job.id}\n`
+        `[local-executor] verified ${result.candidates.length} Taobao candidates from MCP for ${job.id}\n`
       );
       return result;
-    } catch (evidenceError) {
-      if (!commandError) {
-        const message = evidenceError?.code === "ENOENT"
-          ? "Qoder 未生成淘宝搜索证据文件，已拒绝使用模型输出作为商品结果。"
-          : evidenceError.message;
-        throw new ExecutorJobError(message, false);
-      }
+    } catch (error) {
+      throw new ExecutorJobError(error instanceof Error ? error.message : String(error), false);
     }
-    throw qoderJobError(commandError, stdout, stderr);
   }
 
-  if (commandError) throw qoderJobError(commandError, stdout, stderr);
-  if (!stdout.trim()) {
-    throw qoderJobError(undefined, stdout, stderr);
-  }
+  const productId = String(payload.product_id ?? "").trim();
+  if (!productId) throw new ExecutorJobError("加购任务缺少商品 ID。", false);
   try {
-    return parseJson(stdout);
+    // As with search, do not probe get_current_tab first. add_to_cart owns its
+    // authentication response and the circuit breaker handles a real auth error.
+    const raw = await taobaoClient.callTool(
+      "add_to_cart",
+      { itemId: productId, sku: [] },
+      operationSignal(signal, taobaoCartTimeoutMs)
+    );
+    return normalizeTaobaoCartResult(raw, productId);
   } catch (error) {
-    throw qoderJobError(error, stdout, stderr);
+    if (error instanceof ExecutorJobError) throw error;
+    throw taobaoJobError(error, "加购");
   }
 }
 
@@ -345,6 +290,10 @@ async function loop() {
   process.stdout.write(`[local-executor] connected to ${apiBaseUrl}; polling every ${pollMs}ms\n`);
   await heartbeat();
   while (!stopped) {
+    if (authenticationPaused) {
+      await sleep(Math.max(pollMs, 5000));
+      continue;
+    }
     try {
       const { job } = await api("/api/executor/jobs/claim", { method: "POST", body: "{}" });
       if (!job) {
@@ -379,6 +328,12 @@ async function loop() {
           process.stderr.write(`[local-executor] failed to report ${job.id}: ${resolveError.message}\n`);
         });
         process.stderr.write(`[local-executor] job ${job.id} failed: ${error.message}\n`);
+        if (error instanceof ExecutorJobError && error.code === "auth_required") {
+          authenticationPaused = true;
+          process.stderr.write(
+            "[local-executor] authentication circuit breaker opened; no more jobs will be claimed until the executor is restarted after Taobao login\n"
+          );
+        }
         continue;
       }
 
@@ -420,3 +375,6 @@ for (const signal of ["SIGINT", "SIGTERM"]) {
 }
 
 await loop();
+await taobaoClient.close().catch((error) => {
+  process.stderr.write(`[local-executor] failed to close MCP session: ${error.message}\n`);
+});

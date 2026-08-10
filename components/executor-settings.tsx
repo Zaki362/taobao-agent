@@ -209,8 +209,8 @@ export function ExecutorSettings() {
 
   const setupSteps = [
     {
-      title: "登录 Qoder CLI",
-      detail: "在本机运行 qodercli，并输入 /login。登录态只保留在你的电脑上。",
+      title: "准备淘宝桌面版",
+      detail: "安装淘宝桌面版、开启 AI 应用授权并登录淘宝。购物动作通过官方本地 MCP 执行，不依赖 Qoder。",
       status: onlineDevices.length > 0 ? "done" as const : "manual" as const,
       icon: Terminal
     },
@@ -222,7 +222,7 @@ export function ExecutorSettings() {
     },
     {
       title: "通过连接检查",
-      detail: "Doctor 会检查 Qoder 登录、网页服务和设备令牌，不会操作淘宝。",
+      detail: "Doctor 只检查官方本地 MCP、网页服务和设备令牌，不会搜索、打开商品页或操作购物车。",
       status: onlineDevices.length > 0 ? "done" as const : "manual" as const,
       icon: Check
     },
@@ -242,7 +242,7 @@ export function ExecutorSettings() {
             <p className="label-text">Local Executor</p>
             <a href="/?resume=1" className="text-sm font-medium text-primary hover:underline">返回当前购物进度</a>
           </div>
-          <h1 className="mt-3 text-3xl font-semibold">连接这台电脑上的 Qoder 与淘宝</h1>
+          <h1 className="mt-3 text-3xl font-semibold">连接这台电脑上的淘宝执行器</h1>
           <p className="mt-3 max-w-3xl text-sm leading-7 text-muted-foreground">
             网页只负责任务规划和状态展示；真实淘宝操作由本地执行器领取持久化任务后完成。设备令牌只在注册时展示一次。
           </p>
@@ -451,9 +451,9 @@ export function ExecutorSettings() {
           </div>
         </CardHeader>
         <CardContent className="space-y-3 text-sm leading-7 text-muted-foreground">
-          <p>Doctor 只检查网页服务、设备令牌和 Qoder CLI，不会主动打开淘宝商品页，也不会触发加购。</p>
+          <p>Doctor 只检查网页服务、设备令牌和淘宝桌面版官方本地 MCP，不会主动搜索、打开商品页或触发加购。</p>
           <pre className="overflow-x-auto rounded-[18px] bg-foreground p-4 text-xs leading-6 text-white">{doctorCommand}</pre>
-          <p>全部检查均显示 PASS 后再启动执行器。如果提示未登录，请先运行 <code>qodercli</code> 并输入 <code>/login</code>；淘宝 skill 会在第一条由用户确认的搜索任务中完成真实验证。</p>
+          <p>全部检查均显示 PASS 后再启动执行器。淘宝账号登录态会在第一条由用户确认的真实搜索中验证；搜索与加购均不调用 Qoder，搜索也不会自动打开商品详情页。</p>
         </CardContent>
       </Card>
 

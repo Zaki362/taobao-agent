@@ -1,5 +1,3 @@
-import path from "node:path";
-
 const RECOMMENDATION_TYPES = ["稳妥推荐", "性价比推荐", "升级推荐"];
 const SEARCH_RISK_NOTE = "当前为搜索结果摘要，未自动打开详情页，建议点开淘宝详情页确认规格与适配性";
 
@@ -34,63 +32,6 @@ function normalizeDetailUrl(value, productId) {
   const detailUrl = asText(value);
   if (/^https?:\/\//i.test(detailUrl)) return detailUrl.replace(/^http:\/\//i, "https://");
   return productId ? `https://item.taobao.com/item.htm?id=${encodeURIComponent(productId)}` : "";
-}
-
-function shellSingleQuote(value) {
-  return `'${String(value).replace(/'/g, `'"'"'`)}'`;
-}
-
-export function searchEvidencePath(baseDir, jobId) {
-  const safeJobId = String(jobId).replace(/[^a-zA-Z0-9_-]/g, "-");
-  return path.join(baseDir, `${safeJobId}.json`);
-}
-
-export function buildSearchEvidencePrompt(input) {
-  const toolArgs = JSON.stringify({
-    keyword: String(input.keyword ?? "").trim(),
-    sourceApp: "Qoderwork"
-  });
-  const command = [
-    "taobao-native search_products",
-    "--args",
-    shellSingleQuote(toolArgs),
-    "-o",
-    shellSingleQuote(input.evidencePath)
-  ].join(" ");
-
-  return [
-    "你是 SceneCart AI 的淘宝工具宿主，只执行下面一个原子搜索任务。",
-    "必须调用 Bash 工具，并且只调用一次；禁止使用 Skill、Read、Edit、Web 或其他工具。",
-    "禁止自行生成、补全或猜测任何商品信息，也不要重试失败的命令。",
-    "严格执行以下命令，不得改写关键词、参数或输出路径：",
-    command,
-    "命令成功后只返回严格 JSON：{\"ok\":true}",
-    "命令失败后只返回严格 JSON：{\"ok\":false,\"error\":\"原始错误摘要\"}"
-  ].join("\n");
-}
-
-export function qoderPrintArgs(prompt, tools = ["Bash"]) {
-  const toolList = uniqueStrings(tools, 8).join(",");
-  return [
-    "-p",
-    prompt,
-    "--cwd",
-    process.cwd(),
-    "--permission-mode",
-    "bypass_permissions",
-    "--dangerously-skip-permissions",
-    "--tools",
-    toolList,
-    "--allowed-tools",
-    toolList,
-    "--no-session-persistence",
-    "--max-model-request-retries",
-    "1",
-    "--max-output-tokens",
-    "512",
-    "--output-format",
-    "text"
-  ];
 }
 
 export function normalizeTaobaoSearchEvidence(raw, context) {
@@ -153,16 +94,41 @@ export function normalizeTaobaoSearchEvidence(raw, context) {
   };
 }
 
+export function taobaoCurrentTabUrl(raw) {
+  const root = raw && typeof raw === "object" ? raw : {};
+  const result = root.result && typeof root.result === "object" ? root.result : root;
+  return typeof result.url === "string" ? result.url : "";
+}
+
+export function normalizeTaobaoCartResult(raw, productId) {
+  const root = raw && typeof raw === "object" ? raw : {};
+  const result = root.result && typeof root.result === "object" ? root.result : root;
+  if (result.success === true) {
+    return {
+      success: true,
+      message: typeof result.message === "string" ? result.message : "已加入淘宝购物车",
+      product_id: productId,
+      selected_spec: Array.isArray(result.selectedSku) ? result.selectedSku.join(" / ") : undefined
+    };
+  }
+  if (result.needsSkuSelection === true || result.needs_sku_selection === true) {
+    const skus = Array.isArray(result.availableSkus) ? result.availableSkus : [];
+    const labels = skus
+      .map((entry) => entry && typeof entry === "object" ? entry.groupLabel || entry.label || entry.name : "")
+      .filter(Boolean);
+    return {
+      success: false,
+      message: labels.length > 0
+        ? `商品需要先选择规格：${[...new Set(labels)].join("、")}`
+        : "商品需要先选择规格，请打开淘宝详情页确认后再加购。",
+      product_id: productId,
+      needs_sku_selection: true,
+      available_skus: skus
+    };
+  }
+  throw new Error(typeof result.error === "string" ? result.error : "淘宝 MCP 未确认加购成功。");
+}
+
 export function isTaobaoLoginError(value) {
   return /未登录|请先登录淘宝账号|已打开登录页面|login\.taobao\.com/i.test(String(value ?? ""));
-}
-
-export function isRepeatedToolCallError(value) {
-  return /repeated tool call was denied/i.test(String(value ?? ""));
-}
-
-export function isQoderCreditError(value) {
-  return /credit usage limit|usage limit|insufficient credits?|quota exceeded|upgrade your subscription plan|qoder\.com\/pricing|pricingUrl/i.test(
-    String(value ?? "")
-  );
 }

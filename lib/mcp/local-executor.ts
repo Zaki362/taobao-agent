@@ -5,7 +5,7 @@ export const localExecutorMcpAdapter: MCPAdapter = {
   async detect() {
     return {
       available: true,
-      message: "当前使用本地执行器队列。Qoder/Taobao 调用不会在 Next.js 请求进程中执行。",
+      message: "当前使用本地执行器队列。淘宝 Skill 调用不会在 Next.js 请求进程中执行。",
       permissions_scope: ["本地淘宝搜索", "本地商品详情", "加购需显式确认"]
     };
   },

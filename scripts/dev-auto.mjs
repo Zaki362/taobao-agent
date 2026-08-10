@@ -20,12 +20,12 @@ function readLocalEnv(root = process.cwd()) {
 
 export function resolveExecutorEnvironment(content, explicitEnvironment, apiBaseUrl) {
   const explicitToken = explicitEnvironment.SCENECART_DEVICE_TOKEN?.trim() ?? "";
-  const explicitQoderPath = explicitEnvironment.QODERCLI_PATH?.trim() ?? "";
+  const explicitSourceApp = explicitEnvironment.TAOBAO_SOURCE_APP?.trim() ?? "";
   return {
     TAOBAO_EXECUTION_BACKEND: "local_executor",
     SCENECART_API_URL: apiBaseUrl,
     SCENECART_DEVICE_TOKEN: explicitToken || readEnvValue(content, "SCENECART_DEVICE_TOKEN"),
-    QODERCLI_PATH: explicitQoderPath || readEnvValue(content, "QODERCLI_PATH")
+    TAOBAO_SOURCE_APP: explicitSourceApp || readEnvValue(content, "TAOBAO_SOURCE_APP") || "SceneCartAI"
   };
 }
 
@@ -120,7 +120,7 @@ export async function startDevelopmentStack(args = process.argv.slice(2)) {
         console.error(`[dev] ${apiBaseUrl} 未在限定时间内就绪，本地执行器未启动。`);
         return;
       }
-      console.log("[dev] 已检测到设备令牌，正在启动本地 Qoder/Taobao 执行器...");
+      console.log("[dev] 已检测到设备令牌，正在启动淘宝桌面版 HTTP MCP 执行器...");
       workerProcess = spawnCommand("npm", ["run", "worker:local"], "local-executor");
       workerProcess.once("exit", (code) => {
         workerProcess = null;

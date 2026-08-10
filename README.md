@@ -30,7 +30,7 @@ SceneCart AI 是一个正在按正式产品架构推进的“场景化购物 Age
 - Agent 建议补搜：当候选偏少或质量不足时，推荐页会展示建议搜索词，用户可以一键按 Agent 建议补搜当前模块
 - 快捷调整影响说明：用户点击快捷调整后，系统会生成 `last_refinement`，说明哪些模块需要重搜、哪些候选可复用、哪些模块被移除以及原因
 - 生产运行时：支持 PostgreSQL 持久化、邮箱登录、HttpOnly 会话、按用户隔离的购物 Session、持久 Job Queue 和执行事件
-- 本地执行器：Qoder/Taobao skill 不再占用 Next.js 请求；设备通过一次性令牌注册，使用心跳、任务租约、自动恢复、结果账本和幂等回填完成本机真实执行
+- 本地执行器：商品搜索与显式确认后的真实加购由独立 Worker 直连淘宝桌面版官方 HTTP MCP，不再经过 Qoder、CLI 子进程或 Next.js 长请求；设备通过一次性令牌注册，使用心跳、任务租约、自动恢复、结果账本和幂等回填完成本机真实执行
 - 实时回填：搜索、重试、Agent 状态转换和加购事件通过 SSE 推送到当前会话，并以短轮询作为断线恢复兜底；页面不占用淘宝执行长请求
 - 可恢复事件流：SSE 使用事件游标与 `Last-Event-ID` 续传，浏览器短暂断线后不会重复丢失执行进度
 - 运行时可观测性：执行台展示队列积压、在线设备、失败/取消任务、最久等待时间与模型 guardrail fallback；发布就绪页会进一步区分 DeepSeek“已配置”与“本进程最近真实调用成功”。每个购物 Session 还会持久化隐私安全的 `llm_calls`，只记录任务、模型、真实/降级模式、耗时、原因和时间，不保存 Prompt、用户原文或模型原始输出；结构化模型提案若在后续业务 Guardrail 被拒绝，对应凭证也会被精确改写为 fallback，避免把“模型有返回”误报成“模型结果已采用”
@@ -59,7 +59,7 @@ SceneCart AI 是一个正在按正式产品架构推进的“场景化购物 Age
 - shadcn 风格基础组件
 - Framer Motion
 - DeepSeek API
-- Qoder CLI / Taobao skill / MCP adapter
+- 淘宝桌面版官方本地 HTTP MCP adapter
 
 ## 快速开始
 
@@ -117,7 +117,10 @@ DEEPSEEK_REASONER_MODEL=deepseek-reasoner
 SCENECART_PRODUCT_MODE=production
 ALLOW_DEMO_CART_FALLBACK=false
 TAOBAO_EXECUTION_BACKEND=local_executor
-QODERCLI_PATH=
+TAOBAO_NATIVE_MCP_URL=http://127.0.0.1:3654/mcp
+TAOBAO_SOURCE_APP=SceneCartAI
+EXECUTOR_TAOBAO_SEARCH_TIMEOUT_MS=60000
+EXECUTOR_TAOBAO_CART_TIMEOUT_MS=60000
 SCENECART_ENABLE_MCP_DEBUG=false
 RUNTIME_STORE=postgres
 DATABASE_URL=postgresql://...
@@ -147,14 +150,16 @@ SCENECART_CRON_SECRET=
 - `AUTH_REQUIRED=true`：正式部署必须开启，确保 Session、设备与任务按用户隔离。
 - `APP_ORIGIN`：正式产品允许发起写请求的网页 Origin；多个地址使用逗号分隔。
 - `SCENECART_RELEASE_VERIFY_URL`：可选的正式发布探测地址；`npm run release:verify` 未显式传 `--url` 时优先使用它，否则使用 `APP_ORIGIN` 的第一个地址。
-- `SCENECART_DEVICE_TOKEN`：在 `/settings/executor` 注册设备后一次性获得，配置在运行 Qoder/Taobao 的本机，不应写入仓库。
+- `SCENECART_DEVICE_TOKEN`：在 `/settings/executor` 注册设备后一次性获得，配置在运行淘宝桌面版与本地执行器的机器，不应写入仓库。
 - `SCENECART_CRON_SECRET`：至少 32 字符的独立高熵密钥，只用于保护服务端恢复扫描端点；不能复用设备 Token、DeepSeek Key 或用户密码。
 - `SCENECART_RECOVERY_STALE_MS`：恢复调度失联阈值，默认 180000ms；readiness 会校验持久心跳，而不是只检查 Secret 是否存在。
 - `executor:doctor` 和 `worker:local` 会直接读取 `.env.local`；也可以使用临时环境变量覆盖本地配置。Token 生成后无需把它写入命令历史。
-- `worker:local` 在执行 Qoder 期间每 15 秒续租；服务端拒绝续租或连续心跳失败达到 `EXECUTOR_LEASE_FAILURE_LIMIT`（默认 3）时，会终止本地子进程且不使用失效租约回填。
-- 执行器 API 请求默认 20 秒超时，可通过 `EXECUTOR_API_TIMEOUT_MS` 调整；进程收到退出信号时会中止当前 Qoder，任务随后由服务端租约恢复。
-- `QODERCLI_PATH`：可选，指定本机 qodercli 路径；默认会尝试读取当前用户目录下的 `~/.local/bin/qodercli`。
-- `TAOBAO_NATIVE_BIN`：仅 experimental local bridge 使用，可选，指定 `taobao-native` 命令名或可执行文件路径。
+- `worker:local` 在执行淘宝工具期间每 15 秒续租；服务端拒绝续租或连续心跳失败达到 `EXECUTOR_LEASE_FAILURE_LIMIT`（默认 3）时，会终止本地子进程且不使用失效租约回填。
+- 执行器 API 请求默认 20 秒超时，可通过 `EXECUTOR_API_TIMEOUT_MS` 调整；进程收到退出信号时会中止当前外部工具调用，任务随后由服务端租约恢复。
+- `TAOBAO_NATIVE_MCP_URL`：淘宝桌面版官方 Streamable HTTP MCP 地址，默认 `http://127.0.0.1:3654/mcp`。
+- `TAOBAO_SOURCE_APP`：写入 MCP 工具参数的真实调用来源标识，默认 `SceneCartAI`。
+- `EXECUTOR_TAOBAO_SEARCH_TIMEOUT_MS`：单次本地淘宝搜索上限，默认 60000ms，最低 15000ms。
+- `EXECUTOR_TAOBAO_CART_TIMEOUT_MS`：单次真实加购上限，默认 60000ms。执行器不会用页面导航工具预探测登录态，避免探针本身改变淘宝页面。
 - `TAOBAO_MCP_BASE_URL`：experimental local bridge 使用的淘宝 MCP bridge 地址。
 
 不要提交 `.env.local`。项目 `.gitignore` 已默认忽略本地密钥、缓存、搜索结果 JSON、`.data`、`.next` 和 `node_modules`。
@@ -214,7 +219,7 @@ lib/runtime/
   jobs.ts                          设备、队列、回填与执行事件
 
 scripts/
-  local-executor.mjs               独立 Qoder/Taobao 执行进程
+  local-executor.mjs               独立淘宝 HTTP MCP 执行进程
   db-migrate.mjs                   PostgreSQL migration runner
   db-check.mjs                     schema 完整性与 migration checksum 检查
   executor-doctor.mjs              本地执行器无副作用连接诊断
@@ -285,14 +290,15 @@ npm run start
 SCENECART_RELEASE_VERIFY_URL=https://你的正式域名 npm run release:verify
 ```
 
-用户登录后打开 `/settings/executor` 注册本机设备，再在运行淘宝桌面版与 Qoder 的机器启动：
+用户登录后打开 `/settings/executor` 注册本机设备，再在运行淘宝桌面版与淘宝 Skill 的机器启动：
 
 先将设置页只展示一次的配置写入被 Git 忽略的 `.env.local`：
 
 ```dotenv
 SCENECART_API_URL=http://127.0.0.1:3000
 SCENECART_DEVICE_TOKEN=一次性设备令牌
-QODERCLI_PATH=/Users/你的用户名/.local/bin/qodercli
+TAOBAO_NATIVE_MCP_URL=http://127.0.0.1:3654/mcp
+TAOBAO_SOURCE_APP=SceneCartAI
 ```
 
 然后运行：
@@ -303,13 +309,13 @@ npm run executor:doctor
 npm run worker:local
 ```
 
-推荐先用 `executor:configure` 在交互式终端中粘贴设置页签发的令牌；它不会回显令牌或覆盖 DeepSeek 等无关环境变量。`worker:local` 会先完成 Qoder headless 登录、服务端健康、设备令牌与 `module_search` 能力校验，再发送鉴权心跳并开始领取任务。Doctor 会显示令牌当前拥有的商品搜索 / 真实加购能力，避免“进程在线但任务无法匹配”的误导状态。
+推荐先用 `executor:configure` 在交互式终端中粘贴设置页签发的令牌；它不会回显令牌或覆盖 DeepSeek 等无关环境变量。`worker:local` 会先校验淘宝桌面版官方 MCP、服务端健康、设备令牌及其能力，再发送鉴权心跳并开始领取任务。Doctor 会显示令牌当前拥有的商品搜索 / 真实加购能力，避免“进程在线但任务无法匹配”的误导状态。
 
 ## 当前实现边界
 
 - 当前稳定主场景是“新车选购”。`lib/scenarios` 中已有多场景配置雏形，但前端入口暂未完全开放。
 - 淘宝搜索能力相对稳定；商品详情页和真实加购受淘宝客户端、授权和登录态影响较大。
-- 淘宝搜索依赖用户本机 Qoder/Taobao skill 和淘宝桌面版登录态；服务端已生产化，但第三方桌面执行能力仍是外部依赖。
+- 淘宝搜索依赖用户本机淘宝桌面版官方 HTTP MCP 和登录态；不消耗 Qoder 额度，但桌面客户端与账号策略仍是外部依赖。
 - 加购具备显式确认、后台执行、重试与结果账本，但淘宝客户端权限或账号策略仍可能拒绝动作；系统不会自动下单或支付。
 - 自动搜索支持“完成当前模块后暂停”和从原进度继续，不会通过强杀外部工具制造未知执行状态。
 - 正式产品模式不会把真实加购失败写成成功；产品内演示购物车仅用于明确标注的开发预览。

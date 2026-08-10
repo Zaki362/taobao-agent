@@ -38,6 +38,23 @@ function hasSkippedModule(state: SessionState, moduleId: string) {
   );
 }
 
+function terminalSearchTask(state: SessionState, moduleId: string) {
+  return state.hosted_tasks.find(
+    (task) =>
+      task.task_type === "module_search" &&
+      task.module_id === moduleId &&
+      (task.status === "completed" || task.status === "failed" || task.status === "cancelled")
+  );
+}
+
+function hasCompletedSearchAttempt(state: SessionState, moduleId: string) {
+  const trace = state.module_search_traces[moduleId];
+  return Boolean(
+    terminalSearchTask(state, moduleId) ||
+    trace?.attempts.some((attempt) => attempt.status === "success" || attempt.status === "error")
+  );
+}
+
 function canRetryFromReview(state: SessionState, module: ShoppingPlanModule) {
   const review = state.module_reviews[module.module_id];
   const trace = state.module_search_traces[module.module_id];
@@ -167,6 +184,18 @@ export function decideNextAgentAction(state: SessionState): AgentDecision {
         module_name: module.module_name,
         reason: `「${module.module_name}」已完成容错搜索但没有形成候选池，本轮先跳过，避免阻塞后续模块。`,
         evidence: [trace?.ai_decision_summary ?? "工具搜索失败", state.shopping_plan.agent_directives.recovery_policy]
+      });
+    }
+
+    if (hasCompletedSearchAttempt(state, module.module_id)) {
+      return createAgentDecision({
+        action: "skip_module",
+        source: "policy_fallback",
+        confidence: "high",
+        module_id: module.module_id,
+        module_name: module.module_name,
+        reason: `「${module.module_name}」已完成真实搜索但没有形成可展示候选，本轮先跳过，避免重复调用淘宝工具。`,
+        evidence: [trace?.ai_decision_summary ?? terminalSearchTask(state, module.module_id)?.result_summary ?? "首轮搜索已结束"]
       });
     }
 

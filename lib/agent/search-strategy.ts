@@ -195,20 +195,24 @@ export function requireValidModuleSearchKeyword(module: ShoppingPlanModule, valu
   return validation.normalized;
 }
 
-function countAnchorMatches(keyword: string, module: ShoppingPlanModule) {
-  return moduleSearchAnchorTerms(module).filter((term) => keyword.includes(term)).length;
+function moduleCategoryTerms(module: ShoppingPlanModule) {
+  return module.typical_item_types
+    .map((term) => compactKeyword(term))
+    .filter((term) => term.length >= 2)
+    .filter((term, index, list) => list.indexOf(term) === index);
 }
 
-function ensureModuleAnchors(keyword: string, module: ShoppingPlanModule, minAnchors = 1) {
-  const anchors = moduleSearchAnchorTerms(module);
-  const missingAnchors = anchors.filter((term) => !keyword.includes(term));
-  let repaired = compactKeyword(keyword);
+// Taobao Desktop is substantially more stable when each request targets one
+// concrete product category. The model still controls module selection,
+// ranking and filters; this boundary only narrows the tool-facing query.
+export function toStableTaobaoSearchKeyword(module: ShoppingPlanModule, value: string) {
+  const normalized = compactKeyword(value);
+  const categories = moduleCategoryTerms(module);
+  const matchedCategory = categories
+    .filter((term) => normalized.includes(term))
+    .sort((left, right) => right.length - left.length)[0];
 
-  while (countAnchorMatches(repaired, module) < minAnchors && missingAnchors.length > 0) {
-    repaired = compactKeyword(`${repaired} ${missingAnchors.shift()}`);
-  }
-
-  return repaired;
+  return matchedCategory ?? categories[0] ?? compactKeyword(module.module_name);
 }
 
 function keywordSignature(scene: SceneBrief, module: ShoppingPlanModule, keyword: string) {
@@ -248,18 +252,20 @@ function repairKeywordForDistinctness(
   keyword: string,
   seenSignatures: Set<string>
 ) {
-  let repaired = ensureModuleAnchors(compactKeyword(keyword), module, 1);
-  let signature = keywordSignature(scene, module, repaired);
+  const preferred = toStableTaobaoSearchKeyword(module, keyword);
+  const candidates = [preferred, ...moduleCategoryTerms(module), compactKeyword(module.module_name)]
+    .filter(Boolean)
+    .filter((item, index, list) => list.indexOf(item) === index);
+  let repaired = preferred;
+  let signature = keywordSignature(scene, module, repaired) || repaired;
 
-  if (!signature || seenSignatures.has(signature)) {
-    repaired = ensureModuleAnchors(compactKeyword(`${repaired} ${module.module_name}`), module, 2);
-    signature = keywordSignature(scene, module, repaired);
-  }
-
-  if (!signature || seenSignatures.has(signature)) {
-    const extraAnchor = module.typical_item_types.find((term) => term && !repaired.includes(term));
-    repaired = compactKeyword(`${repaired} ${extraAnchor ?? module.module_name}`);
-    signature = keywordSignature(scene, module, repaired) || repaired;
+  for (const candidate of candidates) {
+    const candidateSignature = keywordSignature(scene, module, candidate) || candidate;
+    if (!seenSignatures.has(candidateSignature)) {
+      repaired = candidate;
+      signature = candidateSignature;
+      break;
+    }
   }
 
   seenSignatures.add(signature);
@@ -267,26 +273,16 @@ function repairKeywordForDistinctness(
 }
 
 function normalizeAlternateKeywords(
-  scene: SceneBrief,
   module: ShoppingPlanModule,
   primaryKeyword: string
 ) {
-  const preference = scene.priority_style.replace("优先", "");
-  const generatedAlternates = module.typical_item_types
-    .slice(0, 4)
-    .map((term) => [scene.vehicle_type, term, preference]
-      .filter(Boolean)
-      .join(" "));
   const rawAlternates = [
     ...(module.search_strategy?.alternate_keywords ?? []),
-    ...generatedAlternates,
-    [scene.vehicle_type, module.module_name, module.typical_item_types.slice(0, 2).join(" ")]
-      .filter(Boolean)
-      .join(" ")
+    ...moduleCategoryTerms(module)
   ];
 
   return rawAlternates
-    .map((item) => ensureModuleAnchors(compactKeyword(item), module, 1))
+    .map((item) => toStableTaobaoSearchKeyword(module, item))
     .filter((item) => item && item !== primaryKeyword)
     .filter((item, index, list) => list.indexOf(item) === index)
     .slice(0, 3);
@@ -327,10 +323,10 @@ export function normalizeSearchKeywords(scene: SceneBrief, modules: ShoppingPlan
       module.search_strategy?.quality_checks?.length
         ? module.search_strategy.quality_checks
         : ["商品图片完整", "详情链接可打开", "店铺信息明确", "规格描述清楚"];
-    const alternateKeywords = normalizeAlternateKeywords(scene, module, keyword);
+    const alternateKeywords = normalizeAlternateKeywords(module, keyword);
     const distinctivenessNote =
       keyword !== compactKeyword(rawKeyword)
-        ? "已补充模块专属品类词，避免与其他模块搜索重复。"
+        ? "已将工具搜索词收敛为单一商品类目，以提高淘宝桌面搜索稳定性。"
         : "";
 
     return {

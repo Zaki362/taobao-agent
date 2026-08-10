@@ -10,7 +10,7 @@ describe("SceneCart one-command development stack", () => {
       [
         "SCENECART_API_URL=http://127.0.0.1:3000",
         `SCENECART_DEVICE_TOKEN=${validFileToken}`,
-        "QODERCLI_PATH=/Users/demo/.local/bin/qodercli"
+        "TAOBAO_SOURCE_APP=SceneCartAI"
       ].join("\n"),
       {},
       "http://127.0.0.1:3001"
@@ -20,22 +20,22 @@ describe("SceneCart one-command development stack", () => {
       TAOBAO_EXECUTION_BACKEND: "local_executor",
       SCENECART_API_URL: "http://127.0.0.1:3001",
       SCENECART_DEVICE_TOKEN: validFileToken,
-      QODERCLI_PATH: "/Users/demo/.local/bin/qodercli"
+      TAOBAO_SOURCE_APP: "SceneCartAI"
     });
   });
 
   it("keeps explicit process secrets authoritative while binding the worker to the active web origin", () => {
     const resolved = resolveExecutorEnvironment(
-      `SCENECART_DEVICE_TOKEN=${validFileToken}\nQODERCLI_PATH=/file/qodercli\n`,
+      `SCENECART_DEVICE_TOKEN=${validFileToken}\nTAOBAO_SOURCE_APP=SceneCartAI\n`,
       {
         SCENECART_DEVICE_TOKEN: validShellToken,
-        QODERCLI_PATH: "/shell/qodercli"
+        TAOBAO_SOURCE_APP: "SceneCartAI"
       },
       "http://127.0.0.1:3100"
     );
 
     expect(resolved.SCENECART_DEVICE_TOKEN).toBe(validShellToken);
-    expect(resolved.QODERCLI_PATH).toBe("/shell/qodercli");
+    expect(resolved).not.toHaveProperty("QODERCLI_PATH");
     expect(resolved.SCENECART_API_URL).toBe("http://127.0.0.1:3100");
   });
 

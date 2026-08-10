@@ -7,7 +7,7 @@
 1. Next.js 服务负责认证、Session、Agent 决策、任务入队和 SSE。
 2. PostgreSQL 保存用户、购物会话、执行设备、任务、租约和事件。
 3. 用户本机 `local-executor` 使用设备令牌领取属于该用户的任务。
-4. 本地执行器调用 Qoder CLI 与已安装的淘宝 skill，并只把结构化结果回填服务端。
+4. 本地执行器通过淘宝桌面版官方 Streamable HTTP MCP 调用搜索与加购工具，并只把结构化商品、淘宝链接和执行结果回填服务端；不经过 Qoder 或 CLI 子进程。
 5. 用户确认规划后，浏览器只调用一次 `/api/agent/run`；服务端工作流在每个任务回填后自动决定并排队下一模块。
 6. 浏览器通过 SSE 获得任务状态与推荐结果，短轮询只作为断线恢复兜底，不承担工作流编排。
 
@@ -17,7 +17,7 @@
 
 设备注册、权限变更和令牌撤销会写入独立审计事件。事件只包含设备 ID、设备名和能力变化，不保存令牌、淘宝账号或其他凭证；设置页与后端执行台都可以查看最近记录。
 
-Qoder/Taobao 凭证和淘宝登录态始终保留在用户本机，服务端不读取订单、地址、手机号、聊天记录或账号身份资料。
+淘宝桌面客户端、MCP 会话和登录态始终保留在用户本机，服务端不读取订单、地址、手机号、聊天记录或账号身份资料。
 
 正式产品模式只接受真实淘宝加购结果。开发预览可以显式保留产品内演示购物车，正式模式会在真实动作失败时返回失败并保留可重试状态，不会产生伪成功清单。
 
@@ -90,7 +90,7 @@ npm run start
 
 ## 4. 启动本地执行器
 
-在已安装 Qoder CLI、淘宝 skill 和淘宝桌面版的机器执行：
+在已安装且启用 AI 应用授权的淘宝桌面版机器执行。正式本地执行器不需要 Qoder：
 
 推荐先运行交互式安全配置，避免 Token 进入 shell history：
 
@@ -98,13 +98,16 @@ npm run start
 npm run executor:configure
 ```
 
-命令会要求确认 SceneCart API 地址、Qoder CLI 路径并隐藏输入设备令牌。若必须手动配置，则将以下内容保存到项目根目录的 `.env.local`：
+命令会要求确认 SceneCart API 地址并隐藏输入设备令牌。若必须手动配置，则将以下内容保存到项目根目录的 `.env.local`：
 
 ```dotenv
 TAOBAO_EXECUTION_BACKEND=local_executor
 SCENECART_API_URL=https://your-scenecart.example.com
 SCENECART_DEVICE_TOKEN=your-one-time-device-token
-QODERCLI_PATH=/Users/your-name/.local/bin/qodercli
+TAOBAO_NATIVE_MCP_URL=http://127.0.0.1:3654/mcp
+TAOBAO_SOURCE_APP=SceneCartAI
+EXECUTOR_TAOBAO_SEARCH_TIMEOUT_MS=60000
+EXECUTOR_TAOBAO_CART_TIMEOUT_MS=60000
 ```
 
 再执行：
@@ -113,15 +116,15 @@ QODERCLI_PATH=/Users/your-name/.local/bin/qodercli
 npm run executor:doctor
 ```
 
-Doctor 会额外执行一次不调用淘宝工具的 Qoder headless 请求，用于提前识别 CLI 版本过旧或登录失效。若显示 `Qoder CLI 未登录`，先运行 `qodercli` 并输入 `/login`；若显示需要升级，运行 `qodercli update`。这两类配置错误会被标记为不可重试，避免真实任务重复消耗三次执行机会。
-
-Doctor 只检查服务端、设备令牌和 Qoder CLI，不触发淘宝页面或账号动作。如果使用默认 `npm run dev`，配置令牌后 Worker 会自动接入；如果使用 `npm run dev:web`、正式远端服务或进程守护器，则显式启动：
+Doctor 会初始化官方本地 MCP 并检查工具列表、服务端和设备令牌，但不会主动搜索、打开详情页或触发账号动作。如果使用默认 `npm run dev`，配置令牌后 Worker 会自动接入；如果使用 `npm run dev:web`、正式远端服务或进程守护器，则显式启动：
 
 ```bash
 npm run worker:local
 ```
 
-Worker 启动时会再次执行无副作用的 Qoder headless 会话检查；只有 Qoder 登录、服务端健康、设备令牌和 `module_search` 能力都通过后，才会发送鉴权心跳并开始领取任务。Doctor 会打印令牌当前拥有的商品搜索 / 真实加购能力。因此设置页显示“在线”代表基础执行链路已通过，而不只是本地进程存在。
+Worker 启动时会再次执行无副作用的 MCP `tools/list` 检查；只有官方 MCP、服务端健康、设备令牌和 `module_search` 能力都通过后，才会发送鉴权心跳并开始领取任务。启用真实加购的设备还必须检测到 `add_to_cart`。Doctor 会打印令牌当前拥有的商品搜索 / 真实加购能力。因此设置页显示“在线”代表基础执行链路已通过，而不只是本地进程存在。
+
+真实任务采用最小调用面：搜索使用淘宝 skill 默认的综合搜索路径 `all` 且只调用一次 `search_products`，加购只调用一次 `add_to_cart`。执行器不使用 `get_current_tab` 做前置或后置登录检查，因为淘宝桌面端在内部登录状态不同步时会让该工具主动跳转登录页；同理也不强制进入容易触发独立登录跳转的 PC 搜索路由。Worker 在完整生命周期内复用同一个 Streamable HTTP `mcp-session-id`，仅在协议明确报告会话失效时重新初始化。退出时只清理本地会话引用，不向淘宝发送远端 `DELETE`；淘宝桌面端会按 TTL 回收旧会话，避免远端终止连带破坏购物 WebView 登录态。若真实工具返回登录错误，执行器会立即停止当前任务并打开鉴权熔断；用户重新登录并重启执行器前不会继续领取任务。
 
 Worker、Doctor 和服务端使用统一的执行器协议版本。每次心跳、任务领取和结果回填都会携带协议版本；缺失或不兼容时服务端返回 `426 executor_protocol_mismatch`。升级网页服务后应同步更新本地项目并重启 Worker，旧进程不会继续领取新任务。
 
@@ -129,10 +132,11 @@ Worker、Doctor 和服务端使用统一的执行器协议版本。每次心跳�
 
 ```bash
 EXECUTOR_POLL_MS=2500
-EXECUTOR_QODER_TIMEOUT_MS=180000
+EXECUTOR_TAOBAO_SEARCH_TIMEOUT_MS=60000
+EXECUTOR_TAOBAO_CART_TIMEOUT_MS=60000
 ```
 
-执行器每 15 秒发送心跳，并在有运行任务时续租。服务端明确拒绝续租时，Worker 会立即中止 Qoder 子进程；连续心跳失败达到 `EXECUTOR_LEASE_FAILURE_LIMIT`（默认 3）时也会 fail closed，避免失去任务所有权后继续执行真实淘宝动作或回填旧结果。任务完成结果会先写入 `.data/local-executor/results`，再回填服务端；若回执失败，租约恢复后会重放结果，不重复执行淘宝动作。
+执行器每 15 秒发送心跳，并在有运行任务时续租。服务端明确拒绝续租时，Worker 会立即中止本地工具子进程；连续心跳失败达到 `EXECUTOR_LEASE_FAILURE_LIMIT`（默认 3）时也会 fail closed，避免失去任务所有权后继续执行真实淘宝动作或回填旧结果。任务完成结果会先写入 `.data/local-executor/results`，再回填服务端；若回执失败，租约恢复后会重放结果，不重复执行淘宝动作。
 
 ## 5. 任务生命周期
 

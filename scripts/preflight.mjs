@@ -80,7 +80,7 @@ function assertNoForbiddenText() {
     },
     {
       pattern: /TAOBAO_NATIVE_PATH/,
-      message: "发现旧环境变量 TAOBAO_NATIVE_PATH；Qoder provider 不再读取它，local bridge 请使用 TAOBAO_NATIVE_BIN"
+      message: "发现旧环境变量 TAOBAO_NATIVE_PATH；正式执行器请使用 TAOBAO_NATIVE_MCP_URL"
     },
     {
       pattern: /\/Users\/guohuaz/,
@@ -124,8 +124,7 @@ function assertEnvExample() {
     "SCENECART_PRODUCT_MODE",
     "ALLOW_DEMO_CART_FALLBACK",
     "TAOBAO_EXECUTION_BACKEND",
-    "QODERCLI_PATH",
-    "TAOBAO_NATIVE_BIN",
+    "TAOBAO_NATIVE_MCP_URL",
     "TAOBAO_MCP_BASE_URL",
     "SCENECART_ENABLE_MCP_DEBUG",
     "SCENECART_DEV_PORT",
@@ -367,6 +366,7 @@ function assertRequiredFiles() {
     "lib/runtime/monitoring.ts",
     "lib/security/rate-limit.ts",
     "scripts/local-executor.mjs",
+    "scripts/taobao-mcp-client.mjs",
     "scripts/dev-server.mjs",
     "scripts/e2e-server.mjs",
     "scripts/configure-executor.mjs",
@@ -462,6 +462,8 @@ function assertArchitectureContracts() {
   const mcpLogging = tryReadText("lib/mcp/logging.ts");
   const mcpHosted = tryReadText("lib/mcp/hosted.ts");
   const hostedWorker = tryReadText("scripts/codex-hosted-worker.mjs");
+  const localExecutor = tryReadText("scripts/local-executor.mjs");
+  const taobaoMcpClient = tryReadText("scripts/taobao-mcp-client.mjs");
   const mcpRunRoute = tryReadText("app/api/mcp/run/route.ts");
   const mcpSchema = tryReadText("lib/mcp/schema.ts");
   const mcpClient = tryReadText("lib/mcp/client.ts");
@@ -542,6 +544,8 @@ function assertArchitectureContracts() {
     !mcpLogging ||
     !mcpHosted ||
     !hostedWorker ||
+    !localExecutor ||
+    !taobaoMcpClient ||
     !mcpRunRoute ||
     !mcpSchema ||
     !mcpClient ||
@@ -691,7 +695,8 @@ function assertArchitectureContracts() {
         dashboardExecution.includes("Agent 决策与 AI 搜索策略") &&
         hostedConsole.includes("Agent 自主决策历史") &&
         sessionStore.includes("agent_decisions") &&
-        sessionStore.includes("const normalized = normalizeSessionState(inMemory)") &&
+        (sessionStore.includes("const normalized = normalizeSessionState(inMemory)") ||
+          sessionStore.includes("return normalizeSessionState(structuredClone(inMemory))")) &&
         sessionGuards.includes("isAgentDecision"),
       message: "搜索主循环必须由服务端 Agent 决策驱动，并持久化搜索、补搜、跳过与结束动作"
     },
@@ -823,7 +828,8 @@ function assertArchitectureContracts() {
     {
       ok:
         searchStrategy.includes("repairKeywordForDistinctness") &&
-        searchStrategy.includes("ensureModuleAnchors") &&
+        searchStrategy.includes("toStableTaobaoSearchKeyword") &&
+        searchStrategy.includes("moduleCategoryTerms") &&
         searchStrategy.includes("keywordSignature") &&
         searchStrategy.includes("normalizeAlternateKeywords") &&
         searchStrategy.includes("export function normalizeSearchKeywords") &&
@@ -976,6 +982,26 @@ function assertArchitectureContracts() {
         !qoder.includes("runDirectSearch") &&
         !qoder.includes("runDirectAddToCart"),
       message: "Qoder provider 不应重新引入直接 taobao-native 实验路径，避免商品页跳转导致登录态问题"
+    },
+    {
+      ok:
+        localExecutor.includes('taobaoClient.callTool("search_products"') &&
+        localExecutor.includes('type: "all"') &&
+        localExecutor.includes('taobaoClient.callTool(\n      "add_to_cart"') &&
+        !localExecutor.includes('client.callTool(\n        "get_current_tab"') &&
+        localExecutor.includes("Keep each user-approved search to one stateful shopping tool call") &&
+        localExecutor.includes("const taobaoClient = createTaobaoMcpClient") &&
+        localExecutor.includes("await taobaoClient.close()") &&
+        !localExecutor.includes("client.resetSession()") &&
+        localExecutor.includes("authentication circuit breaker opened") &&
+        taobaoMcpClient.includes('method: "initialize"') &&
+        !taobaoMcpClient.includes('method: "DELETE"') &&
+        taobaoMcpClient.includes("desktop server reclaim it by TTL") &&
+        taobaoMcpClient.includes("resetSession()") &&
+        !localExecutor.includes("qodercli") &&
+        !localExecutor.includes("qoderPrintArgs") &&
+        !localExecutor.includes("execFile"),
+      message: "本地执行器必须复用单一官方 HTTP MCP 会话，并禁止登录探针、Qoder 或 taobao-native CLI"
     },
     {
       ok:

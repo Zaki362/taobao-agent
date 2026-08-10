@@ -25,7 +25,7 @@ const {
   readEnvValue: (content: string, key: string) => string;
   updateExecutorEnv: (
     content: string,
-    values: { apiUrl: string; deviceToken: string; qoderPath: string }
+    values: { apiUrl: string; deviceToken: string }
   ) => string;
   validateExecutorDeviceToken: (value: string) => string;
 };
@@ -96,8 +96,7 @@ describe("local executor configuration", () => {
     ].join("\n");
     const updated = updateExecutorEnv(existing, {
       apiUrl: "http://127.0.0.1:3000/",
-      deviceToken: token,
-      qoderPath: "/Users/example/Library/Application Support/qodercli"
+      deviceToken: token
     });
 
     expect(updated).toContain("DEEPSEEK_API_KEY=keep-me");
@@ -105,7 +104,7 @@ describe("local executor configuration", () => {
     expect(updated).toContain("TAOBAO_EXECUTION_BACKEND=local_executor");
     expect(updated).toContain("SCENECART_API_URL=http://127.0.0.1:3000");
     expect(updated).toContain(`SCENECART_DEVICE_TOKEN=${token}`);
-    expect(updated).toContain('QODERCLI_PATH="/Users/example/Library/Application Support/qodercli"');
+    expect(updated).toContain("QODERCLI_PATH='/old path/qodercli'");
     expect(updated.match(/SCENECART_DEVICE_TOKEN=/g)).toHaveLength(1);
     expect(readEnvValue(updated, "SCENECART_DEVICE_TOKEN")).toBe(token);
   });

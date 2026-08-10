@@ -69,6 +69,64 @@ describe("Agent Runtime 2.0", () => {
     expect(decideNextAgentAction(state).action).toBe("wait_for_tools");
   });
 
+  it("skips a terminal empty module instead of searching it again", () => {
+    const state = createSessionFixture();
+    const module = state.shopping_plan.modules[0];
+    const now = new Date().toISOString();
+    state.hosted_tasks = [{
+      task_id: "terminal-empty-search",
+      task_type: "module_search",
+      session_id: state.session_id,
+      status: "completed",
+      title: `搜索${module.module_name}`,
+      description: "真实搜索完成但结果为空",
+      module_id: module.module_id,
+      module_name: module.module_name,
+      result_summary: "淘宝真实搜索未返回候选",
+      created_at: now,
+      updated_at: now,
+      payload: {}
+    }];
+
+    const decision = decideNextAgentAction(state);
+    expect(decision).toMatchObject({
+      action: "skip_module",
+      module_id: module.module_id
+    });
+  });
+
+  it("rejects a model request to repeat a terminal module search", () => {
+    const state = createSessionFixture();
+    const module = state.shopping_plan.modules[0];
+    const now = new Date().toISOString();
+    state.hosted_tasks = [{
+      task_id: "terminal-model-search",
+      task_type: "module_search",
+      session_id: state.session_id,
+      status: "completed",
+      title: `搜索${module.module_name}`,
+      description: "首轮搜索已结束",
+      module_id: module.module_id,
+      module_name: module.module_name,
+      created_at: now,
+      updated_at: now,
+      payload: {}
+    }];
+
+    const validation = validateModelProposal(state, {
+      action: "search_module",
+      confidence: "high",
+      module_id: module.module_id,
+      reason: "模型希望重复首轮搜索",
+      evidence: [],
+      expected_gain: "未知",
+      tool_cost: 1
+    });
+
+    expect(validation.valid).toBe(false);
+    expect(validation.notes).toContain("该模块已结束首轮搜索，不能重复调用工具");
+  });
+
   it("rejects model proposals outside the planned module whitelist", () => {
     const state = createSessionFixture();
     const validation = validateModelProposal(state, {

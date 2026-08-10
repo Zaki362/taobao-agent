@@ -115,6 +115,40 @@ describe("server-managed Agent workflow", () => {
       .toBe(true);
   });
 
+  it("moves to the next module after an empty real search without requeueing the same module", async () => {
+    const sessionId = `session-workflow-empty-${Date.now()}`;
+    sessionFiles.add(sessionId);
+    const state = createSessionFixture({ session_id: sessionId });
+    await localRuntimeRepository.saveSession(state);
+
+    const started = await advanceAgentWorkflow(sessionId, device.user_id, {
+      start: true,
+      trigger: "user_start"
+    });
+    expect(started.outcome).toBe("queued");
+    const firstJob = await localRuntimeRepository.claimJob(device, 30_000);
+    expect(firstJob).not.toBeNull();
+    const firstModuleId = String(firstJob!.payload.module_id);
+
+    await applyCompletedRuntimeJob(firstJob!.id, device, {
+      summary: "淘宝搜索完成但没有可展示候选",
+      candidates: []
+    });
+    const continued = await advanceAgentWorkflow(sessionId, device.user_id, {
+      trigger: "job_completed"
+    });
+    const nextJob = await localRuntimeRepository.claimJob(device, 30_000);
+
+    expect(continued.outcome).toBe("queued");
+    expect(nextJob).not.toBeNull();
+    expect(nextJob?.payload.module_id).not.toBe(firstModuleId);
+    const restored = await localRuntimeRepository.getSession(sessionId, device.user_id);
+    expect(restored?.agent_decisions).toEqual(expect.arrayContaining([
+      expect.objectContaining({ action: "skip_module", module_id: firstModuleId })
+    ]));
+    expect(restored?.hosted_tasks.filter((task) => task.module_id === firstModuleId)).toHaveLength(1);
+  });
+
   it("pauses after the active module and resumes the same workflow without losing progress", async () => {
     const sessionId = `session-workflow-pause-${Date.now()}`;
     sessionFiles.add(sessionId);

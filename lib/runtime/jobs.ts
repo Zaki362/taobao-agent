@@ -17,6 +17,10 @@ const ALLOWED_CAPABILITIES: RuntimeJobType[] = ["module_search", "add_to_cart"];
 const MINIMUM_CAPABILITIES: RuntimeJobType[] = ["module_search"];
 export const DEFAULT_JOB_LEASE_MS = 5 * 60 * 1000;
 
+function requiresUserToRestoreToolAccess(message: string) {
+  return /未登录|登录页面|请先登录|授权|额度已用尽|usage limit|quota exceeded/i.test(message);
+}
+
 export function executorAuditSessionId(deviceId: string) {
   return `executor-device:${deviceId}`;
 }
@@ -194,7 +198,7 @@ export async function enqueueModuleSearchJob(
     moduleId: input.moduleId,
     moduleName: input.moduleName,
     title: `为「${input.moduleName}」执行本地淘宝搜索`,
-    description: `本地执行器将使用 Qoder/Taobao skill 搜索“${input.keyword}”，完成后自动回填候选商品。`,
+    description: `本地执行器将直接使用淘宝 Skill 搜索“${input.keyword}”，完成后自动回填候选商品与淘宝链接。`,
     payload
   }), job.status);
   state.execution_mode = "local_executor";
@@ -374,6 +378,15 @@ function markRuntimeSearchFailure(state: SessionState, job: { payload: Record<st
     generated_at: previous?.generated_at ?? now,
     updated_at: now
   };
+  if (requiresUserToRestoreToolAccess(errorMessage)) {
+    state.agent_runtime.workflow_status = "paused";
+    state.agent_runtime.auto_continue = false;
+    state.agent_runtime.current_module_id = moduleId;
+    state.agent_runtime.workflow_message = errorMessage.includes("未登录") || errorMessage.includes("登录页面")
+      ? "淘宝账号当前未登录，搜索已安全暂停；重新登录后可从当前进度继续。"
+      : "本地工具授权当前不可用，搜索已安全暂停；恢复授权后可继续。";
+    state.agent_runtime.last_transition_at = now;
+  }
 }
 
 async function persistCompletedRuntimeJobResult(

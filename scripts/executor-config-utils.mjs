@@ -1,8 +1,7 @@
 const MANAGED_KEYS = [
   "TAOBAO_EXECUTION_BACKEND",
   "SCENECART_API_URL",
-  "SCENECART_DEVICE_TOKEN",
-  "QODERCLI_PATH"
+  "SCENECART_DEVICE_TOKEN"
 ];
 
 function envKey(line) {
@@ -118,12 +117,8 @@ export function updateExecutorEnv(content, values) {
   const updates = {
     TAOBAO_EXECUTION_BACKEND: "local_executor",
     SCENECART_API_URL: normalizeExecutorApiUrl(values.apiUrl),
-    SCENECART_DEVICE_TOKEN: validateExecutorDeviceToken(values.deviceToken),
-    QODERCLI_PATH: values.qoderPath.trim()
+    SCENECART_DEVICE_TOKEN: validateExecutorDeviceToken(values.deviceToken)
   };
-  if (!updates.QODERCLI_PATH) {
-    throw new Error("Qoder CLI 路径不能为空");
-  }
 
   const seen = new Set();
   const lines = content.split(/\r?\n/).filter((line, index, source) => {

@@ -1,23 +1,19 @@
-import { execFile } from "node:child_process";
-import { constants as fsConstants } from "node:fs";
-import fs from "node:fs/promises";
-import os from "node:os";
 import process from "node:process";
-import { promisify } from "node:util";
 import nextEnv from "@next/env";
 import protocol from "../lib/runtime/executor-protocol.json" with { type: "json" };
 import { discoverExecutorApiUrl } from "./executor-config-utils.mjs";
-import { isQoderCreditError, qoderPrintArgs } from "./local-executor-utils.mjs";
+import { TaobaoMcpClient } from "./taobao-mcp-client.mjs";
 
 nextEnv.loadEnvConfig(process.cwd());
 
-const execFileAsync = promisify(execFile);
 const configuredApiBaseUrl = (process.env.SCENECART_API_URL || "http://127.0.0.1:3000").replace(/\/$/, "");
 const apiBaseUrl = await discoverExecutorApiUrl(configuredApiBaseUrl);
-const qoderPath = process.env.QODERCLI_PATH || `${os.homedir()}/.local/bin/qodercli`;
+const taobaoMcpUrl = process.env.TAOBAO_NATIVE_MCP_URL || "http://127.0.0.1:3654/mcp";
+const taobaoSourceApp = process.env.TAOBAO_SOURCE_APP || "SceneCartAI";
 const deviceToken = process.env.SCENECART_DEVICE_TOKEN;
 const checks = [];
 const executorProtocolVersion = protocol.version;
+let taobaoToolNames = new Set();
 
 async function check(name, task) {
   try {
@@ -28,63 +24,21 @@ async function check(name, task) {
   }
 }
 
-await check("qoder_cli", async () => {
-  await fs.access(qoderPath, fsConstants.X_OK);
-  const { stdout, stderr } = await execFileAsync(qoderPath, ["--version"], {
-    timeout: 8_000,
-    maxBuffer: 1024 * 1024
+await check("taobao_mcp", async () => {
+  const client = new TaobaoMcpClient({
+    endpoint: taobaoMcpUrl,
+    sourceApp: taobaoSourceApp,
+    timeoutMs: 10_000
   });
-  return `${qoderPath} · ${(stdout || stderr || "version available").trim().slice(0, 160)}`;
-});
-
-await check("qoder_session", async () => {
   try {
-    const status = await execFileAsync(qoderPath, ["status"], {
-      timeout: 8_000,
-      maxBuffer: 1024 * 1024
-    });
-    const statusOutput = `${status.stdout ?? ""}\n${status.stderr ?? ""}`.trim();
-    if (/account:\s*not logged in|not logged in|please run \/login/i.test(statusOutput)) {
-      throw new Error("Qoder CLI 未登录，请运行配置中显示的 Qoder CLI 路径并执行 login");
+    const tools = await client.listTools();
+    taobaoToolNames = new Set(tools.map((tool) => tool?.name));
+    if (!taobaoToolNames.has("search_products")) {
+      throw new Error("淘宝桌面版 MCP 未暴露 search_products 工具");
     }
-
-    const { stdout, stderr } = await execFileAsync(
-      qoderPath,
-      qoderPrintArgs("只返回严格 JSON：{\"ok\":true}", ["Read"]),
-      {
-      timeout: 20_000,
-      maxBuffer: 1024 * 1024
-      }
-    );
-    const output = `${stdout ?? ""}\n${stderr ?? ""}`.trim();
-    if (/upgrade required|update available/i.test(output)) {
-      throw new Error("Qoder CLI 需要升级，请运行 qodercli update");
-    }
-    if (isQoderCreditError(output)) {
-      throw new Error("Qoder CLI 账户额度已用尽，请等待额度恢复或升级订阅");
-    }
-    if (/not logged in|please run \/login|authentication required|unauthorized/i.test(output)) {
-      throw new Error("Qoder CLI 未登录，请运行配置中显示的 Qoder CLI 路径并执行 login");
-    }
-    if (!stdout.trim()) {
-      throw new Error("Qoder CLI headless 调用未返回内容");
-    }
-    return "Qoder CLI 已登录，可执行 headless Agent 请求";
-  } catch (error) {
-    const candidate = error && typeof error === "object" ? error : {};
-    const output = [candidate.stdout, candidate.stderr, candidate.message]
-      .filter((value) => typeof value === "string" && value.trim())
-      .join("\n");
-    if (/upgrade required|update available/i.test(output)) {
-      throw new Error("Qoder CLI 需要升级，请运行 qodercli update");
-    }
-    if (isQoderCreditError(output)) {
-      throw new Error("Qoder CLI 账户额度已用尽，请等待额度恢复或升级订阅");
-    }
-    if (/not logged in|please run \/login|authentication required|unauthorized/i.test(output)) {
-      throw new Error("Qoder CLI 未登录，请运行配置中显示的 Qoder CLI 路径并执行 login");
-    }
-    throw error;
+    return `${taobaoMcpUrl} · search_products 已就绪 · source=${taobaoSourceApp}`;
+  } finally {
+    await client.close().catch(() => undefined);
   }
 });
 
@@ -125,6 +79,9 @@ await check("device_token", async () => {
   if (!capabilities.includes("module_search")) {
     throw new Error("设备令牌有效，但缺少 module_search 能力；请在设置页重新注册设备");
   }
+  if (capabilities.includes("add_to_cart") && !taobaoToolNames.has("add_to_cart")) {
+    throw new Error("设备启用了真实加购，但淘宝桌面版 MCP 缺少 add_to_cart 工具");
+  }
   const labels = capabilities.map((capability) =>
     capability === "module_search" ? "商品搜索" : capability === "add_to_cart" ? "真实加购" : capability
   );
@@ -134,7 +91,8 @@ await check("device_token", async () => {
 for (const item of checks) {
   process.stdout.write(`${item.status === "pass" ? "PASS" : "FAIL"}  ${item.name}: ${item.detail}\n`);
 }
-process.stdout.write("INFO  taobao_skill: 不在 Doctor 中主动调用；第一条已确认搜索任务会进行真实能力验证\n");
+process.stdout.write("INFO  taobao_driver: 商品搜索与真实加购均直连淘宝桌面版官方 HTTP MCP，不再消耗 Qoder Credits\n");
+process.stdout.write("INFO  taobao_skill: Doctor 不主动搜索或打开详情页；第一条已确认任务会验证真实登录态\n");
 
 if (checks.some((item) => item.status === "fail")) {
   process.exitCode = 1;

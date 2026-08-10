@@ -250,6 +250,12 @@ describe("durable job queue contract", () => {
     expect(await localRuntimeRepository.claimJob(device, 30_000)).toBeNull();
 
     const failedState = await localRuntimeRepository.getSession(state.session_id, device.user_id);
+    expect(failedState?.agent_runtime).toMatchObject({
+      workflow_status: "paused",
+      auto_continue: false,
+      current_module_id: module.module_id
+    });
+    expect(failedState?.agent_runtime.workflow_message).toContain("重新登录后可从当前进度继续");
     const retried = await enqueueModuleSearchJob(failedState!, {
       moduleId: module.module_id,
       moduleName: module.module_name,

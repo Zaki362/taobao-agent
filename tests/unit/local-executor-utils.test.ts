@@ -4,54 +4,21 @@ import { describe, expect, it } from "vitest";
 import * as executorUtils from "../../scripts/local-executor-utils.mjs";
 
 const {
-  buildSearchEvidencePrompt,
-  isQoderCreditError,
-  isRepeatedToolCallError,
   isTaobaoLoginError,
+  normalizeTaobaoCartResult,
   normalizeTaobaoSearchEvidence,
-  qoderPrintArgs,
-  searchEvidencePath
+  taobaoCurrentTabUrl
 } = executorUtils as {
-  buildSearchEvidencePrompt: (input: {
-    keyword: string;
-    moduleName: string;
-    moduleId: string;
-    evidencePath: string;
-  }) => string;
-  isQoderCreditError: (value: unknown) => boolean;
-  isRepeatedToolCallError: (value: unknown) => boolean;
   isTaobaoLoginError: (value: unknown) => boolean;
+  normalizeTaobaoCartResult: (raw: unknown, productId: string) => Record<string, unknown>;
   normalizeTaobaoSearchEvidence: (
     raw: unknown,
     context: { keyword: string; moduleId: string }
   ) => { summary: string; candidates: Array<Record<string, unknown>>; evidence: Record<string, unknown> };
-  qoderPrintArgs: (prompt: string, tools?: string[]) => string[];
-  searchEvidencePath: (baseDir: string, jobId: string) => string;
+  taobaoCurrentTabUrl: (raw: unknown) => string;
 };
 
 describe("local executor evidence boundary", () => {
-  it("builds a single-command Taobao prompt and uses Qoder 1.1 flags", () => {
-    const evidencePath = searchEvidencePath("/tmp/evidence", "job/unsafe");
-    const prompt = buildSearchEvidencePrompt({
-      keyword: "车载手机支架",
-      moduleName: "车内实用",
-      moduleId: "practical-interior",
-      evidencePath
-    });
-    const args = qoderPrintArgs(prompt, ["Bash"]);
-
-    expect(evidencePath).toBe("/tmp/evidence/job-unsafe.json");
-    expect(prompt).toContain("taobao-native search_products");
-    expect(prompt).toContain('"keyword":"车载手机支架"');
-    expect(prompt).toContain("并且只调用一次");
-    expect(args).toContain("--permission-mode");
-    expect(args).toContain("--no-session-persistence");
-    expect(args).toContain("--output-format");
-    expect(args).not.toContain("--yolo");
-    expect(args).not.toContain("-q");
-    expect(args).not.toContain("-f");
-  });
-
   it("normalizes only products contained in a Taobao evidence artifact", () => {
     const result = normalizeTaobaoSearchEvidence({
       result: {
@@ -104,17 +71,34 @@ describe("local executor evidence boundary", () => {
     })).toThrow("缺少 result.products");
   });
 
-  it("classifies login and repeated-call failures without retrying blindly", () => {
+  it("classifies login failures and login-page URLs before account actions", () => {
     expect(isTaobaoLoginError('{"error":"未登录，已打开登录页面，请先登录淘宝账号"}')).toBe(true);
-    expect(isRepeatedToolCallError("Repeated tool call was denied")).toBe(true);
     expect(isTaobaoLoginError("network timeout")).toBe(false);
+    expect(taobaoCurrentTabUrl({ result: { url: "https://login.taobao.com/login.htm" } })).toContain("login.taobao.com");
   });
 
-  it("classifies Qoder account credit exhaustion as an actionable failure", () => {
-    expect(isQoderCreditError(
-      "You've reached your credit usage limit. Please upgrade your subscription plan."
-    )).toBe(true);
-    expect(isQoderCreditError('{"pricingUrl":"https://qoder.com/pricing?client=qoder"}')).toBe(true);
-    expect(isQoderCreditError("network timeout")).toBe(false);
+  it("accepts confirmed cart results without an agent-generated success claim", () => {
+    expect(normalizeTaobaoCartResult({ result: {
+      success: true,
+      message: "加购成功",
+      selectedSku: ["黑色", "标准版"]
+    } }, "product-1")).toEqual({
+      success: true,
+      message: "加购成功",
+      product_id: "product-1",
+      selected_spec: "黑色 / 标准版"
+    });
+  });
+
+  it("stops for explicit SKU selection instead of choosing a random variant", () => {
+    expect(normalizeTaobaoCartResult({
+      needsSkuSelection: true,
+      availableSkus: [{ groupLabel: "颜色" }, { groupLabel: "版本" }]
+    }, "product-2")).toMatchObject({
+      success: false,
+      product_id: "product-2",
+      needs_sku_selection: true,
+      message: "商品需要先选择规格：颜色、版本"
+    });
   });
 });
