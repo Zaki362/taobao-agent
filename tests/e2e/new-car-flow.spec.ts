@@ -17,7 +17,7 @@ async function returnToLandingWithoutLocalSnapshot(page: Page) {
   const recentTasks = page.locator("#recent-tasks");
   await expect(recentTasks).toBeVisible();
   if (!(await recentTasks.evaluate((element) => (element as HTMLDetailsElement).open))) {
-    await recentTasks.locator("summary").click();
+    await recentTasks.locator(":scope > summary").click();
   }
   await expect(recentTasks.getByText("继续未完成的方案", { exact: true })).toBeVisible();
 }
