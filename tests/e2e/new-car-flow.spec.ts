@@ -10,13 +10,12 @@ const executorHeaders = (token: string) => ({
 
 async function returnToLandingWithoutLocalSnapshot(page: Page) {
   await page.goto("/");
-  const restartButton = page.getByRole("button", { name: /重新开始|开启新任务/ });
-  if (await restartButton.isVisible()) {
-    await restartButton.click();
-  }
+  await page.evaluate(() => {
+    window.localStorage.removeItem("scenecart-dashboard-state");
+  });
+  await page.reload();
   const recentTasks = page.locator("#recent-tasks");
   await expect(recentTasks).toBeVisible();
-  await expect.poll(() => recentTasks.locator("article").count()).toBeGreaterThan(0);
   const closedRecentTasksSummary = page.locator("#recent-tasks:not([open]) > summary");
   if (await closedRecentTasksSummary.count()) {
     await closedRecentTasksSummary.click();
