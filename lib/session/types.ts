@@ -147,6 +147,20 @@ export interface ProductCandidate {
   module_id: string;
 }
 
+export interface TaobaoMcpSearchEvidence {
+  schema: "scenecart.taobao-mcp-search-evidence/v1";
+  source: "taobao-mcp";
+  tool: "search_products";
+  source_app: string;
+  job_id: string;
+  module_id: string;
+  workflow_run_id: string;
+  keyword: string;
+  captured_at: string;
+  cache_hit: false;
+  raw_result_count: number;
+}
+
 export interface CandidateFitExplanation {
   product_id: string;
   fit_reason: string;

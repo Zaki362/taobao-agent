@@ -2,23 +2,54 @@ import { createHash, randomUUID } from "node:crypto";
 import { createOpaqueToken, hashOpaqueToken } from "@/lib/auth/crypto";
 import { getRuntimeRepository } from "@/lib/runtime";
 import { withWorkflowSessionTransaction } from "@/lib/runtime/database";
-import type { ExecutorDevice, RuntimeJob, RuntimeJobType } from "@/lib/runtime/types";
-import type { HostedExecutionTask, SessionState } from "@/lib/session/types";
+import type {
+  AuthenticationFailureHold,
+  ExecutorDevice,
+  RuntimeJob,
+  RuntimeJobType
+} from "@/lib/runtime/types";
+import type { HostedExecutionTask, SessionState, TaobaoMcpSearchEvidence } from "@/lib/session/types";
 import {
   resolveHostedAddToCartTask,
   resolveHostedModuleSearchTask
 } from "@/lib/mcp/hosted";
 import { reviewModuleCandidatesWithAgent } from "@/lib/agent/candidate-reviewer";
 import { mergeAndRankModuleCandidates } from "@/lib/agent/candidate-ranker";
-import { isProductCandidate } from "@/lib/session/guards";
+import { isProductCandidate, isTaobaoMcpSearchEvidence } from "@/lib/session/guards";
 import { persistSession } from "@/lib/session/repository";
 
 const ALLOWED_CAPABILITIES: RuntimeJobType[] = ["module_search", "add_to_cart"];
 const MINIMUM_CAPABILITIES: RuntimeJobType[] = ["module_search"];
 export const DEFAULT_JOB_LEASE_MS = 5 * 60 * 1000;
+const TAOBAO_MCP_SEARCH_EVIDENCE_SCHEMA = "scenecart.taobao-mcp-search-evidence/v1";
+const EVIDENCE_CLOCK_SKEW_MS = 5 * 60 * 1000;
+
+export function isExecutorAuthenticationError(message: string) {
+  return /未登录|登录页面|请先登录|auth(?:entication)?[_ ]required|(?:login|passport)\.taobao\.com|login\.tmall\.com/i.test(message);
+}
+
+export function authenticationFailureLeaseTokenHash(leaseToken: string) {
+  return createHash("sha256").update(leaseToken).digest("hex");
+}
+
+export function isAcknowledgedAuthenticationFailure(job: RuntimeJob, leaseToken: string) {
+  return Boolean(
+    leaseToken &&
+    job.last_auth_failure_token_hash === authenticationFailureLeaseTokenHash(leaseToken)
+  );
+}
+
+export async function isAcknowledgedAuthenticationFailureForDevice(
+  job: RuntimeJob,
+  deviceId: string,
+  leaseToken: string
+) {
+  return isAcknowledgedAuthenticationFailure(job, leaseToken) ||
+    getRuntimeRepository().isAuthenticationFailureHoldReleased(job.id, deviceId, leaseToken);
+}
 
 function requiresUserToRestoreToolAccess(message: string) {
-  return /未登录|登录页面|请先登录|授权|额度已用尽|usage limit|quota exceeded/i.test(message);
+  return isExecutorAuthenticationError(message) || /授权|额度已用尽|usage limit|quota exceeded/i.test(message);
 }
 
 export function executorAuditSessionId(deviceId: string) {
@@ -177,6 +208,7 @@ export async function enqueueModuleSearchJob(
     module_id: input.moduleId,
     module_name: input.moduleName,
     keyword: input.keyword,
+    workflow_run_id: workflowRunId,
     budget: state.shopping_plan.modules.find((module) => module.module_id === input.moduleId)?.budget_allocation,
     recommendation_types: ["稳妥推荐", "性价比推荐", "升级推荐"]
   };
@@ -208,7 +240,12 @@ export async function enqueueModuleSearchJob(
     session_id: state.session_id,
     job_id: job.id,
     event_type: requeued ? "job.requeued" : "job.created",
-    payload: { job_type: job.job_type, module_id: input.moduleId, module_name: input.moduleName }
+    payload: {
+      job_type: job.job_type,
+      module_id: input.moduleId,
+      module_name: input.moduleName,
+      workflow_run_id: workflowRunId
+    }
   });
   return job;
 }
@@ -234,7 +271,9 @@ export async function enqueueAddToCartJob(
     idempotency_key: idempotencyKey,
     payload,
     priority: 200,
-    max_attempts: 2
+    // A cart mutation is not replay-safe. Any uncertain attempt must become
+    // terminal and require a fresh, explicit user confirmation.
+    max_attempts: 1
   });
   const requeued = attachOrReviveTask(state, taskForJob({
     id: job.id,
@@ -262,6 +301,99 @@ function resultCandidates(result: Record<string, unknown>) {
     ? result.candidates.filter(isProductCandidate)
     : [];
   return candidates;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+export function isTrustedTaobaoDetailUrl(value: string) {
+  try {
+    const url = new URL(value);
+    if (url.protocol !== "https:") return false;
+    const hostname = url.hostname.toLowerCase();
+    return ["taobao.com", "tmall.com", "tmall.hk", "tb.cn"].some(
+      (domain) => hostname === domain || hostname.endsWith(`.${domain}`)
+    );
+  } catch {
+    return false;
+  }
+}
+
+function strictTaobaoMcpEvidence(result: Record<string, unknown>) {
+  const evidence = isRecord(result.evidence) ? result.evidence : undefined;
+  return evidence?.schema === TAOBAO_MCP_SEARCH_EVIDENCE_SCHEMA ? evidence : undefined;
+}
+
+function validateTaobaoMcpSearchResult(
+  job: RuntimeJob,
+  result: Record<string, unknown>,
+  options: { required?: boolean; now?: number } = {}
+): TaobaoMcpSearchEvidence | undefined {
+  const rawEvidence = strictTaobaoMcpEvidence(result);
+  // Results produced before the versioned evidence protocol remain recoverable,
+  // but they never receive the UI's "本次淘宝 MCP" attestation.
+  if (!rawEvidence) {
+    if (options.required) {
+      throw new Error("淘宝 MCP 在线搜索缺少 v1 完整证据，已拒绝完成任务");
+    }
+    return undefined;
+  }
+  if (!isTaobaoMcpSearchEvidence(rawEvidence)) {
+    throw new Error("淘宝 MCP 搜索证据结构无效，已拒绝完成任务");
+  }
+
+  const moduleId = typeof job.payload.module_id === "string" ? job.payload.module_id.trim() : "";
+  const workflowRunId = typeof job.payload.workflow_run_id === "string"
+    ? job.payload.workflow_run_id.trim()
+    : "";
+  const keyword = typeof job.payload.keyword === "string" ? job.payload.keyword.trim() : "";
+  if (
+    rawEvidence.job_id !== job.id ||
+    rawEvidence.module_id !== moduleId ||
+    rawEvidence.workflow_run_id !== workflowRunId ||
+    rawEvidence.keyword !== keyword
+  ) {
+    throw new Error("淘宝 MCP 搜索证据与当前 Job 上下文不一致，已拒绝完成任务");
+  }
+  if (rawEvidence.source_app.trim().length > 120) {
+    throw new Error("淘宝 MCP 搜索证据的 source_app 无效，已拒绝完成任务");
+  }
+
+  const capturedAt = Date.parse(rawEvidence.captured_at);
+  const jobCreatedAt = Date.parse(job.created_at);
+  if (
+    !Number.isFinite(jobCreatedAt) ||
+    capturedAt < jobCreatedAt - EVIDENCE_CLOCK_SKEW_MS ||
+    capturedAt > (options.now ?? Date.now()) + EVIDENCE_CLOCK_SKEW_MS
+  ) {
+    throw new Error("淘宝 MCP 搜索证据时间无效，已拒绝完成任务");
+  }
+
+  const rawCandidates = result.candidates;
+  if (!Array.isArray(rawCandidates) || !rawCandidates.every(isProductCandidate)) {
+    throw new Error("淘宝 MCP 搜索结果包含无效候选，已拒绝完成任务");
+  }
+  if (rawEvidence.raw_result_count < rawCandidates.length || rawEvidence.raw_result_count > 10_000) {
+    throw new Error("淘宝 MCP 搜索证据的结果数量无效，已拒绝完成任务");
+  }
+  for (const candidate of rawCandidates) {
+    if (
+      candidate.source !== "淘宝" ||
+      candidate.module_id !== moduleId ||
+      !isTrustedTaobaoDetailUrl(candidate.detail_url)
+    ) {
+      throw new Error("淘宝 MCP 候选来源、模块或详情链接无效，已拒绝完成任务");
+    }
+  }
+  return rawEvidence;
+}
+
+function isIsolatedInterviewDemoSearch(result: Record<string, unknown>) {
+  return (
+    process.env.SCENECART_INTERVIEW_DEMO === "true" &&
+    result.execution_mode === "interview_demo"
+  );
 }
 
 function updateRuntimeSearchTrace(
@@ -405,6 +537,10 @@ async function persistCompletedRuntimeJobResult(
     : "completed";
   if (task.status === expectedTaskStatus) return false;
 
+  const taobaoMcpEvidence = job.job_type === "module_search" && !isIsolatedInterviewDemoSearch(result)
+    ? validateTaobaoMcpSearchResult(job, result)
+    : undefined;
+
   if (job.job_type === "module_search") {
     const incomingCandidates = resultCandidates(result);
     let candidates = incomingCandidates;
@@ -440,8 +576,18 @@ async function persistCompletedRuntimeJobResult(
           ? "已从持久化结果恢复淘宝搜索候选"
           : "本地执行器已完成淘宝搜索"
     });
+    if (taobaoMcpEvidence) {
+      task.payload = {
+        ...task.payload,
+        taobao_mcp_evidence: taobaoMcpEvidence
+      };
+    }
     updateRuntimeSearchTrace(state, job, incomingCandidates.length, previousCandidateCount, candidates);
   } else {
+    const isInterviewDemoCart =
+      process.env.SCENECART_INTERVIEW_DEMO === "true" &&
+      result.demo_fallback === true &&
+      result.execution_mode === "interview_demo";
     resolveHostedAddToCartTask(state, {
       task_id: task.task_id,
       status: result.success === false ? "failed" : "completed",
@@ -449,7 +595,12 @@ async function persistCompletedRuntimeJobResult(
         ? result.message
         : recovered
           ? "已从持久化结果恢复加购状态"
-          : "本地执行器已完成加购"
+          : "本地执行器已完成加购",
+      selected_spec: typeof result.selected_spec === "string" ? result.selected_spec : undefined,
+      cart_source: isInterviewDemoCart ? "demo" : "taobao",
+      cart_note: isInterviewDemoCart && typeof result.cart_note === "string"
+        ? result.cart_note
+        : undefined
     });
   }
   await persistSession(state);
@@ -461,7 +612,23 @@ async function persistCompletedRuntimeJobResult(
     payload: {
       job_type: job.job_type,
       result_summary: task.result_summary ?? "执行完成",
-      recovered
+      recovered,
+      ...(taobaoMcpEvidence
+        ? {
+            evidence: {
+              source: taobaoMcpEvidence.source,
+              tool: taobaoMcpEvidence.tool,
+              source_app: taobaoMcpEvidence.source_app,
+              job_id: taobaoMcpEvidence.job_id,
+              module_id: taobaoMcpEvidence.module_id,
+              workflow_run_id: taobaoMcpEvidence.workflow_run_id,
+              keyword: taobaoMcpEvidence.keyword,
+              captured_at: taobaoMcpEvidence.captured_at,
+              cache_hit: taobaoMcpEvidence.cache_hit,
+              raw_result_count: taobaoMcpEvidence.raw_result_count
+            }
+          }
+        : {})
     }
   });
   return true;
@@ -480,6 +647,11 @@ async function applyCompletedRuntimeJobLocked(
     if (!pendingState) throw new Error("session not found for completed job");
     if (!pendingState.hosted_tasks.some((item) => item.task_id === pendingJob.id)) {
       throw new Error("execution task not found for completed job");
+    }
+    if (pendingJob.job_type === "module_search") {
+      if (!isIsolatedInterviewDemoSearch(result)) {
+        validateTaobaoMcpSearchResult(pendingJob, result, { required: true });
+      }
     }
   }
   const completion = await repository.completeJob(jobId, device.id, result);
@@ -516,30 +688,52 @@ export async function reconcileCompletedRuntimeJob(jobId: string) {
   );
 }
 
-async function reconcileTerminalRuntimeJobLocked(jobId: string) {
+async function reconcileTerminalRuntimeJobLocked(
+  jobId: string,
+  options: { forcePersist?: boolean } = {}
+) {
   const repository = getRuntimeRepository();
   const job = await repository.getJob(jobId);
   if (!job || (job.status !== "failed" && job.status !== "cancelled")) return false;
   const state = await repository.getSession(job.session_id, job.user_id);
   if (!state) return false;
   const task = state.hosted_tasks.find((item) => item.task_id === job.id) ?? restoreTaskForJob(state, job);
-  if (task.status === job.status) return false;
-
   const message = job.error_message || (job.status === "cancelled" ? "用户已取消任务" : "本地执行器执行失败");
+  const moduleId = typeof job.payload.module_id === "string" ? job.payload.module_id : "";
+  const authenticationPauseMissing =
+    job.status === "failed" &&
+    job.job_type === "module_search" &&
+    requiresUserToRestoreToolAccess(message) &&
+    (
+      state.agent_runtime.workflow_status !== "paused" ||
+      state.agent_runtime.auto_continue ||
+      state.agent_runtime.current_module_id !== moduleId
+    );
+  const taskTransitionMissing = task.status !== job.status;
+  if (!taskTransitionMissing && !authenticationPauseMissing) {
+    if (!options.forcePersist) return false;
+    await persistSession(state);
+    return true;
+  }
+
   if (job.status === "failed") {
     if (job.job_type === "module_search") {
-      resolveHostedModuleSearchTask(state, {
-        task_id: task.task_id,
-        status: "failed",
-        error_message: message
-      });
+      if (taskTransitionMissing) {
+        resolveHostedModuleSearchTask(state, {
+          task_id: task.task_id,
+          status: "failed",
+          error_message: message
+        });
+      }
       markRuntimeSearchFailure(state, job, message);
     } else {
-      resolveHostedAddToCartTask(state, {
-        task_id: task.task_id,
-        status: "failed",
-        error_message: message
-      });
+      if (taskTransitionMissing) {
+        resolveHostedAddToCartTask(state, {
+          task_id: task.task_id,
+          status: "failed",
+          error_message: message
+        });
+      }
     }
   } else {
     task.status = "cancelled";
@@ -571,30 +765,244 @@ export async function reconcileTerminalRuntimeJob(jobId: string) {
   );
 }
 
+async function releaseMatchingAuthenticationFailureHold(
+  jobId: string,
+  deviceId: string,
+  leaseToken: string,
+  reason: "callback_acknowledged" | "user_retry" | "partial_results_accepted"
+) {
+  const repository = getRuntimeRepository();
+  const hold = await repository.getActiveAuthenticationFailureHold(jobId);
+  if (!hold || hold.device_id !== deviceId || hold.lease_token !== leaseToken) return false;
+  return repository.releaseAuthenticationFailureHold(hold, reason);
+}
+
+export async function releaseAuthenticationFailureHoldForUser(
+  jobId: string,
+  userId: string | undefined,
+  reason: "user_retry" | "partial_results_accepted"
+) {
+  const repository = getRuntimeRepository();
+  const job = await repository.getJob(jobId);
+  if (!job || (userId && job.user_id && job.user_id !== userId)) return false;
+  const hold = await repository.getActiveAuthenticationFailureHold(jobId);
+  if (!hold || (userId && hold.user_id && hold.user_id !== userId)) return false;
+  return repository.releaseAuthenticationFailureHold(hold, reason);
+}
+
+export async function establishAuthenticationFailureHold(
+  jobId: string,
+  device: ExecutorDevice,
+  errorMessage: string,
+  leaseToken: string
+) {
+  const initial = await getRuntimeRepository().getJob(jobId);
+  if (!initial) throw new Error("job not found");
+  return withWorkflowSessionTransaction(initial.session_id, async () => {
+    const repository = getRuntimeRepository();
+    const current = await repository.getJob(jobId);
+    if (!current) throw new Error("job not found");
+    if (
+      !isExecutorAuthenticationError(errorMessage) ||
+      leaseToken.length < 16 ||
+      leaseToken.length > 200 ||
+      !device.capabilities.includes(current.job_type) ||
+      (current.user_id !== undefined && current.user_id !== device.user_id)
+    ) {
+      throw new Error("invalid authentication failure hold");
+    }
+    if (await isAcknowledgedAuthenticationFailureForDevice(current, device.id, leaseToken)) {
+      const pausedDevice = await repository.heartbeatDevice(device.id, "authentication_required");
+      if (!pausedDevice) throw new Error("executor device unavailable");
+      return {
+        job: current,
+        device: pausedDevice,
+        hold: null as AuthenticationFailureHold | null,
+        authenticationFailureAcknowledged: true
+      };
+    }
+    const held = await repository.holdAuthenticationJob(jobId, device, errorMessage, leaseToken);
+    await reconcileTerminalRuntimeJobLocked(jobId, { forcePersist: true });
+    await repository.appendEvent({
+      user_id: held.job.user_id,
+      session_id: held.job.session_id,
+      job_id: held.job.id,
+      event_type: "job.failed",
+      payload: {
+        job_type: held.job.job_type,
+        attempts: held.job.attempts,
+        error: errorMessage.slice(0, 500),
+        authentication_failure_hold: true,
+        executor_device_id: held.device.id
+      }
+    });
+    return {
+      ...held,
+      authenticationFailureAcknowledged: false
+    };
+  });
+}
+
+export async function reconcileAuthenticationFailureHoldsForDevice(
+  deviceId: string,
+  options: { releaseCartAfterVerifiedLogin?: boolean } = {}
+) {
+  const repository = getRuntimeRepository();
+  const holds = await repository.listActiveAuthenticationFailureHolds(deviceId);
+  for (const hold of holds) {
+    await withWorkflowSessionTransaction(hold.session_id, async () => {
+      const current = await repository.getActiveAuthenticationFailureHold(hold.job_id);
+      if (
+        !current ||
+        current.device_id !== hold.device_id ||
+        current.attempt !== hold.attempt ||
+        current.lease_token !== hold.lease_token
+      ) return;
+      await reconcileTerminalRuntimeJobLocked(hold.job_id, { forcePersist: true });
+      if (options.releaseCartAfterVerifiedLogin) {
+        const job = await repository.getJob(hold.job_id);
+        if (job?.job_type === "add_to_cart") {
+          await repository.releaseAuthenticationFailureHold(
+            current,
+            "cart_authentication_recovered"
+          );
+        }
+      }
+    });
+  }
+  return {
+    repaired: holds.length,
+    active: await repository.hasActiveAuthenticationFailureHold(deviceId)
+  };
+}
+
 async function applyFailedRuntimeJobLocked(
   jobId: string,
   device: ExecutorDevice,
   errorMessage: string,
-  options: { retryable?: boolean } = {}
+  options: {
+    retryable?: boolean;
+    authenticationFailureCallback?: boolean;
+    leaseToken?: string;
+  } = {}
 ) {
   const repository = getRuntimeRepository();
   const existing = await repository.getJob(jobId);
   if (!existing) throw new Error("job not found");
+  const authenticationFailureCallback = options.authenticationFailureCallback === true;
+  const authenticationFailureAlreadyAcknowledged =
+    authenticationFailureCallback &&
+    typeof options.leaseToken === "string" &&
+    await isAcknowledgedAuthenticationFailureForDevice(
+      existing,
+      device.id,
+      options.leaseToken
+    );
+  if (authenticationFailureCallback) {
+    if (
+      options.retryable !== false ||
+      device.status !== "authentication_required" ||
+      !isExecutorAuthenticationError(errorMessage) ||
+      typeof options.leaseToken !== "string" ||
+      options.leaseToken.length < 16 ||
+      options.leaseToken.length > 200 ||
+      (!authenticationFailureAlreadyAcknowledged && existing.lease_token !== options.leaseToken) ||
+      !device.capabilities.includes(existing.job_type) ||
+      (existing.user_id !== undefined && existing.user_id !== device.user_id)
+    ) {
+      throw new Error("invalid authentication failure callback");
+    }
+  }
+  if (authenticationFailureAlreadyAcknowledged && existing.status !== "failed") {
+    await repository.appendEvent({
+      user_id: existing.user_id,
+      session_id: existing.session_id,
+      job_id: existing.id,
+      event_type: "job.authentication_failure_callback_superseded",
+      payload: {
+        job_type: existing.job_type,
+        executor_device_id: device.id,
+        current_status: existing.status
+      }
+    });
+    await releaseMatchingAuthenticationFailureHold(
+      existing.id,
+      device.id,
+      options.leaseToken!,
+      "callback_acknowledged"
+    );
+    return existing;
+  }
   if (
-    existing.status === "completed" ||
-    existing.status === "failed" ||
-    existing.status === "cancelled" ||
-    (existing.status === "pending" && existing.attempts > 0)
+    authenticationFailureCallback &&
+    (existing.status === "completed" || existing.status === "cancelled")
+  ) {
+    throw new Error("terminal job cannot accept authentication failure callback");
+  }
+  if (
+    (!authenticationFailureCallback && existing.status === "completed") ||
+    (!authenticationFailureCallback && existing.status === "failed") ||
+    (!authenticationFailureCallback && existing.status === "cancelled") ||
+    (!authenticationFailureCallback && existing.status === "pending" && existing.attempts > 0)
   ) {
     return existing;
   }
-  const job = await repository.failJob(
-    jobId,
-    device.id,
-    errorMessage,
-    3_000,
-    options.retryable === false
-  );
+  if (authenticationFailureCallback && existing.status === "failed") {
+    // The previous callback may have committed the Job transition but lost its
+    // HTTP response before session reconciliation or audit completed. Repair
+    // those side effects before acknowledging the durable Worker ledger.
+    const acknowledgedJob = authenticationFailureAlreadyAcknowledged
+      ? existing
+      : await repository.failAuthenticationJob(
+          jobId,
+          device,
+          errorMessage,
+          options.leaseToken!,
+          authenticationFailureLeaseTokenHash(options.leaseToken!)
+        );
+    const currentState = await repository.getSession(existing.session_id, existing.user_id);
+    const currentTask = currentState?.hosted_tasks.find((item) => item.task_id === existing.id);
+    const partialResultsAlreadyAccepted =
+      currentTask?.payload.user_resolution === "user_skipped" &&
+      currentTask.payload.partial_results_status === "partial_results_accepted";
+    if (!partialResultsAlreadyAccepted) {
+      await reconcileTerminalRuntimeJobLocked(jobId, { forcePersist: true });
+    }
+    await repository.appendEvent({
+      user_id: existing.user_id,
+      session_id: existing.session_id,
+      job_id: existing.id,
+      event_type: "job.authentication_failure_callback_confirmed",
+      payload: {
+        job_type: existing.job_type,
+        executor_device_id: device.id,
+        replayed: true,
+        user_resolution_preserved: partialResultsAlreadyAccepted
+      }
+    });
+    await releaseMatchingAuthenticationFailureHold(
+      acknowledgedJob.id,
+      device.id,
+      options.leaseToken!,
+      "callback_acknowledged"
+    );
+    return acknowledgedJob;
+  }
+  const job = authenticationFailureCallback
+    ? await repository.failAuthenticationJob(
+        jobId,
+        device,
+        errorMessage,
+        options.leaseToken!,
+        authenticationFailureLeaseTokenHash(options.leaseToken!)
+      )
+    : await repository.failJob(
+        jobId,
+        device.id,
+        errorMessage,
+        3_000,
+        options.retryable === false
+      );
   const state = await repository.getSession(job.session_id, job.user_id);
   const task = state?.hosted_tasks.find((item) => item.task_id === job.id);
   if (state && task) {
@@ -625,8 +1033,38 @@ async function applyFailedRuntimeJobLocked(
     session_id: job.session_id,
     job_id: job.id,
     event_type: job.status === "failed" ? "job.failed" : "job.retry_scheduled",
-    payload: { job_type: job.job_type, attempts: job.attempts, error: errorMessage.slice(0, 500) }
+    payload: {
+      job_type: job.job_type,
+      attempts: job.attempts,
+      error: errorMessage.slice(0, 500),
+      ...(authenticationFailureCallback
+        ? {
+            authentication_failure_callback: true,
+            executor_device_id: device.id,
+            recovered_from_status: existing.status
+          }
+        : {})
+    }
   });
+  if (authenticationFailureCallback) {
+    await repository.appendEvent({
+      user_id: job.user_id,
+      session_id: job.session_id,
+      job_id: job.id,
+      event_type: "job.authentication_failure_callback_applied",
+      payload: {
+        job_type: job.job_type,
+        executor_device_id: device.id,
+        recovered_from_status: existing.status
+      }
+    });
+    await releaseMatchingAuthenticationFailureHold(
+      job.id,
+      device.id,
+      options.leaseToken!,
+      "callback_acknowledged"
+    );
+  }
   return job;
 }
 
@@ -634,7 +1072,11 @@ export async function applyFailedRuntimeJob(
   jobId: string,
   device: ExecutorDevice,
   errorMessage: string,
-  options: { retryable?: boolean } = {}
+  options: {
+    retryable?: boolean;
+    authenticationFailureCallback?: boolean;
+    leaseToken?: string;
+  } = {}
 ) {
   const job = await getRuntimeRepository().getJob(jobId);
   if (!job) throw new Error("job not found");

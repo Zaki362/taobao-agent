@@ -51,7 +51,7 @@ describe(`new-car Agent quality gate (${liveEvaluation ? "live DeepSeek" : "dete
     const planned = await runDeepSeekPlanner(parsed.data);
     const reviewed = await reviewPlanWithAgent(parsed.data, planned.data);
     const modules = planned.data.modules;
-    const keywords = modules.map((module) => module.search_strategy?.primary_keyword || module.search_keyword);
+    const keywords = modules.map((module) => module.search_strategy?.primary_keyword);
     const priorities = new Set(modules.map((module) => module.priority));
     const allocatedBudget = modules.reduce((sum, module) => sum + module.budget_allocation, 0);
 
@@ -62,7 +62,14 @@ describe(`new-car Agent quality gate (${liveEvaluation ? "live DeepSeek" : "dete
     expect(priorities.size).toBeGreaterThanOrEqual(2);
     expect(allocatedBudget).toBe(parsed.data.budget);
     expect(new Set(keywords).size).toBe(keywords.length);
-    expect(keywords.every((keyword) => typeof keyword === "string" && keyword.trim().length >= 4)).toBe(true);
+    expect(modules.every((module) => {
+      const keyword = module.search_strategy?.primary_keyword;
+      if (typeof keyword !== "string") return false;
+
+      const normalizedKeyword = keyword.trim();
+      return module.typical_item_types.includes(normalizedKeyword) &&
+        module.typical_item_types.filter((itemType) => normalizedKeyword.includes(itemType)).length === 1;
+    })).toBe(true);
     expect(planned.data.execution_strategy.module_sequence).toEqual(modules.map((module) => module.module_id));
     expect(planned.data.agent_directives.safety_boundaries.some((item) => /确认|加购|支付/.test(item))).toBe(true);
     expect(reviewed.data.summary.trim().length).toBeGreaterThan(0);

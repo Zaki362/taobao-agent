@@ -1,14 +1,15 @@
-# Codex Hosted Worker
+# Codex Hosted Worker（旧开发兼容）
 
-当前项目已经切换到 `Codex 宿主执行` 模式：
+本页记录历史 `codex_hosted` 工作流，仅用于维护旧任务文件和开发迁移。当前正式产品与面试主路径已经切换为：
 
-- 网页产品负责场景理解、购物规划、任务编排、结果展示
-- Codex 宿主负责真正执行淘宝搜索 / 详情提取 / 加购
+```text
+Browser -> Agent workflow -> durable Job Queue
+        -> local_executor -> 淘宝桌面版官方 HTTP MCP
+```
 
-注意：
+Codex 宿主不再负责正式链路中的淘宝搜索、详情提取或加购。生产模式会以 `410 legacy_hosted_disabled` 拒绝旧 Hosted Worker 任务接口；`/hosted` 现在是 Session、Job 和本地执行器的运行控制台，其名称不代表淘宝任务由 Codex 执行。
 
-- 当前默认路径不是“本地 Node 进程自动调用淘宝”
-- 而是“网页把任务交给 Codex 宿主，再由宿主执行并回填结果”
+以下命令和任务文件格式只适用于显式启用的旧开发兼容流程。不要在面试中运行它，也不要把手工回填结果描述成网页实时触发的淘宝搜索。
 
 ## 启动方式
 
@@ -93,12 +94,12 @@ npm run worker:codex -- resolve --file .data/hosted-worker/<task_id>.resolve.jso
 - `POST /api/hosted/tasks`
 - `POST /api/hosted/tasks/resolve`
 
-## 当前限制
+## 旧模式限制
 
-当前默认模式下：
+在这条旧兼容模式下：
 
 - worker 只负责消费队列、生成任务包、记录状态
 - 真正的淘宝执行仍由 Codex 宿主完成
 - 网页应用不能直接远程调用当前 Codex 会话的工具能力
 
-因此，“自动推进到 running”可以做到，但“自动完成淘宝执行”取决于宿主是否已经实际接手当前任务。
+因此，“自动推进到 running”可以做到，但“自动完成淘宝执行”取决于宿主是否已经实际接手当前任务。这不满足当前正式演示要求；真实验收应使用 `worker:local` 和淘宝桌面版官方 HTTP MCP。

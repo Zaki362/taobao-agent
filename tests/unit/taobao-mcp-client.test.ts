@@ -122,6 +122,62 @@ describe("Taobao Streamable HTTP MCP client", () => {
     expect(fetchImpl).toHaveBeenCalledTimes(3);
   });
 
+  it("surfaces structured login failures returned without the MCP isError flag", async () => {
+    const fetchImpl = vi.fn(async (_url: string, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      if (body.method === "initialize") {
+        return sse({
+          jsonrpc: "2.0",
+          id: body.id,
+          result: { protocolVersion: "2025-03-26", capabilities: {}, serverInfo: {} }
+        }, { "mcp-session-id": "session-structured-failure" });
+      }
+      if (body.method === "notifications/initialized") return new Response("", { status: 202 });
+      return sse({
+        jsonrpc: "2.0",
+        id: body.id,
+        result: {
+          content: [{
+            type: "text",
+            text: JSON.stringify({ success: false, message: "未登录，请先登录淘宝账号" })
+          }]
+        }
+      });
+    });
+    const client = new TaobaoMcpClient({ fetchImpl });
+
+    await expect(client.callTool("search_products", { keyword: "露营灯" }))
+      .rejects.toThrow("未登录，请先登录淘宝账号");
+  });
+
+  it("preserves structured SKU-selection responses for explicit user choice", async () => {
+    const fetchImpl = vi.fn(async (_url: string, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      if (body.method === "initialize") {
+        return sse({
+          jsonrpc: "2.0",
+          id: body.id,
+          result: { protocolVersion: "2025-03-26", capabilities: {}, serverInfo: {} }
+        }, { "mcp-session-id": "session-sku-choice" });
+      }
+      if (body.method === "notifications/initialized") return new Response("", { status: 202 });
+      return sse({
+        jsonrpc: "2.0",
+        id: body.id,
+        result: {
+          content: [{
+            type: "text",
+            text: JSON.stringify({ success: false, needsSkuSelection: true, availableSkus: [] })
+          }]
+        }
+      });
+    });
+    const client = new TaobaoMcpClient({ fetchImpl });
+
+    await expect(client.callTool("add_to_cart", { itemId: "product-1" }))
+      .resolves.toMatchObject({ success: false, needsSkuSelection: true });
+  });
+
   it("never replays add_to_cart when the MCP session expires after submission", async () => {
     let cartCalls = 0;
     const fetchImpl = vi.fn(async (_url: string, init?: RequestInit) => {

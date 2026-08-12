@@ -124,13 +124,49 @@ export function toRestorableStage({
   return stage;
 }
 
+export function resolveHydratedSessionStage(
+  preferredStage: WorkflowStage | string,
+  state: SessionState
+): WorkflowStage {
+  const status = state.agent_runtime.workflow_status;
+  if (status === "running" || status === "waiting_for_tools" || status === "paused" || status === "error") {
+    return "searching";
+  }
+  if (status === "idle" && !state.completion_report && state.last_refinement) {
+    return "confirm_plan";
+  }
+
+  const coveredModuleCount = state.shopping_plan.modules.filter(
+    (module) => (state.module_candidates[module.module_id]?.length ?? 0) > 0
+  ).length;
+  if (status === "completed" || state.completion_report || coveredModuleCount > 0) {
+    const restorablePreferredStage = toRestorableStage({
+      stage: preferredStage,
+      hasSession: true,
+      hasParsedScene: true,
+      hasScenario: true
+    });
+    if (restorablePreferredStage === "searching") {
+      return "searching";
+    }
+    if (
+      restorablePreferredStage === "cart_review" &&
+      (state.selected_items.length > 0 || Boolean(state.bundle_adoption))
+    ) {
+      return "cart_review";
+    }
+    return "review_results";
+  }
+  return "confirm_plan";
+}
+
 export function statusMessageForRestoredStage(stage: WorkflowStage | string, fallback: string) {
   if (stage === "landing") return "等待开始";
   if (stage === "input_requirement") return "请选择你的场景需求并开始理解";
   if (stage === "confirm_scene") return "已恢复到需求确认页，请确认需求后进入规划";
   if (stage === "confirm_plan") return "已恢复到购物规划页，请确认后开始搜索";
   if (stage === "review_results") return "已恢复到推荐结果页，可以继续查看、加购或重新搜索";
-  if (stage === "cart_review") return "已恢复到下单清单页";
+  if (stage === "cart_review") return "已恢复到购买确认页";
   return fallback || "等待开始";
 }
 

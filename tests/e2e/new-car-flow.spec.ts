@@ -1,4 +1,4 @@
-import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
+import { expect, test, type APIRequestContext, type Page, type Request } from "@playwright/test";
 import protocol from "../../lib/runtime/executor-protocol.json";
 
 const recommendationTypes = ["稳妥推荐", "性价比推荐", "升级推荐"] as const;
@@ -10,7 +10,7 @@ const executorHeaders = (token: string) => ({
 
 async function returnToLandingWithoutLocalSnapshot(page: Page) {
   await page.goto("/");
-  const restartButton = page.getByRole("button", { name: "重新开始" });
+  const restartButton = page.getByRole("button", { name: /重新开始|开启新任务/ });
   if (await restartButton.isVisible()) {
     await restartButton.click();
   }
@@ -31,7 +31,7 @@ function candidatesFor(job: { id: string; payload: Record<string, unknown> }) {
     product_id: `${moduleId}-${index + 1}`,
     title: `${moduleName} E2E 真实链路候选 ${index + 1}`,
     price: Math.round(moduleBudget * ratios[index] * 100) / 100,
-    source: "淘宝本地执行器测试",
+    source: "淘宝",
     shop_name: `测试旗舰店 ${index + 1}`,
     image_url: "https://img.alicdn.com/imgextra/i1/O1CN01dummy.jpg",
     detail_url: `https://item.taobao.com/item.htm?id=${encodeURIComponent(`${moduleId}${index + 1}`)}`,
@@ -42,6 +42,27 @@ function candidatesFor(job: { id: string; payload: Record<string, unknown> }) {
     recommendation_type: recommendationType,
     module_id: moduleId
   }));
+}
+
+function verifiedSearchResultFor(job: { id: string; payload: Record<string, unknown> }) {
+  const candidates = candidatesFor(job);
+  return {
+    summary: "E2E 本地执行器已完成淘宝候选回填",
+    candidates,
+    evidence: {
+      schema: "scenecart.taobao-mcp-search-evidence/v1",
+      source: "taobao-mcp",
+      tool: "search_products",
+      source_app: "SceneCartE2E",
+      job_id: job.id,
+      module_id: String(job.payload.module_id ?? ""),
+      workflow_run_id: String(job.payload.workflow_run_id ?? ""),
+      keyword: String(job.payload.keyword ?? ""),
+      captured_at: new Date().toISOString(),
+      cache_hit: false,
+      raw_result_count: candidates.length
+    }
+  };
 }
 
 async function runExecutorUntilStopped(
@@ -93,10 +114,7 @@ async function runExecutorUntilStopped(
     }
 
     const result = job.job_type === "module_search"
-      ? {
-          summary: "E2E 本地执行器已完成淘宝候选回填",
-          candidates: candidatesFor(job)
-        }
+      ? verifiedSearchResultFor(job)
       : {
           success: true,
           message: "E2E 本地执行器已完成加购",
@@ -165,12 +183,16 @@ test("authenticated new-car workflow reaches recommendations through the durable
     { exact: true }
   )).toBeVisible();
   await expect(page.getByText("输入过程不会回显，也不会把令牌写入 shell history", { exact: false })).toBeVisible();
+  const freshLandingMcpStatusResponse = page.waitForResponse((response) =>
+    response.request().method() === "GET" && new URL(response.url()).pathname === "/api/mcp/status"
+  );
   await page.goto("/");
+  expect((await freshLandingMcpStatusResponse).ok()).toBeTruthy();
 
   const outdatedHeartbeat = await page.request.post("/api/executor/heartbeat", {
     headers: {
       Authorization: `Bearer ${deviceToken}`,
-      "X-SceneCart-Executor-Protocol": "0"
+      "X-SceneCart-Executor-Protocol": "1"
     },
     data: {}
   });
@@ -179,6 +201,7 @@ test("authenticated new-car workflow reaches recommendations through the durable
   const mcpStatusResponse = await page.request.get("/api/mcp/status");
   expect(mcpStatusResponse.ok()).toBeTruthy();
   const mcpStatus = await mcpStatusResponse.json() as {
+    mode: string;
     available: boolean;
     executor_devices: {
       capabilities: {
@@ -187,6 +210,7 @@ test("authenticated new-car workflow reaches recommendations through the durable
       };
     };
   };
+  expect(mcpStatus.mode).toBe("local_executor");
   expect(mcpStatus.available).toBe(true);
   expect(mcpStatus.executor_devices.capabilities.module_search.available).toBe(true);
   expect(mcpStatus.executor_devices.capabilities.add_to_cart.available).toBe(false);
@@ -247,6 +271,15 @@ test("authenticated new-car workflow reaches recommendations through the durable
       return String((JSON.parse(raw) as { sessionId?: string }).sessionId ?? "");
     });
     expect(persistedSessionId).not.toBe("");
+    const workflowRequestCounts = { mcpStatus: 0, agentRun: 0, legacyModuleSearch: 0 };
+    const trackWorkflowRequest = (request: Request) => {
+      const pathname = new URL(request.url()).pathname;
+      if (request.method() === "GET" && pathname === "/api/mcp/status") workflowRequestCounts.mcpStatus += 1;
+      if (request.method() !== "POST") return;
+      if (pathname === "/api/agent/run") workflowRequestCounts.agentRun += 1;
+      if (pathname === "/api/modules/search") workflowRequestCounts.legacyModuleSearch += 1;
+    };
+    page.on("request", trackWorkflowRequest);
     await page.getByRole("button", { name: "就按这个方案开始找商品" }).click();
 
     await expect(page.getByText("Agent 正在行动", { exact: true })).toBeVisible();
@@ -257,6 +290,15 @@ test("authenticated new-car workflow reaches recommendations through the durable
       };
       return state.agent_runtime.workflow_status;
     }, { timeout: 30_000 }).toBe("waiting_for_tools");
+    page.off("request", trackWorkflowRequest);
+    expect(workflowRequestCounts).toEqual({ mcpStatus: 1, agentRun: 1, legacyModuleSearch: 0 });
+    const waitingStateResponse = await page.request.get(`/api/session/state?session_id=${persistedSessionId}`);
+    const waitingState = await waitingStateResponse.json() as {
+      hosted_tasks: Array<{ task_type: string; status: string }>;
+    };
+    expect(waitingState.hosted_tasks.filter((task) =>
+      task.task_type === "module_search" && (task.status === "pending" || task.status === "running")
+    )).toHaveLength(1);
 
     page.once("dialog", (dialog) => dialog.accept());
     await page.getByRole("button", { name: "完成当前项后暂停" }).click();
@@ -342,10 +384,10 @@ test("authenticated new-car workflow reaches recommendations through the durable
     await expect(page.getByText("Agent 正在行动", { exact: true })).toBeVisible();
     await expect(page.getByRole("button", { name: "查看推荐结果" })).toBeEnabled();
     await page.getByRole("button", { name: "查看推荐结果" }).click();
-    await expect(page.getByText("这个模块暂时没有可用商品")).toBeVisible();
-    await expect(page.getByText("还有可以补强的地方")).toBeVisible();
-    await expect(page.getByText("Agent 建议清单")).toBeVisible();
-    await expect(page.getByText("换个思路", { exact: true })).toBeVisible();
+    await expect(page.getByText("这个分类暂时没有可用商品")).toBeVisible();
+    await expect(page.getByText("Agent 建议清单", { exact: true })).toBeVisible();
+    await expect(page.getByText("还有可以补强的地方")).toHaveCount(0);
+    await expect(page.getByText("换个思路", { exact: true })).toHaveCount(0);
 
     const completedSessionListResponse = await page.request.get("/api/sessions");
     const completedSessionList = await completedSessionListResponse.json() as {
@@ -389,7 +431,7 @@ test("authenticated new-car workflow reaches recommendations through the durable
     const recentTask = page.locator("article").filter({ hasText: completedState.raw_input }).first();
     await expect(recentTask).toContainText("推荐已生成");
     await recentTask.getByRole("button", { name: "继续" }).click();
-    await expect(page.getByText("还有可以补强的地方")).toBeVisible();
+    await expect(page.getByText("Agent 建议清单", { exact: true })).toBeVisible();
 
     const unconfirmedRecovery = await page.request.post("/api/agent/remediate", {
       headers: { Origin: "http://127.0.0.1:3100" },
@@ -398,7 +440,7 @@ test("authenticated new-car workflow reaches recommendations through the durable
     expect(unconfirmedRecovery.status()).toBe(400);
 
     page.once("dialog", (dialog) => dialog.accept());
-    await page.getByRole("button", { name: "补齐 1 个缺口" }).click();
+    await page.getByRole("button", { name: "补齐 1 个缺失分类" }).click();
     await expect.poll(async () => {
       const response = await page.request.get(`/api/session/state?session_id=${persistedSessionId}`);
       const state = await response.json() as {
@@ -417,7 +459,8 @@ test("authenticated new-car workflow reaches recommendations through the durable
       uncovered: 0
     });
     await expect(page.getByText(/E2E 真实链路候选/).first()).toBeVisible();
-    await expect(page.getByRole("button", { name: "补齐 1 个缺口" })).toHaveCount(0);
+    await expect(page.getByText(/本次淘宝 MCP ·/).first()).toBeVisible();
+    await expect(page.getByRole("button", { name: "补齐 1 个缺失分类" })).toHaveCount(0);
 
     const bundleReadyResponse = await page.request.get(`/api/session/state?session_id=${persistedSessionId}`);
     const bundleReadyState = await bundleReadyResponse.json() as {
@@ -434,23 +477,39 @@ test("authenticated new-car workflow reaches recommendations through the durable
     expect(unconfirmedBundle.status()).toBe(400);
 
     page.once("dialog", (dialog) => dialog.accept());
-    await page.getByRole("button", { name: "采用这套清单" }).click();
-    await expect(page.getByText("组合已加入产品内待处理清单")).toBeVisible();
+    await page.getByRole("button", { name: "采用 Agent 建议清单" }).click();
+    const adoptedBundle = page.getByRole("region", { name: /我先为你选好了/ });
+    await expect(adoptedBundle.getByText("已采用", { exact: true })).toBeVisible();
     const adoptedResponse = await page.request.get(`/api/session/state?session_id=${persistedSessionId}`);
     const adoptedState = await adoptedResponse.json() as {
       bundle_adoption: { status: string; product_ids: string[]; pending_product_ids: string[] };
     };
     expect(adoptedState.bundle_adoption.status).toBe("accepted");
     expect(adoptedState.bundle_adoption.pending_product_ids).toEqual(adoptedState.bundle_adoption.product_ids);
+    await expect(adoptedBundle.getByText("待加购", { exact: true })).toHaveCount(
+      adoptedState.bundle_adoption.product_ids.length
+    );
+    await expect(adoptedBundle.getByText(`淘宝加购进度 0/${adoptedState.bundle_adoption.product_ids.length}`)).toBeVisible();
+    await expect(page.getByRole("button", { name: "查看购物清单" })).toBeEnabled();
+
+    await page.getByRole("button", { name: "查看购物清单" }).focus();
+    await page.keyboard.press("Enter");
+    await expect(page.getByRole("heading", { name: `购物清单共 ${adoptedState.bundle_adoption.product_ids.length} 件` })).toBeVisible();
+    await expect(page.getByText("待确认加购", { exact: true })).toHaveCount(
+      adoptedState.bundle_adoption.product_ids.length
+    );
+    await expect(page.getByText("真实已加购金额 ¥0", { exact: true })).toBeVisible();
+    await page.getByRole("button", { name: "返回上一步继续加购" }).click();
 
     page.once("dialog", (dialog) => dialog.accept());
-    await page.getByRole("button", { name: "加入购物车" }).first().click();
-    await expect(page.getByRole("button", { name: "已加入购物车" }).first()).toBeVisible({
+    await page.getByRole("button", { name: "确认加购" }).first().click();
+    await expect(page.getByRole("button", { name: "淘宝已加" }).first()).toBeVisible({
       timeout: 30_000
     });
 
-    await page.getByRole("button", { name: "进入购买确认" }).click();
-    await expect(page.getByText("确认下单清单")).toBeVisible();
+    await page.getByRole("button", { name: "查看购物清单" }).focus();
+    await page.keyboard.press("Enter");
+    await expect(page.getByText("我的购物清单")).toBeVisible();
     await expect(page.getByText(/E2E 真实链路候选/).first()).toBeVisible();
     await expect(page.getByRole("button", { name: "在淘宝购物车中管理" }).first()).toBeVisible();
 
@@ -525,13 +584,18 @@ test("authenticated new-car workflow reaches recommendations through the durable
     expect(missingConfirmation.status()).toBe(400);
 
     await page.goto("/?resume=1");
-    await expect(page.getByText("确认下单清单")).toBeVisible();
-    await page.getByRole("button", { name: "返回上一步继续加购" }).click();
-    await page.getByRole("button", { name: budgetSuggestion.to_module_name, exact: true }).click();
-    await expect(page.getByRole("button", { name: "确认调配并查看新规划" })).toBeVisible();
-    page.once("dialog", (dialog) => dialog.accept());
-    await page.getByRole("button", { name: "确认调配并查看新规划" }).click();
-    await expect(page.getByText("确认新车购物规划")).toBeVisible();
+    await expect(page.getByRole("heading", { name: /购物清单共 \d+ 件/ })).toBeVisible();
+    await expect(page.getByText("换个思路", { exact: true })).toHaveCount(0);
+    const confirmedReallocation = await page.request.post("/api/session/budget-reallocation", {
+      headers: { Origin: "http://127.0.0.1:3100" },
+      data: {
+        session_id: persistedSessionId,
+        from_module_id: budgetSuggestion.from_module_id,
+        to_module_id: budgetSuggestion.to_module_id,
+        confirmed: true
+      }
+    });
+    expect(confirmedReallocation.ok(), await confirmedReallocation.text()).toBeTruthy();
 
     const reallocatedResponse = await page.request.get(`/api/session/state?session_id=${persistedSessionId}`);
     const reallocatedState = await reallocatedResponse.json() as typeof feedbackState & {
@@ -578,17 +642,18 @@ test("authenticated new-car workflow reaches recommendations through the durable
     expect(currentSession.market_feedback.observed_modules).toBeGreaterThan(0);
     expect(currentSession.market_feedback.total_modules).toBe(currentSession.shopping_plan.modules.length);
     expect(currentSession.market_feedback.user_confirmation_required).toBe(true);
-    const retryModule = currentSession.shopping_plan.modules[0];
-    const retryKeyword = `${retryModule.typical_item_types[0] ?? retryModule.module_name} E2E失败恢复 ${Date.now()}`;
-    const queuedForFailure = await page.request.post("/api/modules/search", {
+    const queuedForFailure = await page.request.post("/api/agent/run", {
       headers: { Origin: "http://127.0.0.1:3100" },
-      data: {
-        session_id: currentSession.session_id,
-        module_id: retryModule.module_id,
-        keyword_override: retryKeyword
-      }
+      data: { session_id: currentSession.session_id }
     });
-    expect(queuedForFailure.ok(), await queuedForFailure.text()).toBeTruthy();
+    const queuedForFailurePayload = await queuedForFailure.json() as { outcome: string };
+    expect(queuedForFailure.ok(), JSON.stringify(queuedForFailurePayload)).toBeTruthy();
+    expect(queuedForFailurePayload.outcome).toBe("queued");
+    const pausedForFailure = await page.request.post("/api/agent/pause", {
+      headers: { Origin: "http://127.0.0.1:3100" },
+      data: { session_id: currentSession.session_id, confirmed: true }
+    });
+    expect(pausedForFailure.ok(), await pausedForFailure.text()).toBeTruthy();
     const failedClaim = await page.request.post("/api/executor/jobs/claim", {
       headers: executorHeaders(deviceToken),
       data: {}
@@ -609,7 +674,8 @@ test("authenticated new-car workflow reaches recommendations through the durable
     await expect(page.getByRole("button", { name: "取消待执行" }).first()).toBeVisible();
 
     await page.getByRole("button", { name: "返回当前进度" }).click();
-    await expect(page.getByText("确认新车购物规划")).toBeVisible();
+    await expect(page.getByText("Agent 正在行动", { exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "继续搜索" })).toBeVisible();
 
     const unconfirmedArchive = await page.request.post("/api/session/archive", {
       headers: { Origin: "http://127.0.0.1:3100" },
@@ -647,11 +713,10 @@ test("authenticated new-car workflow reaches recommendations through the durable
     await returnToLandingWithoutLocalSnapshot(page);
     await page.getByText(/已归档任务（\d+）/).click();
     const archivedTaskCard = page.locator("article").filter({ hasText: completedState.raw_input }).first();
-    await expect(archivedTaskCard).toContainText("已归档");
+    await expect(archivedTaskCard.getByRole("button", { name: "恢复" })).toBeVisible();
     page.once("dialog", (dialog) => dialog.accept());
     await archivedTaskCard.getByRole("button", { name: "恢复" }).click();
-    const restoredTaskCard = page.locator("article").filter({ hasText: completedState.raw_input }).first();
-    await expect(restoredTaskCard.getByRole("button", { name: "继续" })).toBeVisible();
+    await expect(page.getByRole("button", { name: /^(继续|继续上次任务)$/ }).first()).toBeVisible();
 
     const restoredStateResponse = await page.request.get(`/api/session/state?session_id=${persistedSessionId}`);
     const restoredLifecycleState = await restoredStateResponse.json() as {
@@ -660,7 +725,7 @@ test("authenticated new-car workflow reaches recommendations through the durable
     };
     expect(restoredLifecycleState.archived_at).toBeUndefined();
     expect(restoredLifecycleState.agent_runtime).toMatchObject({
-      workflow_status: "idle",
+      workflow_status: "paused",
       auto_continue: false
     });
   } finally {

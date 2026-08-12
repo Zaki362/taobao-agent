@@ -13,8 +13,10 @@ export async function POST(request: NextRequest) {
       typeof body.keyword_override === "string" && body.keyword_override.trim()
         ? body.keyword_override.trim().slice(0, 80)
         : undefined;
+    const confirmedRetry = body.confirmed_retry === true;
     const result = await searchModule(sessionId, moduleId, {
-      keywordOverride
+      keywordOverride,
+      confirmedRetry
     }, identity.userId);
     return apiOk({
       candidates: result.candidates,

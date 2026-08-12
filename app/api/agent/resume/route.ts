@@ -12,7 +12,8 @@ export async function POST(request: NextRequest) {
     }
     const result = await resumeAgentWorkflow(
       requireString(body.session_id, "session_id"),
-      identity.userId
+      identity.userId,
+      { retryAuthenticationFailure: body.retry_authentication_failure === true }
     );
     return apiOk({
       outcome: result.outcome,

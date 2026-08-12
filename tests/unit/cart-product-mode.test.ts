@@ -125,7 +125,7 @@ describe("cart behavior by product mode", () => {
   it("returns a not-found error without changing the current selection", () => {
     const state = createSessionFixture();
     expect(() => removeDemoCartItem(state, "missing-product"))
-      .toThrow("当前下单清单中没有这件商品");
+      .toThrow("当前购买清单中没有这件商品");
     expect(state.selected_items).toEqual([]);
   });
 });

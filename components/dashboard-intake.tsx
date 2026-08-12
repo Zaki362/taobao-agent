@@ -471,7 +471,7 @@ export function RequirementPage({
   const scenario = getScenarioConfig(scenarioId);
 
   return (
-    <Card className="section-card mx-auto w-full max-w-4xl">
+    <Card className="section-card workflow-content">
       <CardHeader className="px-6 pt-7 md:px-8 md:pt-8">
         <div className="flex items-center gap-3">
           <SceneSpirit compact />

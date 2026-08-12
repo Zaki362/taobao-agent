@@ -1,8 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
+import { createHash, randomUUID } from "node:crypto";
 import { getSession, listSessions, saveSession } from "@/lib/session/store";
 import type { SessionState } from "@/lib/session/types";
 import type {
+  AuthenticationFailureHold,
   AuthSessionRecord,
   CreateRuntimeJobInput,
   ExecutionEvent,
@@ -82,9 +84,16 @@ function loadPersistedRuntimeState(): LocalRuntimeState {
       .filter((session) => Date.parse(session.expires_at) > now);
     const devices = records<ExecutorDevice>(parsed.devices).map((device) => ({
       ...device,
-      status: device.status === "revoked" ? "revoked" as const : "offline" as const
+      status: device.status === "revoked"
+        ? "revoked" as const
+        : device.status === "authentication_required"
+          ? "authentication_required" as const
+          : "offline" as const
     }));
-    const jobs = records<RuntimeJob>(parsed.jobs);
+    const jobs = records<RuntimeJob>(parsed.jobs).map((job) => ({
+      ...job,
+      lease_token: typeof job.lease_token === "string" ? job.lease_token : undefined
+    }));
     const serviceHeartbeats = records<RuntimeServiceHeartbeat>(parsed.service_heartbeats);
     const events = records<ExecutionEvent>(parsed.events).slice(-5_000);
     const eventSequence = Math.max(
@@ -147,6 +156,69 @@ export function resetLocalRuntimeForTests() {
 
 function copy<T>(value: T): T {
   return structuredClone(value);
+}
+
+const AUTHENTICATION_HOLD_PENDING_EVENT = "job.authentication_failure_hold_pending";
+const AUTHENTICATION_HOLD_RELEASED_EVENT = "job.authentication_failure_hold_released";
+
+function appendRuntimeEvent(
+  state: LocalRuntimeState,
+  input: Omit<ExecutionEvent, "id" | "created_at">
+) {
+  state.eventSequence += 1;
+  const event: ExecutionEvent = {
+    ...input,
+    id: state.eventSequence,
+    created_at: new Date().toISOString()
+  };
+  state.events.push(event);
+  if (state.events.length > 5_000) state.events.splice(0, state.events.length - 5_000);
+  return event;
+}
+
+function authenticationHoldFromEvent(event: ExecutionEvent): AuthenticationFailureHold | null {
+  const attempt = Number(event.payload.attempt);
+  const deviceId = typeof event.payload.device_id === "string" ? event.payload.device_id : "";
+  const leaseToken = typeof event.payload.lease_token === "string" ? event.payload.lease_token : "";
+  if (!event.job_id || !deviceId || !leaseToken || !Number.isInteger(attempt) || attempt <= 0) return null;
+  return {
+    job_id: event.job_id,
+    session_id: event.session_id,
+    user_id: event.user_id,
+    device_id: deviceId,
+    attempt,
+    lease_token: leaseToken
+  };
+}
+
+function sameAuthenticationHold(event: ExecutionEvent, hold: AuthenticationFailureHold) {
+  return event.job_id === hold.job_id &&
+    event.payload.device_id === hold.device_id &&
+    Number(event.payload.attempt) === hold.attempt &&
+    event.payload.lease_token === hold.lease_token;
+}
+
+function activeAuthenticationHoldForJob(
+  state: LocalRuntimeState,
+  job: RuntimeJob
+): AuthenticationFailureHold | null {
+  if (!job.lease_token || job.attempts <= 0) return null;
+  for (let index = state.events.length - 1; index >= 0; index -= 1) {
+    const event = state.events[index];
+    if (
+      event.job_id !== job.id ||
+      Number(event.payload.attempt) !== job.attempts ||
+      event.payload.lease_token !== job.lease_token ||
+      (
+        event.event_type !== AUTHENTICATION_HOLD_PENDING_EVENT &&
+        event.event_type !== AUTHENTICATION_HOLD_RELEASED_EVENT
+      )
+    ) continue;
+    return event.event_type === AUTHENTICATION_HOLD_PENDING_EVENT
+      ? authenticationHoldFromEvent(event)
+      : null;
+  }
+  return null;
 }
 
 export function canAccessSession(session: SessionState, userId?: string) {
@@ -272,14 +344,23 @@ export const localRuntimeRepository: RuntimeRepository = {
     return found ? copy(found) : null;
   },
 
-  async heartbeatDevice(deviceId) {
+  async heartbeatDevice(deviceId, status = "online") {
     const state = runtimeState();
     const found = state.devices.get(deviceId);
     if (!found || found.status === "revoked") return null;
     const now = new Date().toISOString();
-    found.status = "online";
+    const effectiveStatus = status === "online" && [...state.jobs.values()].some(
+      (job) => activeAuthenticationHoldForJob(state, job)?.device_id === deviceId
+    )
+      ? "authentication_required"
+      : status;
+    const statusChanged = found.status !== effectiveStatus;
+    found.status = effectiveStatus;
     found.last_heartbeat_at = now;
     found.updated_at = now;
+    // Normal online heartbeats remain memory-only to avoid rewriting the full
+    // local runtime every 15 seconds. Authentication transitions are durable.
+    if (statusChanged) persistRuntimeState(state);
     return copy(found);
   },
 
@@ -317,12 +398,15 @@ export const localRuntimeRepository: RuntimeRepository = {
     const existing = [...state.jobs.values()].find((job) => job.idempotency_key === input.idempotency_key);
     if (existing) {
       if (existing.status === "failed" || existing.status === "cancelled") {
+        if (activeAuthenticationHoldForJob(state, existing)) {
+          throw new Error("authentication failure hold requires explicit user release");
+        }
         const now = new Date().toISOString();
         existing.status = "pending";
         existing.payload = copy(input.payload);
         existing.priority = input.priority ?? 100;
         existing.attempts = 0;
-        existing.max_attempts = input.max_attempts ?? 3;
+        existing.max_attempts = input.job_type === "add_to_cart" ? 1 : input.max_attempts ?? 3;
         existing.available_at = now;
         existing.updated_at = now;
         existing.error_message = undefined;
@@ -330,6 +414,7 @@ export const localRuntimeRepository: RuntimeRepository = {
         existing.completed_at = undefined;
         existing.lease_owner_id = undefined;
         existing.lease_expires_at = undefined;
+        existing.lease_token = undefined;
       }
       persistRuntimeState(state);
       return copy(existing);
@@ -340,7 +425,7 @@ export const localRuntimeRepository: RuntimeRepository = {
       status: "pending",
       priority: input.priority ?? 100,
       attempts: 0,
-      max_attempts: input.max_attempts ?? 3,
+      max_attempts: input.job_type === "add_to_cart" ? 1 : input.max_attempts ?? 3,
       available_at: now,
       created_at: now,
       updated_at: now
@@ -363,23 +448,39 @@ export const localRuntimeRepository: RuntimeRepository = {
   },
 
   async claimJob(device, leaseMs) {
+    if (device.status !== "online") return null;
     await this.recoverExpiredJobs();
     const state = runtimeState();
+    const storedDevice = state.devices.get(device.id);
+    if (!storedDevice || storedDevice.status !== "online") return null;
     const now = Date.now();
     const job = [...state.jobs.values()]
       .filter(
-        (item) =>
-          item.status === "pending" &&
-          !getSession(item.session_id)?.archived_at &&
-          new Date(item.available_at).getTime() <= now &&
-          (!item.user_id || item.user_id === device.user_id) &&
-          device.capabilities.includes(item.job_type)
+        (item) => {
+          const authenticationBlocked = Boolean(activeAuthenticationHoldForJob(state, item)) || Boolean(item.lease_token && state.events.some((event) => {
+            if (
+              event.job_id !== item.id ||
+              event.event_type !== "job.claimed" ||
+              Number(event.payload.attempt) !== item.attempts ||
+              event.payload.lease_token !== item.lease_token
+            ) return false;
+            const claimingDevice = state.devices.get(String(event.payload.device_id));
+            return claimingDevice?.status === "authentication_required";
+          }));
+          return item.status === "pending" &&
+            !authenticationBlocked &&
+            !getSession(item.session_id)?.archived_at &&
+            new Date(item.available_at).getTime() <= now &&
+            (!item.user_id || item.user_id === storedDevice.user_id) &&
+            storedDevice.capabilities.includes(item.job_type);
+        }
       )
       .sort((a, b) => b.priority - a.priority || a.created_at.localeCompare(b.created_at))[0];
     if (!job) return null;
     job.status = "leased";
-    job.lease_owner_id = device.id;
+    job.lease_owner_id = storedDevice.id;
     job.lease_expires_at = new Date(now + leaseMs).toISOString();
+    job.lease_token = randomUUID();
     job.attempts += 1;
     job.updated_at = new Date(now).toISOString();
     persistRuntimeState(state);
@@ -430,6 +531,7 @@ export const localRuntimeRepository: RuntimeRepository = {
       job.status = "pending";
       job.available_at = new Date(now + retryDelayMs).toISOString();
       job.lease_owner_id = undefined;
+      job.lease_token = undefined;
     } else {
       job.status = "failed";
       job.completed_at = new Date(now).toISOString();
@@ -437,6 +539,192 @@ export const localRuntimeRepository: RuntimeRepository = {
     }
     persistRuntimeState(state);
     return copy(job);
+  },
+
+  async failAuthenticationJob(jobId, device, errorMessage, leaseToken, leaseTokenHash) {
+    const state = runtimeState();
+    const storedDevice = state.devices.get(device.id);
+    const job = state.jobs.get(jobId);
+    if (!storedDevice || storedDevice.status !== "authentication_required") {
+      throw new Error("executor authentication pause is not active");
+    }
+    if (!job) throw new Error("job not found");
+    if (job.status === "failed") {
+      if (
+        !storedDevice.capabilities.includes(job.job_type) ||
+        job.attempts <= 0 ||
+        !job.lease_token ||
+        job.lease_token !== leaseToken ||
+        (job.user_id !== undefined && job.user_id !== storedDevice.user_id)
+      ) {
+        throw new Error("failed job does not match authentication callback lease");
+      }
+      job.last_auth_failure_token_hash = leaseTokenHash;
+      job.updated_at = new Date().toISOString();
+      persistRuntimeState(state);
+      return copy(job);
+    }
+    if (job.status === "completed" || job.status === "cancelled") {
+      throw new Error("terminal job cannot accept authentication failure callback");
+    }
+    const pendingClaimedByDevice = job.status !== "pending" || state.events.some(
+      (event) =>
+        event.job_id === job.id &&
+        event.event_type === "job.claimed" &&
+        event.payload.device_id === storedDevice.id &&
+        Number(event.payload.attempt) === job.attempts &&
+        event.payload.lease_token === job.lease_token
+    );
+    if (
+      (job.job_type !== "module_search" && job.job_type !== "add_to_cart") ||
+      !storedDevice.capabilities.includes(job.job_type) ||
+      job.attempts <= 0 ||
+      !job.lease_token ||
+      job.lease_token !== leaseToken ||
+      (job.user_id !== undefined && job.user_id !== storedDevice.user_id) ||
+      (job.status !== "pending" && job.status !== "leased" && job.status !== "running") ||
+      (job.status !== "pending" && job.lease_owner_id !== storedDevice.id) ||
+      !pendingClaimedByDevice
+    ) {
+      throw new Error("job is not eligible for authentication failure recovery");
+    }
+    const now = new Date().toISOString();
+    job.status = "failed";
+    job.error_message = errorMessage.slice(0, 1000);
+    job.last_auth_failure_token_hash = leaseTokenHash;
+    job.completed_at = now;
+    job.updated_at = now;
+    job.lease_owner_id = undefined;
+    job.lease_expires_at = undefined;
+    persistRuntimeState(state);
+    return copy(job);
+  },
+
+  async holdAuthenticationJob(jobId, device, errorMessage, leaseToken) {
+    const state = runtimeState();
+    const storedDevice = state.devices.get(device.id);
+    const job = state.jobs.get(jobId);
+    if (!storedDevice || storedDevice.status === "revoked") {
+      throw new Error("executor device unavailable");
+    }
+    if (!job || job.status === "completed" || job.status === "cancelled") {
+      throw new Error("job cannot accept authentication failure hold");
+    }
+    const claimedByDevice = state.events.some(
+      (event) =>
+        event.job_id === job.id &&
+        event.event_type === "job.claimed" &&
+        event.payload.device_id === storedDevice.id &&
+        Number(event.payload.attempt) === job.attempts &&
+        event.payload.lease_token === leaseToken
+    );
+    if (
+      (job.job_type !== "module_search" && job.job_type !== "add_to_cart") ||
+      !storedDevice.capabilities.includes(job.job_type) ||
+      job.attempts <= 0 ||
+      !job.lease_token ||
+      job.lease_token !== leaseToken ||
+      (job.user_id !== undefined && job.user_id !== storedDevice.user_id) ||
+      (job.status !== "failed" && job.status !== "pending" && job.status !== "leased" && job.status !== "running") ||
+      ((job.status === "leased" || job.status === "running") && job.lease_owner_id !== storedDevice.id) ||
+      ((job.status === "pending" || job.status === "failed") && !claimedByDevice)
+    ) {
+      throw new Error("job is not eligible for authentication failure hold");
+    }
+
+    const now = new Date().toISOString();
+    storedDevice.status = "authentication_required";
+    storedDevice.last_heartbeat_at = now;
+    storedDevice.updated_at = now;
+    job.status = "failed";
+    job.error_message = errorMessage.slice(0, 1000);
+    job.completed_at = now;
+    job.updated_at = now;
+    job.lease_owner_id = undefined;
+    job.lease_expires_at = undefined;
+
+    let hold = activeAuthenticationHoldForJob(state, job);
+    if (!hold) {
+      const event = appendRuntimeEvent(state, {
+        user_id: job.user_id,
+        session_id: job.session_id,
+        job_id: job.id,
+        event_type: AUTHENTICATION_HOLD_PENDING_EVENT,
+        payload: {
+          job_type: job.job_type,
+          device_id: storedDevice.id,
+          attempt: job.attempts,
+          lease_token: leaseToken,
+          error: errorMessage.slice(0, 500)
+        }
+      });
+      hold = authenticationHoldFromEvent(event);
+    }
+    if (!hold) throw new Error("authentication failure hold could not be recorded");
+    persistRuntimeState(state);
+    return { job: copy(job), device: copy(storedDevice), hold: copy(hold) };
+  },
+
+  async getActiveAuthenticationFailureHold(jobId) {
+    const state = runtimeState();
+    const job = state.jobs.get(jobId);
+    if (!job) return null;
+    const hold = activeAuthenticationHoldForJob(state, job);
+    return hold ? copy(hold) : null;
+  },
+
+  async hasActiveAuthenticationFailureHold(deviceId) {
+    return (await this.listActiveAuthenticationFailureHolds(deviceId)).length > 0;
+  },
+
+  async listActiveAuthenticationFailureHolds(deviceId) {
+    const state = runtimeState();
+    return [...state.jobs.values()]
+      .map((job) => activeAuthenticationHoldForJob(state, job))
+      .filter((hold): hold is AuthenticationFailureHold => hold?.device_id === deviceId)
+      .map(copy);
+  },
+
+  async isAuthenticationFailureHoldReleased(jobId, deviceId, leaseToken) {
+    return runtimeState().events.some(
+      (event) =>
+        event.job_id === jobId &&
+        event.event_type === AUTHENTICATION_HOLD_RELEASED_EVENT &&
+        event.payload.device_id === deviceId &&
+        event.payload.lease_token === leaseToken
+    );
+  },
+
+  async releaseAuthenticationFailureHold(hold, reason) {
+    const state = runtimeState();
+    const job = state.jobs.get(hold.job_id);
+    if (!job) return false;
+    const active = activeAuthenticationHoldForJob(state, job);
+    if (
+      !active ||
+      active.device_id !== hold.device_id ||
+      active.attempt !== hold.attempt ||
+      active.lease_token !== hold.lease_token
+    ) return false;
+    appendRuntimeEvent(state, {
+      user_id: job.user_id,
+      session_id: job.session_id,
+      job_id: job.id,
+      event_type: AUTHENTICATION_HOLD_RELEASED_EVENT,
+      payload: {
+        job_type: job.job_type,
+        device_id: active.device_id,
+        attempt: active.attempt,
+        lease_token: active.lease_token,
+        reason
+      }
+    });
+    job.last_auth_failure_token_hash = createHash("sha256")
+      .update(active.lease_token)
+      .digest("hex");
+    job.updated_at = new Date().toISOString();
+    persistRuntimeState(state);
+    return true;
   },
 
   async cancelJob(jobId, userId) {
@@ -449,6 +737,7 @@ export const localRuntimeRepository: RuntimeRepository = {
     job.error_message = "用户在执行器领取前取消任务";
     job.completed_at = now;
     job.updated_at = now;
+    job.lease_token = undefined;
     persistRuntimeState(state);
     return copy(job);
   },
@@ -490,14 +779,7 @@ export const localRuntimeRepository: RuntimeRepository = {
 
   async appendEvent(input) {
     const state = runtimeState();
-    state.eventSequence += 1;
-    const event: ExecutionEvent = {
-      ...input,
-      id: state.eventSequence,
-      created_at: new Date().toISOString()
-    };
-    state.events.push(event);
-    if (state.events.length > 5_000) state.events.splice(0, state.events.length - 5_000);
+    const event = appendRuntimeEvent(state, input);
     persistRuntimeState(state);
     return copy(event);
   },

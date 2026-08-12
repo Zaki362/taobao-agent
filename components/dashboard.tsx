@@ -1,13 +1,19 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { jsonFetch } from "@/components/dashboard-api";
 import { StatusPage } from "@/components/dashboard-common";
 import { ConfirmPlanPage, ConfirmScenePage } from "@/components/dashboard-confirmation";
 import { CartReviewPage } from "@/components/dashboard-execution";
 import { SearchProgressPage } from "@/components/dashboard-search-progress";
-import { buildSceneInputFromBrief, getExecutionModeLabel, isHostedMode, isQueuedExecutionMode } from "@/components/dashboard-helpers";
+import {
+  buildSceneInputFromBrief,
+  findTaobaoAuthenticationFailedTask,
+  getExecutionModeLabel,
+  isHostedMode,
+  isQueuedExecutionMode
+} from "@/components/dashboard-helpers";
 import { LandingPage, RequirementPage, ResumeBanner, TopHeader } from "@/components/dashboard-intake";
 import { ResultsPage } from "@/components/dashboard-results-simple";
 import { CartReviewItem, HostedWorkerStatus, MpcStatus } from "@/components/dashboard-types";
@@ -15,7 +21,9 @@ import {
   ResumeSnapshot,
   SelectedScenario,
   buildDashboardPersistenceSnapshot,
+  resolveHydratedSessionStage,
   restoreDashboardSnapshot,
+  statusMessageForRestoredStage,
   toRestorableStage
 } from "@/components/dashboard-workflow";
 import {
@@ -97,40 +105,14 @@ export function Dashboard() {
   const [resumingSessionId, setResumingSessionId] = useState("");
   const [lifecycleSessionId, setLifecycleSessionId] = useState("");
 
+  useEffect(() => {
+    window.scrollTo({ top: 0, behavior: "auto" });
+  }, [stage]);
+
   const selectedModule = session?.shopping_plan.modules.find((item) => item.module_id === selectedModuleId) ?? session?.shopping_plan.modules[0];
   const selectedProducts = selectedModule ? session?.module_candidates[selectedModule.module_id] ?? [] : [];
   const pendingHostedTasks = session?.hosted_tasks.filter((task) => task.status === "pending" || task.status === "running") ?? [];
   const completedHostedTasks = session?.hosted_tasks.filter((task) => task.status === "completed") ?? [];
-  const estimatedTotal = useMemo(
-    () => session?.selected_items.reduce((sum, item) => sum + item.price, 0) ?? 0,
-    [session]
-  );
-  const cartReviewItems = useMemo(() => {
-    if (!session) {
-      return [];
-    }
-
-    return session.selected_items.map((item) => {
-      const candidate = Object.values(session.module_candidates)
-        .flat()
-        .find((product) => product.product_id === item.product_id);
-
-      return {
-        ...item,
-        image_url: item.image_url || candidate?.image_url || "",
-        detail_url: item.detail_url || candidate?.detail_url || "",
-        shop_name: item.shop_name || candidate?.shop_name || "淘宝店铺",
-        module_name:
-          item.module_name ||
-          session.shopping_plan.modules.find((module) => module.module_id === item.module_id)?.module_name ||
-          "已选模块",
-        selected_spec: item.selected_spec || "默认可选规格（以淘宝购物车页为准）",
-        cart_source: item.cart_source || "taobao",
-        cart_note: item.cart_note || ""
-      };
-    });
-  }, [session]);
-
   async function refreshMcpStatus() {
     const status = await jsonFetch<MpcStatus>("/api/mcp/status");
     setMcpStatus(status);
@@ -211,6 +193,7 @@ export function Dashboard() {
 
   useEffect(() => {
     setInteractiveReady(true);
+    refreshMcpStatus().catch(() => undefined);
     refreshRecentSessions().catch(() => undefined);
   }, []);
 
@@ -231,7 +214,6 @@ export function Dashboard() {
       return;
     }
 
-    refreshMcpStatus().catch(() => undefined);
     setResumeSnapshot(snapshot);
   }, []);
 
@@ -342,14 +324,9 @@ export function Dashboard() {
       try {
         const data = await hydrateSession(resumeSnapshot.sessionId);
         await refreshHostedInstruction(resumeSnapshot.sessionId).catch(() => undefined);
-        setStage(
-          toRestorableStage({
-            stage: resumeSnapshot.stage,
-            hasSession: true,
-            hasParsedScene: true,
-            hasScenario: true
-          })
-        );
+        const restoredStage = resolveHydratedSessionStage(resumeSnapshot.stage, data);
+        setStage(restoredStage);
+        setStatusMessage(statusMessageForRestoredStage(restoredStage, data.agent_runtime.workflow_message));
         setSelectedScenario(data.scene_brief.scenario_id);
         setParsedScene(data.scene_brief);
         setParseDeepSeekMode(data.deepseek_status);
@@ -504,6 +481,7 @@ export function Dashboard() {
       const eventId = (event as MessageEvent).lastEventId;
       if (eventId) window.sessionStorage.setItem(cursorKey, eventId);
       let eventType = "执行任务已更新";
+      let shouldRefreshExecutorStatus = false;
       try {
         const payload = JSON.parse((event as MessageEvent).data) as {
           event_type?: string;
@@ -517,6 +495,7 @@ export function Dashboard() {
           eventType = "服务端 Agent 已推进到下一状态";
         } else if (payload.event_type === "job.failed") {
           eventType = "后台任务执行失败，可在执行台查看原因";
+          shouldRefreshExecutorStatus = true;
         } else if (payload.event_type === "job.retry_scheduled") {
           eventType = "后台任务正在自动重试";
         } else if (payload.event_type === "job.requeued") {
@@ -530,7 +509,10 @@ export function Dashboard() {
         window.clearTimeout(refreshTimer);
       }
       refreshTimer = window.setTimeout(() => {
-        hydrateSession(sessionId)
+        Promise.all([
+          hydrateSession(sessionId),
+          shouldRefreshExecutorStatus ? refreshMcpStatus().catch(() => null) : Promise.resolve(null)
+        ])
           .then(() => setStatusMessage(eventType))
           .catch(() => undefined);
       }, 120);
@@ -639,10 +621,12 @@ export function Dashboard() {
     setBusy(true);
     setErrorMessage("");
     setStage("searching");
-    const executionLabel = getExecutionModeLabel(mcpStatus);
-    const serverManagedWorkflow = mcpStatus?.mode === "local_executor";
-    setStatusMessage(`正在通过${executionLabel}串行搜索优先模块，并先返回商品摘要`);
+    setStatusMessage("正在确认本地执行器状态");
     try {
+      const executionStatus = await refreshMcpStatus();
+      const executionLabel = getExecutionModeLabel(executionStatus);
+      const serverManagedWorkflow = executionStatus.mode === "local_executor";
+      setStatusMessage(`正在通过${executionLabel}串行搜索优先模块，并先返回商品摘要`);
       const summary: string[] = [];
       const modules = session.shopping_plan.modules;
       if (modules.length === 0) {
@@ -689,7 +673,7 @@ export function Dashboard() {
         if (decision.action === "wait_for_tools") {
           summary.push(`Agent 正在等待工具回填：${decision.reason}`);
           setSearchSummary([...summary]);
-          if (mcpStatus?.mode === "local_executor") {
+          if (executionStatus.mode === "local_executor") {
             const activeTask = latestSession.hosted_tasks.find(
               (task) => task.task_type === "module_search" && (task.status === "pending" || task.status === "running")
             );
@@ -746,11 +730,11 @@ export function Dashboard() {
           );
           const count = latestSession.module_candidates[module.module_id]?.length ?? 0;
 
-          if (isQueuedExecutionMode(mcpStatus)) {
+          if (isQueuedExecutionMode(executionStatus)) {
             summary.push(
               task?.status === "completed"
                 ? `Agent 已完成「${module.module_name}」并返回 ${count} 个候选商品`
-                : mcpStatus?.mode === "local_executor"
+                : executionStatus.mode === "local_executor"
                   ? `Agent 已提交「${module.module_name}」任务，等待本地执行器回填`
                   : `Agent 已提交「${module.module_name}」任务，等待宿主工具回填`
             );
@@ -780,8 +764,8 @@ export function Dashboard() {
       );
       setSearchSummary(summary);
       setStatusMessage(
-        isQueuedExecutionMode(mcpStatus)
-          ? mcpStatus?.mode === "local_executor"
+        isQueuedExecutionMode(executionStatus)
+          ? executionStatus.mode === "local_executor"
             ? "后台搜索流程已结束或暂停。已完成结果会自动保存在当前会话。"
             : "执行任务已提交。你可以先查看任务摘要，等 Codex 宿主回填结果后再查看推荐。"
           : "优先模块搜索已完成。你可以直接查看推荐结果。"
@@ -892,6 +876,94 @@ export function Dashboard() {
       setErrorMessage(error instanceof Error ? error.message : "继续 Agent 搜索失败");
     } finally {
       setBusy(false);
+      setWorkflowControlBusy(false);
+    }
+  }
+
+  async function resumeAfterTaobaoAuthentication() {
+    if (!session) return;
+    if (!window.confirm(
+      "请先在淘宝桌面版完成登录，并保持淘宝主界面打开。确认已经完成后，将重新执行失败模块并继续当前任务。"
+    )) {
+      return;
+    }
+
+    setWorkflowControlBusy(true);
+    setErrorMessage("");
+    setStatusMessage("正在恢复淘宝登录后的真实搜索");
+    try {
+      const failedTask = findTaobaoAuthenticationFailedTask(session);
+      const resumedModuleId = failedTask?.module_id ?? session.agent_runtime.current_module_id;
+      const resumedModuleName = failedTask?.module_name ?? session.shopping_plan.modules.find(
+        (module) => module.module_id === resumedModuleId
+      )?.module_name ?? "当前模块";
+
+      const response = await jsonFetch<{ state: unknown; outcome: AgentRunResponse["outcome"] }>("/api/agent/resume", {
+        method: "POST",
+        body: JSON.stringify({
+          session_id: session.session_id,
+          confirmed: true,
+          retry_authentication_failure: true
+        })
+      });
+      if (!isRenderableSessionState(response.state)) {
+        throw new Error("恢复后返回的会话状态不完整");
+      }
+
+      setSession(response.state);
+      if (resumedModuleId) setSelectedModuleId(resumedModuleId);
+      setSearchSummary((current) => [
+        ...current.filter((item) => !item.startsWith("淘宝登录已恢复")),
+        `淘宝登录恢复请求已确认；「${resumedModuleName}」已重新进入真实搜索队列`
+      ]);
+      setStatusMessage(
+        response.outcome === "waiting" || response.outcome === "queued"
+          ? `正在等待本地执行器重新搜索「${resumedModuleName}」`
+          : response.state.agent_runtime.workflow_message
+      );
+      void refreshMcpStatus().catch(() => undefined);
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "恢复淘宝真实搜索失败");
+    } finally {
+      setWorkflowControlBusy(false);
+    }
+  }
+
+  async function viewExistingSearchResults() {
+    if (!session) return;
+    setWorkflowControlBusy(true);
+    setErrorMessage("");
+    setStatusMessage("正在确认使用已有部分结果");
+    try {
+      const response = await jsonFetch<{ state: unknown }>("/api/agent/accept-partial-results", {
+        method: "POST",
+        body: JSON.stringify({
+          session_id: session.session_id,
+          confirmed: true
+        })
+      });
+      const nextState = response.state;
+      if (!isRenderableSessionState(nextState)) {
+        throw new Error("接受部分结果后返回的会话状态不完整");
+      }
+      const coveredModule = nextState.shopping_plan.modules.find(
+        (module) => (nextState.module_candidates[module.module_id]?.length ?? 0) > 0
+      );
+      if (!coveredModule) {
+        throw new Error("当前还没有已保存候选，无法直接进入选购。");
+      }
+      setSession(nextState);
+      setSelectedModuleId(coveredModule.module_id);
+      setSearchSummary((current) => [
+        ...current,
+        "你已接受已有部分结果；未完成模块已保留为跳过状态，本 Session 不会自动重新搜索"
+      ]);
+      await refreshMcpStatus().catch(() => undefined);
+      setStatusMessage("已使用已有部分结果进入选购；真实加购仍需逐件确认，未登录时会等待执行器恢复");
+      setStage("review_results");
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "接受已有部分结果失败");
+    } finally {
       setWorkflowControlBusy(false);
     }
   }
@@ -1212,11 +1284,13 @@ export function Dashboard() {
     if (!session) {
       return;
     }
+    const returnStage: WorkflowStage = stage === "cart_review" ? "cart_review" : "review_results";
     const confirmed = window.confirm(`确认将「${product.title}」加入购物车吗？`);
     if (!confirmed) {
       return;
     }
     setBusy(true);
+    setErrorMessage("");
     setCartingProductId(product.product_id);
     setStatusMessage(`正在将 ${product.title} 加入购物车`);
     try {
@@ -1236,7 +1310,7 @@ export function Dashboard() {
       });
       const hydrated = await hydrateSession(session.session_id);
       await refreshHostedInstruction(session.session_id);
-      setStage("review_results");
+      setStage(returnStage);
       setStatusMessage(
         response.demo_fallback
           ? `真实加购失败，已将 ${product.title} 加入产品内演示购物车`
@@ -1253,7 +1327,10 @@ export function Dashboard() {
       );
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : "加入购物车失败");
-      setStage("review_results");
+      setStage(returnStage);
+      if (returnStage === "cart_review") {
+        window.requestAnimationFrame(() => window.scrollTo({ top: 0, behavior: "smooth" }));
+      }
     } finally {
       setBusy(false);
       setCartingProductId("");
@@ -1435,12 +1512,17 @@ export function Dashboard() {
             expandedLogs={expandedLogs}
             setExpandedLogs={setExpandedLogs}
             onRefresh={async () => {
-              await hydrateSession(session.session_id);
-              await refreshHostedInstruction(session.session_id);
+              await Promise.all([
+                hydrateSession(session.session_id),
+                refreshHostedInstruction(session.session_id),
+                refreshMcpStatus()
+              ]);
             }}
             onViewResults={() => setStage("review_results")}
+            onUseExistingResults={viewExistingSearchResults}
             onPauseWorkflow={pauseServerWorkflow}
             onResumeWorkflow={resumeServerWorkflow}
+            onResumeAfterAuthentication={resumeAfterTaobaoAuthentication}
             busy={busy}
             workflowControlBusy={workflowControlBusy}
           />
@@ -1452,22 +1534,22 @@ export function Dashboard() {
             selectedModuleId={selectedModuleId}
             onSelectModule={setSelectedModuleId}
             selectedProducts={selectedProducts}
-            estimatedTotal={estimatedTotal}
-            onQuickAction={applyQuickAction}
-            onApplyBudgetSuggestion={applyBudgetSuggestion}
             onRecoverCompletionGaps={recoverCompletionGaps}
-            onImproveThinCandidates={improveThinCandidates}
             onAcceptPurchaseBundle={acceptPurchaseBundle}
             onAddToCart={addToCart}
             onProceedToCartReview={() => setStage("cart_review")}
+            onReturnToSearchProgress={() => setStage("searching")}
             expandedLogs={expandedLogs}
             setExpandedLogs={setExpandedLogs}
             mcpStatus={mcpStatus}
             workerStatus={workerStatus}
             hostedInstruction={hostedInstruction}
             onRefresh={async () => {
-              await hydrateSession(session.session_id);
-              await refreshHostedInstruction(session.session_id);
+              await Promise.all([
+                hydrateSession(session.session_id),
+                refreshHostedInstruction(session.session_id),
+                refreshMcpStatus()
+              ]);
             }}
             onSearchModule={searchSpecificModule}
             cartingProductId={cartingProductId}
@@ -1477,11 +1559,21 @@ export function Dashboard() {
 
         {stage === "cart_review" && session ? (
           <CartReviewPage
-            items={cartReviewItems}
-            total={estimatedTotal}
+            session={session}
+            mcpStatus={mcpStatus}
             onBack={() => setStage("review_results")}
+            onRefresh={async () => {
+              await Promise.all([
+                hydrateSession(session.session_id),
+                refreshMcpStatus()
+              ]);
+            }}
+            onAddToCart={addToCart}
             onRemoveDemoItem={removeDemoCartItem}
+            cartingProductId={cartingProductId}
+            busy={busy}
             removingProductId={removingCartProductId}
+            errorMessage={errorMessage}
           />
         ) : null}
 
@@ -1497,7 +1589,7 @@ export function Dashboard() {
           />
         ) : null}
 
-        {errorMessage ? (
+        {errorMessage && stage !== "cart_review" ? (
           <div className="rounded-[24px] border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
             {errorMessage}
           </div>

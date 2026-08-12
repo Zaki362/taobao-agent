@@ -1,4 +1,5 @@
 import { getExecutionBackend } from "@/lib/mcp/client";
+import { isTaskFromCurrentWorkflowRun } from "@/lib/agent/decision-engine";
 import { refreshMarketFeedback } from "@/lib/agent/market-feedback";
 import { reviewModuleCandidatesWithAgent } from "@/lib/agent/candidate-reviewer";
 import { executeMcpTool } from "@/lib/mcp/executor";
@@ -52,7 +53,8 @@ function buildFastFitReason(
 function buildSearchKeywordQueue(
   state: SessionState,
   module: ShoppingPlanModule,
-  keywordOverride?: string
+  keywordOverride?: string,
+  preserveRepeatedOverride = false
 ) {
   const plannedPrimary = module.search_strategy?.primary_keyword || module.search_keyword || "";
   const plannedPrimaryValidation = plannedPrimary
@@ -100,6 +102,7 @@ function buildSearchKeywordQueue(
     .find((keyword) => !previouslySearchedCategories.has(keyword));
 
   if (
+    !preserveRepeatedOverride &&
     isRecoverySearch &&
     stableKeywords[0] &&
     previouslySearchedCategories.has(stableKeywords[0]) &&
@@ -367,26 +370,34 @@ export async function runModuleSearch(
   moduleId: string,
   options?: {
     keywordOverride?: string;
+    confirmedRetry?: boolean;
   }
 ) {
   const module = state.shopping_plan.modules.find((item) => item.module_id === moduleId);
   if (!module) {
     throw new Error("module not found");
   }
-  invalidateAgentCompletionArtifacts(state);
-
-  const searchKeywordQueue = buildSearchKeywordQueue(state, module, options?.keywordOverride);
-  const searchIntent = searchKeywordQueue[0] || searchIntentForModule(state.scene_brief, module);
   const backend = getExecutionBackend();
+  const terminalLocalTask = backend === "local_executor"
+    ? state.hosted_tasks.find(
+        (task) =>
+          task.task_type === "module_search" &&
+          task.module_id === module.module_id &&
+          isTaskFromCurrentWorkflowRun(state, task) &&
+          (task.status === "completed" || task.status === "failed" || task.status === "cancelled")
+      )
+    : undefined;
+  const confirmedTerminalRetry =
+    options?.confirmedRetry === true &&
+    (terminalLocalTask?.status === "failed" || terminalLocalTask?.status === "cancelled");
+  const searchKeywordQueue = buildSearchKeywordQueue(
+    state,
+    module,
+    options?.keywordOverride,
+    confirmedTerminalRetry
+  );
+  const searchIntent = searchKeywordQueue[0] || searchIntentForModule(state.scene_brief, module);
   if (backend === "codex_hosted" || backend === "local_executor") {
-    const terminalLocalTask = backend === "local_executor"
-      ? state.hosted_tasks.find(
-          (task) =>
-            task.task_type === "module_search" &&
-            task.module_id === module.module_id &&
-            (task.status === "completed" || task.status === "failed" || task.status === "cancelled")
-        )
-      : undefined;
     const previousTrace = state.module_search_traces[moduleId];
     const completedAttempts = previousTrace?.attempts.filter(
       (attempt) => attempt.status === "success" || attempt.status === "error"
@@ -407,9 +418,13 @@ export async function runModuleSearch(
       hasExistingCandidates &&
       isNewKeyword &&
       completedAttempts < maxSearchAttempts(state);
-    if (terminalLocalTask && !userConfirmedRetry && !controlledSupplementalRetry) {
+    if (
+      (terminalLocalTask?.status === "completed" && options?.confirmedRetry === true) ||
+      (terminalLocalTask && !confirmedTerminalRetry && !userConfirmedRetry && !controlledSupplementalRetry)
+    ) {
       return state.module_candidates[moduleId] ?? [];
     }
+    invalidateAgentCompletionArtifacts(state);
     if (backend === "local_executor") {
       await enqueueModuleSearchJob(state, {
         moduleId: module.module_id,
@@ -464,6 +479,7 @@ export async function runModuleSearch(
     return state.module_candidates[moduleId] ?? [];
   }
 
+  invalidateAgentCompletionArtifacts(state);
   let mergedResults: SearchResultItem[] = [];
   const searchedKeywords = new Set<string>();
   const attempts: ModuleSearchAttempt[] = [];

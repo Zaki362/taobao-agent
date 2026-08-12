@@ -256,7 +256,8 @@ export function HostedConsole() {
           body: JSON.stringify({
             session_id: selectedSession.session_id,
             module_id: task.module_id,
-            keyword_override: typeof task.payload.keyword === "string" ? task.payload.keyword : undefined
+            keyword_override: typeof task.payload.keyword === "string" ? task.payload.keyword : undefined,
+            confirmed_retry: true
           })
         });
       } else if (task.task_type === "add_to_cart" && task.product_id) {

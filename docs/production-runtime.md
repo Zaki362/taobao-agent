@@ -108,6 +108,8 @@ TAOBAO_NATIVE_MCP_URL=http://127.0.0.1:3654/mcp
 TAOBAO_SOURCE_APP=SceneCartAI
 EXECUTOR_TAOBAO_SEARCH_TIMEOUT_MS=60000
 EXECUTOR_TAOBAO_CART_TIMEOUT_MS=60000
+EXECUTOR_TAOBAO_AUTH_RECOVERY_POLL_MS=10000
+EXECUTOR_TAOBAO_AUTH_PROBE_TIMEOUT_MS=10000
 ```
 
 再执行：
@@ -122,9 +124,9 @@ Doctor 会初始化官方本地 MCP 并检查工具列表、服务端和设备�
 npm run worker:local
 ```
 
-Worker 启动时会再次执行无副作用的 MCP `tools/list` 检查；只有官方 MCP、服务端健康、设备令牌和 `module_search` 能力都通过后，才会发送鉴权心跳并开始领取任务。启用真实加购的设备还必须检测到 `add_to_cart`。Doctor 会打印令牌当前拥有的商品搜索 / 真实加购能力。因此设置页显示“在线”代表基础执行链路已通过，而不只是本地进程存在。
+Worker 启动时会再次执行无副作用的 MCP `tools/list` 检查；只有官方 MCP、服务端健康、设备令牌和 `module_search` 能力都通过后，才会发送鉴权心跳并开始领取任务。搜索设备还必须检测到 `get_current_tab`，用于登录失败后的恢复检查；启用真实加购的设备还必须检测到 `get_product_skus` 和 `add_to_cart`。Doctor 会打印令牌当前拥有的商品搜索 / 真实加购能力。因此设置页显示“在线”代表基础执行链路已通过，而不只是本地进程存在。
 
-真实任务采用最小调用面：搜索使用淘宝 skill 默认的综合搜索路径 `all` 且只调用一次 `search_products`，加购只调用一次 `add_to_cart`。执行器不使用 `get_current_tab` 做前置或后置登录检查，因为淘宝桌面端在内部登录状态不同步时会让该工具主动跳转登录页；同理也不强制进入容易触发独立登录跳转的 PC 搜索路由。Worker 在完整生命周期内复用同一个 Streamable HTTP `mcp-session-id`，仅在协议明确报告会话失效时重新初始化。退出时只清理本地会话引用，不向淘宝发送远端 `DELETE`；淘宝桌面端会按 TTL 回收旧会话，避免远端终止连带破坏购物 WebView 登录态。若真实工具返回登录错误，执行器会立即停止当前任务并打开鉴权熔断；用户重新登录并重启执行器前不会继续领取任务。
+真实任务采用最小调用面：搜索使用淘宝 skill 默认的综合搜索路径 `all` 且每次用户确认只调用一次 `search_products`；加购先读取 `get_product_skus`，只有淘宝明确返回无规格或用户已完整选择有效规格时，才调用一次 `add_to_cart`。执行器不在搜索或加购前后调用 `get_current_tab`，因为淘宝桌面端在内部登录状态不同步时会让该工具主动跳转登录页；该工具只会在真实调用已经报告登录失败、Worker 进入鉴权暂停后用于低频检测登录是否恢复。Worker 在完整生命周期内复用同一个 Streamable HTTP `mcp-session-id`，仅在协议明确报告会话失效时重新初始化。退出时只清理本地会话引用，不向淘宝发送远端 `DELETE`；淘宝桌面端会按 TTL 回收旧会话，避免远端终止连带破坏购物 WebView 登录态。若真实工具返回登录错误，执行器会立即停止当前任务并暂停领取；用户在淘宝完成登录后无需重启 Worker，设备会恢复在线，但失败任务不会自动重放。网页会保留已回填候选，并要求用户显式选择“重新登录后继续搜索”以重试同一任务，或选择“用已有部分结果进入选购”跳过等待；两条路径都不会生成 mock 候选。
 
 Worker、Doctor 和服务端使用统一的执行器协议版本。每次心跳、任务领取和结果回填都会携带协议版本；缺失或不兼容时服务端返回 `426 executor_protocol_mismatch`。升级网页服务后应同步更新本地项目并重启 Worker，旧进程不会继续领取新任务。
 
@@ -134,6 +136,8 @@ Worker、Doctor 和服务端使用统一的执行器协议版本。每次心跳�
 EXECUTOR_POLL_MS=2500
 EXECUTOR_TAOBAO_SEARCH_TIMEOUT_MS=60000
 EXECUTOR_TAOBAO_CART_TIMEOUT_MS=60000
+EXECUTOR_TAOBAO_AUTH_RECOVERY_POLL_MS=10000
+EXECUTOR_TAOBAO_AUTH_PROBE_TIMEOUT_MS=10000
 ```
 
 执行器每 15 秒发送心跳，并在有运行任务时续租。服务端明确拒绝续租时，Worker 会立即中止本地工具子进程；连续心跳失败达到 `EXECUTOR_LEASE_FAILURE_LIMIT`（默认 3）时也会 fail closed，避免失去任务所有权后继续执行真实淘宝动作或回填旧结果。任务完成结果会先写入 `.data/local-executor/results`，再回填服务端；若回执失败，租约恢复后会重放结果，不重复执行淘宝动作。

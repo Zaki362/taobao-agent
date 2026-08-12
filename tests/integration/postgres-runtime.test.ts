@@ -360,7 +360,7 @@ describeWithDatabase("PostgreSQL production runtime contract", () => {
         product_id: "pg-replay-product",
         title: "PostgreSQL 幂等候选商品",
         price: 129,
-        source: "淘宝本地执行器测试",
+        source: "淘宝",
         shop_name: "并发测试旗舰店",
         image_url: "https://example.com/product.jpg",
         detail_url: "https://item.taobao.com/item.htm?id=pg-replay-product",
@@ -370,7 +370,20 @@ describeWithDatabase("PostgreSQL production runtime contract", () => {
         fit_reason: "用于验证并发结果不会覆盖 Session",
         recommendation_type: "稳妥推荐",
         module_id: module.module_id
-      }]
+      }],
+      evidence: {
+        schema: "scenecart.taobao-mcp-search-evidence/v1",
+        source: "taobao-mcp",
+        tool: "search_products",
+        source_app: "SceneCartPostgresIntegration",
+        job_id: queued.id,
+        module_id: String(queued.payload.module_id ?? ""),
+        workflow_run_id: String(queued.payload.workflow_run_id ?? ""),
+        keyword: String(queued.payload.keyword ?? ""),
+        captured_at: new Date().toISOString(),
+        cache_hit: false,
+        raw_result_count: 1
+      }
     };
 
     const completions = await Promise.all([

@@ -5,6 +5,7 @@ node_modules
 .next
 .next-verify
 .next-e2e
+.next-interview-demo
 .vercel
 out
 dist

@@ -30,7 +30,7 @@ export const stageLabels: Record<WorkflowStage, string> = {
   confirm_plan: "确认规划",
   searching: "执行搜索",
   review_results: "查看推荐",
-  cart_review: "确认下单",
+  cart_review: "购买确认",
   refining: "调整方案",
   carting: "加入购物车"
 };

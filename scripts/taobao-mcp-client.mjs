@@ -186,6 +186,18 @@ export class TaobaoMcpClient {
     if (unwrapped && typeof unwrapped === "object" && typeof unwrapped.error === "string") {
       throw new Error(unwrapped.error);
     }
+    if (
+      unwrapped &&
+      typeof unwrapped === "object" &&
+      unwrapped.success === false &&
+      unwrapped.needsSkuSelection !== true &&
+      unwrapped.needs_sku_selection !== true
+    ) {
+      const message = typeof unwrapped.message === "string"
+        ? unwrapped.message
+        : `淘宝 MCP 工具 ${name} 返回失败`;
+      throw new Error(message);
+    }
     return unwrapped;
   }
 }

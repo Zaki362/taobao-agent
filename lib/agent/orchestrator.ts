@@ -181,6 +181,7 @@ export async function searchModule(
   moduleId: string,
   options?: {
     keywordOverride?: string;
+    confirmedRetry?: boolean;
   },
   userId?: string
 ) {

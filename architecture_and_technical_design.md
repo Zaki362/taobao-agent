@@ -1,6 +1,6 @@
 # SceneCart AI 产品架构与技术方案
 
-> 2026-07 Runtime 2.0 更新：当前正式架构已增加 PostgreSQL、用户认证、持久 Job Queue、执行事件/SSE、本地 Qoder/Taobao 执行器，以及模型驱动 `decide_next_action`。文档中关于内存 Session、同步 Qoder 请求或 Codex hosted 主路径的描述仅代表历史演进；正式推荐路径以本节和 `docs/production-runtime.md` 为准。
+> 2026-08 Runtime 2.0 更新：当前正式架构已增加 PostgreSQL、用户认证、持久 Job Queue、执行事件/SSE、本地执行器直连淘宝桌面版官方 HTTP MCP，以及模型驱动 `decide_next_action`。文档中关于内存 Session、同步 Qoder 请求或 Codex hosted 主路径的描述仅代表历史兼容代码；正式推荐路径以本节、`docs/production-runtime.md` 和 `docs/interview-demo.md` 为准。
 
 ## 0. 当前正式运行架构
 
@@ -20,7 +20,7 @@ Browser / React workflow
 Local Executor on user's device
   -> device token + heartbeat
   -> claim leased job
-  -> Qoder CLI -> Taobao skill
+  -> Taobao desktop official HTTP MCP (127.0.0.1:3654/mcp)
   -> local result ledger
   -> idempotent resolve API
 ```
@@ -28,7 +28,7 @@ Local Executor on user's device
 正式实现的关键变化：
 
 - Session 不再只依赖 Next.js 进程内 Map 或本地 JSON；`RUNTIME_STORE=postgres` 时按用户持久化到 PostgreSQL。
-- Qoder/Taobao 不再运行在 `/api/modules/search` 或 `/api/cart/add` 的长请求内；API 只创建任务并立即返回。
+- 淘宝桌面自动化不在 `/api/modules/search` 或 `/api/cart/add` 的长请求内运行；API 只创建任务并立即返回，本地执行器再通过官方 HTTP MCP 完成动作。
 - 本地执行器使用一次性设备令牌、15 秒心跳、任务租约、最大重试次数和结果账本。
 - 默认开发入口 `npm run dev` 同时管理网页与本地执行器：先确定唯一可用端口并启动 Web，再从受保护的 `.env.local` 热发现设备令牌，Web 健康后启动 Worker；`dev:web` 保留给测试和纯 UI 排障，避免 E2E 意外领取真实淘宝任务。
 - 搜索、失败重试、Agent 状态转换和加购结果以执行事件写入，并通过 SSE 自动刷新当前浏览器会话。
@@ -39,7 +39,7 @@ Local Executor on user's device
 - 保守档位、模型失败、低置信度、越界动作或预算耗尽时，确定性策略始终可接管。
 - 旧 Qoder 直连、Codex hosted 与 experimental bridge 仅保留为开发兼容路径；production 强制使用 `local_executor`，并以 `410 legacy_hosted_disabled` 关闭旧 hosted Worker API。
 
-当前生产边界：服务端运行时已具备正式架构，但真实淘宝能力仍依赖用户本机淘宝桌面版、Qoder CLI、淘宝 skill、登录态与淘宝侧开放权限；系统不承诺绕过这些外部限制，也不会自动下单或支付。
+当前生产边界：服务端运行时已具备正式架构，但真实淘宝能力仍依赖用户本机淘宝桌面版、官方 HTTP MCP、登录态与淘宝侧开放权限，不依赖 Qoder。系统不承诺绕过这些外部限制；交易能力止于用户显式确认后的淘宝购物车，不会自动下单、提交订单或支付。
 
 ## 1. 产品架构总览
 
@@ -52,7 +52,7 @@ Local Executor on user's device
 3. **Agent orchestration 层**
 4. **场景配置 / 模板层**
 5. **DeepSeek 模型层**
-6. **MCP / skill / 工具调用层**
+6. **MCP / 工具调用层**
 7. **Session / context 状态管理层**
 8. **Mock / Live 执行模式层**
 
@@ -87,7 +87,7 @@ Local Executor on user's device
 
 解决“自然语言理解、结构化补充和个性化微调”的问题，而不是承担全部系统决策。
 
-#### MCP / skill / 工具调用层
+#### MCP / 工具调用层
 
 解决真实商品搜索、详情提取、加购执行等外部能力接入问题。
 
@@ -175,7 +175,7 @@ Local Executor on user's device
 - 展示 Scene Brief
 - 展示规划结果
 - 展示推荐商品
-- 展示执行摘要和下单确认页
+- 展示执行摘要和购买确认页
 - 提供快捷调整入口
 
 ### 输入输出
@@ -343,7 +343,7 @@ Local Executor on user's device
 
 - 定义每个购物场景的基础模块结构
 - 提供场景文案、输入提示、字段标签、快捷操作等配置
-- 为未来多场景扩展提供统一抽象
+- 为多场景共享工作流提供统一抽象
 
 ### 输入输出
 
@@ -365,7 +365,7 @@ Local Executor on user's device
 
 ### 当前实现状态
 
-**部分实现**
+**已实现，真实设备回归以新车场景为基线**
 
 已建立的配置层文件：
 
@@ -377,7 +377,7 @@ Local Executor on user's device
 - [lib/scenarios/dorm-move-in.ts](./lib/scenarios/dorm-move-in.ts)
 - [lib/scenarios/moving-setup.ts](./lib/scenarios/moving-setup.ts)
 
-但当前产品稳定运行版本仍主要围绕“新车选购”。
+首页已开放新车选购、露营准备、房间装饰、宿舍入学和搬家置办五个场景。它们的文案、字段、规划模板、搜索策略与快捷动作均从 `ScenarioConfig` 读取并复用统一工作流；当前真实淘宝设备的持续回归和面试脚本固定使用“新车选购”，不表示其他四个入口仍处于未开放状态。
 
 ---
 
@@ -435,15 +435,15 @@ DeepSeek 在系统中不做“自由 Agent”，而做“受约束的结构化�
 
 ---
 
-## 2.6 MCP / skill / 工具调用层
+## 2.6 MCP / 工具调用层
 
 ### 主要职责
 
 - 接入淘宝搜索能力
 - 接入详情提取能力
-- 接入加购物能力
+- 接入加购能力
 - 记录工具日志
-- 抽象 live / mock / qoder 执行差异
+- 抽象正式 `local_executor` 与显式开发兼容 provider 的执行差异
 - 对高风险动作做服务端确认校验
 
 ### 输入输出
@@ -467,15 +467,16 @@ DeepSeek 在系统中不做“自由 Agent”，而做“受约束的结构化�
 
 ### 当前实现状态
 
-**部分实现**
+**已实现，外部能力受淘宝客户端状态约束**
 
-工具抽象已建立，真实淘宝执行具备一定能力，但不稳定。
+正式链路已经收敛为持久任务队列、本地执行器和淘宝桌面版官方 HTTP MCP。搜索可以回填真实候选；详情与加购仍会受到登录态、商品规格和淘宝侧授权影响。旧 Qoder、hosted、experimental 与 mock adapter 只作为显式开发兼容代码保留。
 
 关键文件：
 
 - [lib/mcp/types.ts](./lib/mcp/types.ts)
 - [lib/mcp/client.ts](./lib/mcp/client.ts)
 - [lib/mcp/executor.ts](./lib/mcp/executor.ts)
+- [lib/mcp/local-executor.ts](./lib/mcp/local-executor.ts)
 - [lib/mcp/qoder.ts](./lib/mcp/qoder.ts)
 - [lib/mcp/mock.ts](./lib/mcp/mock.ts)
 - [lib/mcp/hosted.ts](./lib/mcp/hosted.ts)
@@ -557,7 +558,7 @@ DeepSeek 在系统中不做“自由 Agent”，而做“受约束的结构化�
 
 - 正式路径通过 `local_executor` 持久任务执行搜索与加购
 - `SCENECART_PRODUCT_MODE=production` 时强制关闭演示加购回退
-- 开发预览可显式保留 demo cart，但 UI 必须标注来源
+- 开发预览只有在显式允许回退且使用同步兼容 provider 时可写入 demo cart，UI 必须标注来源；`local_executor` 异步失败不会自动生成演示项
 
 ---
 
@@ -709,7 +710,7 @@ DeepSeek 可参与该自检；无 key、超时或结构不合法时，系统回�
 - `suggested_keyword`：必要时给出可直接补搜的关键词
 - `source`：标记本次评估来自启发式规则还是 DeepSeek 复盘
 
-Qoder 搜索结果回填后会优先尝试一次 DeepSeek 候选池复盘。该调用同时返回候选池质量判断和最多三条与 `product_id` 一一对应的商品适配理由，避免逐商品调用导致延迟线性增长。服务端要求理由覆盖且仅覆盖当前候选 ID，并限制文本长度；无 key、超时、遗漏、重复 ID 或结构不合法时，自动回退到启发式评估和原有规则理由。这样 AI 可以参与“看完商品后怎么判断”，但不会让搜索主链路被模型调用拖垮或把编造商品写入 Session。
+淘宝桌面版官方 HTTP MCP 搜索结果经本地执行器回填后，会优先尝试一次 DeepSeek 候选池复盘。该调用同时返回候选池质量判断和最多三条与 `product_id` 一一对应的商品适配理由，避免逐商品调用导致延迟线性增长。服务端要求理由覆盖且仅覆盖当前候选 ID，并限制文本长度；无 key、超时、遗漏、重复 ID 或结构不合法时，自动回退到启发式评估和原有规则理由。这样 AI 可以参与“看完商品后怎么判断”，但不会让搜索主链路被模型调用拖垮或把编造商品写入 Session。
 
 #### Module Search Traces
 
@@ -748,7 +749,7 @@ Qoder 搜索结果回填后会优先尝试一次 DeepSeek 候选池复盘。该�
 
 #### Selected Items
 
-由加购行为累积写入，用于下单确认页和 demo cart。
+由加购行为累积写入，用于购买确认页以及开发预览中的 demo cart。
 
 ---
 
@@ -944,7 +945,7 @@ DeepSeek 目前承担六类结构化任务：
 
 这意味着即便模型输出不完全规范，系统也会尽量归一化到可用格式。
 
-### 4.5 mock fallback 如何设计
+### 4.5 模型 fallback 如何设计
 
 当没有 `DEEPSEEK_API_KEY`，或模型调用失败时：
 
@@ -954,17 +955,19 @@ DeepSeek 目前承担六类结构化任务：
 - `mockExplainProductFit`
 - 启发式 `reviewModuleCandidates`
 
-会提供一个稳定的 mock 结果。
+会提供一个稳定、经过校验的确定性结果。
 
 这样做的目的不是伪装真实模型，而是：
 
-- 确保整个产品链路始终可演示
+- 确保需求理解、规划、自检、推荐解释与组合计算在模型不可用时仍可演示
 - 让架构随时可切换到真实模型
 - 保持状态透明：只有 DeepSeek API 实际返回可解析 JSON 时才标记为 `connected`，否则 session 会标记为 `mock`
 
+这里的 fallback 只替代模型产出，不会伪造淘宝搜索结果。正式 `local_executor` 无法连接淘宝桌面版 MCP 时，工具任务会失败或暂停；面试现场只能恢复预演时持久化的真实候选，或明确切换到不含真实搜索的讲解路径。
+
 ---
 
-## 5. MCP / 淘宝 skill 技术方案
+## 5. 淘宝桌面版 HTTP MCP 技术方案
 
 ### 5.1 MCP 工具层如何抽象
 
@@ -977,7 +980,7 @@ DeepSeek 目前承担六类结构化任务：
 
 这些工具不直接暴露给前端，而由后端通过 executor 调用。
 
-executor 不只负责转发工具调用，也负责把 adapter 输出归一化成统一结构：搜索结果会过滤缺少商品 ID 或标题的脏数据、按商品 ID 去重、价格转成数字、店铺/标签/卖点裁剪到可展示范围；详情与加购输出也会补齐必要字段并校验高风险结果。这层防线让 Qoder skill、local bridge、mock adapter 的返回差异不会直接污染推荐链路和前端页面。
+executor 不只负责转发工具调用，也负责把 adapter 输出归一化成统一结构：搜索结果会过滤缺少商品 ID 或标题的脏数据、按商品 ID 去重、价格转成数字、店铺/标签/卖点裁剪到可展示范围；详情与加购输出也会补齐必要字段并校验高风险结果。这层防线让淘宝桌面版官方 HTTP MCP 与显式开发兼容 adapter 的返回差异不会直接污染推荐链路和前端页面。
 
 ### 5.2 search / open detail / extract info / add to cart 如何组织
 
@@ -1014,7 +1017,7 @@ executor 不只负责转发工具调用，也负责把 adapter 输出归一化�
 - MCP executor 根据 `schema.requires_confirmation` 再次校验高风险工具参数
 - 先尝试真实加购
 - 正式产品模式失败时明确返回错误并保留重试能力
-- 只有开发预览模式可选择写入明确标记的 demo cart
+- 只有 development、显式开启回退且走同步兼容 provider 时，异常才可写入明确标记的 demo cart
 
 购物车确认页进一步采用来源隔离：`selected_items.cart_source` 明确区分 `taobao` 与 `demo`。`/api/cart/remove` 只允许删除经过用户确认的 `demo` 条目，并在 Session 锁内同步 `bundle_adoption`；真实淘宝条目和缺少来源的历史条目全部 fail-closed，只提供前往淘宝购物车管理的入口。这样不会把“删除产品内账本记录”伪装成“删除淘宝购物车商品”，也不会误伤用户原有购物车。
 
@@ -1033,16 +1036,17 @@ executor 不只负责转发工具调用，也负责把 adapter 输出归一化�
 
 - 正式产品使用 `local_executor`，只接受真实工具结果
 - 正式加购失败不会修改 `selected_items`，由用户修复登录/权限后重试
-- 开发预览可以启用 demo cart fallback，用于展示完整界面，但结果必须标注为“演示购物车”
+- demo cart fallback 只有在 `SCENECART_PRODUCT_MODE=development`、`ALLOW_DEMO_CART_FALLBACK=true` 且加购走同步开发兼容 provider 时才会生效，结果必须标注为“演示购物车”
+- 正式主路径 `local_executor` 使用异步 Job；Job 失败会保留为可重试失败，不会因为开发开关而自动写入 demo item
 - `/api/runtime/readiness` 会把开发模式或开启演示回退视为不满足发布条件
 
 ### 5.4 为什么不能假设宿主一定开放能力
 
 因为这个项目真实踩到了：
 
-- 本地 bridge 不稳定
-- 宿主权限不透明
-- Qoder CLI 和桌面端能力不完全一致
+- 淘宝桌面版 MCP 可能未开启或未暴露所需工具
+- 账号登录态和淘宝侧授权可能变化
+- 本地执行器、设备令牌与服务端协议可能不一致
 - 商品详情页导航会影响淘宝登录态
 
 所以产品架构不能默认：
@@ -1051,20 +1055,21 @@ executor 不只负责转发工具调用，也负责把 adapter 输出归一化�
 - 宿主一定授权
 - 详情页一定安全
 
-必须始终保留 fallback 设计。
+必须始终保留可恢复状态和明确失败边界。模型可以走确定性 fallback；真实工具结果不能用 mock 冒充。
 
-### 5.5 当前产品和宿主 / 本地 bridge / 淘宝 MCP 的关系
+### 5.5 当前产品和淘宝桌面版 MCP 的关系
 
 当前真实关系是：
 
-- 产品本体是一个本地 Web 应用
-- 它不能直接复用 Qoder 桌面 GUI 内部状态
-- 当前主要通过 `qodercli` 调起淘宝 skill
-- 也保留了 mock 和 hosted 的抽象结构
+- Web 服务负责编排、持久化和鉴权，不在请求内操作淘宝客户端
+- 用户设备上的 `worker:local` 使用设备令牌领取持久任务
+- `worker:local` 直连淘宝桌面版官方 Streamable HTTP MCP，默认地址为 `http://127.0.0.1:3654/mcp`
+- 搜索或加购结果通过幂等 resolve API 回填，浏览器通过 SSE 与恢复轮询观察状态
+- 旧 Qoder、hosted、experimental bridge 和 mock adapter 只在开发环境显式启用
 
 换句话说，当前是：
 
-**产品后端 -> qodercli / skill -> taobao-native / 淘宝客户端**
+**产品后端 -> 持久 Job Queue -> local executor -> 淘宝桌面版官方 HTTP MCP**
 
 而不是：
 
@@ -1380,7 +1385,7 @@ executor 不只负责转发工具调用，也负责把 adapter 输出归一化�
 
 - API route
 - Agent product-matcher
-- MCP / skill 工具层
+- MCP / 工具层
 
 #### 产出数据
 
@@ -1456,30 +1461,30 @@ executor 不只负责转发工具调用，也负责把 adapter 输出归一化�
 
 ---
 
-### Step 9：加入购物车
+### Step 9：显式加购与购买确认
 
 #### 调用层
 
 - 前端交互层
 - API route
 - Agent cart
-- MCP / skill 工具层
+- MCP / 工具层
 
 #### 产出数据
 
 - 真实加购成功：写入 `selected_items`
 - 正式模式真实加购失败：不写入商品，返回可识别错误
-- 开发预览且允许回退：写入明确标记的 demo cart item
+- development + `ALLOW_DEMO_CART_FALLBACK=true` + 同步兼容 provider 失败：写入明确标记的 demo cart item
 
 #### 数据流向
 
 - `/api/cart/add`
 -> `addToCart`
 -> `runCartExecutor`
--> 尝试 `executeMcpTool("add_to_cart")`
--> 若成功：写入真实加购结果
--> 若失败：正式模式返回失败；开发预览可按配置回退到 demo cart
--> 前端进入购物确认页
+-> 正式 `local_executor` 创建异步加购 Job，由本地执行器调用淘宝桌面版官方 HTTP MCP
+-> 若成功：写入真实加购结果；若失败：保留失败并允许用户修复后重试
+-> 同步开发兼容 provider 失败时，仅在开发预览且显式允许回退时写入 demo cart
+-> 前端进入购买确认页；真实条目可继续打开淘宝购物车，系统不会自动下单或支付
 
 购物确认页的移除链路：
 
@@ -1522,7 +1527,7 @@ executor 不只负责转发工具调用，也负责把 adapter 输出归一化�
 
 ### 9.5 工具层具备真实连接能力
 
-尽管不稳定，但系统已经不是纯 mock 页面，而是真实尝试接入了淘宝执行能力。
+系统已经不是纯 mock 页面：正式本地执行器可通过淘宝桌面版官方 HTTP MCP 回填真实搜索与加购结果。其可用性仍取决于客户端、登录态、工具授权和具体商品规格。
 
 ---
 
@@ -1533,12 +1538,12 @@ executor 不只负责转发工具调用，也负责把 adapter 输出归一化�
 当前最薄弱的环节是淘宝执行层，尤其是：
 
 - 商品详情页导航
-- 加购物
-- Qoder stdout 稳定性
+- 多规格商品的 SKU 选择
+- 淘宝客户端登录态与 MCP 工具授权稳定性
 
-### 10.2 场景泛化尚未完全落地
+### 10.2 多场景已开放，真实设备验收深度仍不一致
 
-场景配置层已经开始建立，但前端与搜索层还未完全切换到配置驱动。
+首页和统一工作流已经开放五个 `ScenarioConfig` 场景。新车场景覆盖了最完整的真实设备回归与面试脚本；其他场景仍需要补齐同等深度的真实搜索样本、长期回归和针对性验收数据。
 
 ### 10.3 工作流恢复调度仍需部署平台托管
 
@@ -1552,18 +1557,17 @@ executor 不只负责转发工具调用，也负责把 adapter 输出归一化�
 
 正式主路径已经收敛为 `local_executor + durable job queue + device token`，且该路径也是未配置 backend 时的默认值。安装 Qoder 不会再触发隐式 provider 切换。主页面只在显式 `codex_hosted` 开发模式下读取旧 Worker 状态，production 会拒绝 legacy hosted API；`qoder_cli`、hosted、experimental bridge 和 mock adapter 仍作为显式 opt-in 的迁移、开发与测试代码存在。手动 MCP 调试端点默认关闭并由 readiness/release audit 约束。后续在真实设备验收稳定后，应按版本计划删除不再需要的旧 provider，而不是让它们重新进入正式运行时。
 
-设备注册后签发的明文 Token 只展示一次。开发机通过 `executor:configure` 在交互式终端中隐藏输入，脚本只更新 `TAOBAO_EXECUTION_BACKEND`、`SCENECART_API_URL`、`SCENECART_DEVICE_TOKEN` 与 `QODERCLI_PATH`，保留其他环境变量，使用临时文件原子替换 `.env.local` 并强制 `0600` 权限。服务端始终只持久化 Token 的 SHA-256 摘要，Doctor 与 Worker 再通过 Bearer Token 和协议版本完成设备鉴权。
+设备注册后签发的明文 Token 只展示一次。开发机通过 `executor:configure` 在交互式终端中隐藏输入，脚本只更新 `TAOBAO_EXECUTION_BACKEND`、`SCENECART_API_URL` 与 `SCENECART_DEVICE_TOKEN`，保留其他环境变量，使用临时文件原子替换 `.env.local` 并强制 `0600` 权限。淘宝 MCP 地址和调用来源分别由 `TAOBAO_NATIVE_MCP_URL`、`TAOBAO_SOURCE_APP` 配置。服务端始终只持久化 Token 的 SHA-256 摘要，Doctor 与 Worker 再通过 Bearer Token 和协议版本完成设备鉴权。
 
 ### 10.6 下一步理想演进方向
 
 从架构角度看，下一步更理想的演进路径应该是：
 
-1. 完成 scenario config 全链路接入
-2. 统一执行策略，收敛主工具通道
-3. 增加真正稳定的商品详情 / SKU / 购物车能力
-4. 把恢复调度失联和长时间未恢复会话接入外部通知渠道
-5. 拆分 dashboard 的页面级状态
-6. 增加真实设备验收、故障注入和长时间运行测试
+1. 为五个已开放场景补齐同等深度的真实设备验收集
+2. 增加稳定的商品详情 / SKU / 购物车能力
+3. 把恢复调度失联和长时间未恢复会话接入外部通知渠道
+4. 拆分 dashboard 的页面级状态
+5. 增加真实设备故障注入和长时间运行测试
 
 ---
 
@@ -1629,8 +1633,9 @@ executor 不只负责转发工具调用，也负责把 adapter 输出归一化�
 - MCP client
 - MCP executor
 - MCP tool schema / risk policy
-- Qoder / taobao skill
 - local executor / durable job queue
+- 淘宝桌面版官方 HTTP MCP
+- Qoder / hosted / experimental compatibility providers
 - mock MCP adapter
 
 #### 状态层
@@ -1648,13 +1653,13 @@ executor 不只负责转发工具调用，也负责把 adapter 输出归一化�
 4. orchestrator -> 场景模板层
 5. orchestrator -> DeepSeek
 6. orchestrator -> MCP executor
-7. MCP executor -> qoder skill / mock adapter
+7. MCP executor -> local executor adapter -> Agent Job Queue
 8. orchestrator -> Session Store
 9. Session Store -> API route -> 前端
 10. 推荐页 / 执行台 -> 同一个 SessionState
 11. product-matcher -> candidate-ranker -> candidate-reviewer -> module_reviews
 12. 推荐页 -> keyword_override -> `/api/modules/search` -> product-matcher
-13. workflow-runner -> Agent Job Queue -> local executor -> Qoder / taobao skill
+13. workflow-runner -> Agent Job Queue -> local executor -> 淘宝桌面版官方 HTTP MCP
 14. local executor -> result callback -> Session advisory lock -> workflow-runner
 15. recovery worker / cloud Cron -> internal recovery API -> workflow-recovery
 

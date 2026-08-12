@@ -2,7 +2,7 @@
 
 ## 部署边界
 
-正式部署只托管 Next.js、PostgreSQL、DeepSeek 调用和持久任务队列。Qoder CLI、淘宝 skill、淘宝桌面版登录态与设备令牌始终留在用户本机，通过 `worker:local` 领取该用户的任务。
+正式部署只托管 Next.js、PostgreSQL、DeepSeek 调用和持久任务队列。用户本机运行 `worker:local`，用设备令牌领取任务并直连淘宝桌面版官方 HTTP MCP；淘宝客户端、MCP 地址、登录态与设备令牌都不进入 Web 容器。Qoder 不属于正式执行链路。
 
 ## 本地生产预览
 
@@ -15,7 +15,7 @@ DEEPSEEK_API_KEY='你的密钥' \
 docker compose up --build
 ```
 
-打开 `npm run dev` 在终端打印的“页面地址”，注册账号后前往同一地址下的 `/settings/executor` 注册本机执行器。若 `3000` 已被占用，开发启动器会自动选择其他端口，配置脚本和 Doctor 会自动识别实际 SceneCart 实例。
+打开 Compose 暴露的地址（默认 `http://127.0.0.1:3000`），注册账号后前往 `/settings/executor` 注册本机执行器。若通过 `PORT` 映射到其他端口，`APP_ORIGIN` 和本地执行器的 `SCENECART_API_URL` 必须使用同一个实际地址。自动选择空闲端口只适用于 `npm run dev`，不适用于 Compose。
 
 ## HTTPS 正式环境
 
@@ -34,7 +34,7 @@ SCENECART_CRON_SECRET=至少32字符的独立随机密钥
 SCENECART_RECOVERY_STALE_MS=180000
 ```
 
-`DATABASE_URL`、`POSTGRES_PASSWORD`、`DEEPSEEK_API_KEY`、`SCENECART_CRON_SECRET` 和设备令牌应使用部署平台 Secret，不写入镜像、Compose 文件或 Git。自托管 Compose 会启动独立 `recovery` 服务；其他平台应每分钟携带 Bearer Secret 调用 `/api/internal/workflow-recovery`。
+`DATABASE_URL`、`POSTGRES_PASSWORD`、`DEEPSEEK_API_KEY` 和 `SCENECART_CRON_SECRET` 应使用部署平台 Secret，不写入镜像、Compose 文件或 Git。设备令牌只保存在运行 `worker:local` 的用户机器 `.env.local` 中，不上传到部署平台。自托管 Compose 会启动独立 `recovery` 服务；其他平台应每分钟携带 Bearer Secret 调用 `/api/internal/workflow-recovery`。
 
 ## 发布检查
 
@@ -58,15 +58,17 @@ SCENECART_RELEASE_VERIFY_URL=https://scenecart.example.com npm run release:verif
 
 `production` 运行时会安全阻断三类误配置：匿名访问会被强制关闭；HTTPS Origin 下的 Cookie 不允许被 `AUTH_COOKIE_SECURE=false` 降级；本地 Session 仓库不能代替 PostgreSQL。安全覆盖只用于 fail-closed，不会让 readiness 变绿，部署环境仍必须显式配置 `AUTH_REQUIRED=true`、`AUTH_COOKIE_SECURE=true`、`RUNTIME_STORE=postgres` 和 `DATABASE_URL`。
 
-`db:check` 会同时核对 migration checksum 与运行时实体表，包括恢复调度依赖的 `runtime_service_heartbeats`。Docker 镜像只包含 Web、数据库迁移和恢复 Worker；用户设备令牌、Qoder CLI、淘宝 skill 与淘宝登录态不得进入镜像或 Compose 环境。
+`db:check` 会同时核对 migration checksum 与运行时实体表，包括恢复调度依赖的 `runtime_service_heartbeats`。Docker 镜像只包含 Web、数据库迁移和恢复 Worker；用户设备令牌、淘宝桌面版 MCP 地址与淘宝登录态不得进入镜像或 Compose 环境。
 
-`SCENECART_PRODUCT_MODE=production` 会强制关闭演示购物车回退，即使误设 `ALLOW_DEMO_CART_FALLBACK=true` 也不会把真实加购失败伪装成成功。开发预览仍可保留该回退，但 UI 与购物清单必须明确标记“演示购物车”。
+`SCENECART_PRODUCT_MODE=production` 会强制关闭演示购物车回退，即使误设 `ALLOW_DEMO_CART_FALLBACK=true` 也不会把真实加购失败伪装成成功。开发回退也不是所有失败的总兜底：只有 development、`ALLOW_DEMO_CART_FALLBACK=true` 且使用同步开发兼容 provider 时，失败才会生成明确标记的“演示购物车”条目；正式 `local_executor` 的异步 Job 失败会保留为失败并等待用户重试。
 
 正式模式也会阻断旧的 `qoder_cli`、`codex_hosted` 与 `experimental_local` 直连路径。误配置时 effective backend 会安全收敛为 `local_executor`，但 readiness 仍保持失败，直到部署环境显式配置正确。
 
 安装 Qoder CLI 不会自动把网页后端切换到 `qoder_cli`；所有兼容 provider 都必须在开发环境显式配置。正式环境还必须保持 `SCENECART_ENABLE_MCP_DEBUG=false`，production 即使误配为 `true` 也会隐藏 `/api/mcp/run`，但 release audit 会继续报错直到配置被修正。
 
 正式环境不要配置 `HOSTED_WORKER_TOKEN`，也不要运行 `npm run worker:codex`。production 会直接拒绝 `/api/hosted/tasks*` 旧 Worker 协议；浏览器主流程也不会轮询旧宿主状态。`/hosted` 页面仍是当前会话、任务、模型和执行器的运维控制台，并不代表继续使用 Codex hosted 执行淘宝任务。
+
+SceneCart 的交易边界止于购买确认页与淘宝购物车。即使设备拥有 `add_to_cart` 能力，也必须由用户逐件显式确认；系统不会自动提交订单、结算或支付。面试环境的固定预检、现场步骤与无 MCP 兜底见 [面试演示 Runbook](./interview-demo.md)。
 
 ## 回滚原则
 

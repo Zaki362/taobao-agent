@@ -1,14 +1,21 @@
 "use client";
 
-import { ExternalLink, Pause, Play, ShoppingCart, Store, Trash2 } from "lucide-react";
-import { AgentBrief, HostedInstructionCard, InfoBlock } from "@/components/dashboard-common";
-import { hasRealDetailUrl, isHostedMode, isQueuedExecutionMode } from "@/components/dashboard-helpers";
-import { CartReviewItem, HostedWorkerStatus, MpcStatus } from "@/components/dashboard-types";
+import { CheckCircle2, ExternalLink, Loader2, PackageCheck, Pause, Play, ShoppingCart, Store, Trash2 } from "lucide-react";
+import { HostedInstructionCard, InfoBlock } from "@/components/dashboard-common";
+import {
+  hasRealDetailUrl,
+  isHostedMode,
+  isQueuedExecutionMode,
+  isTaobaoAuthenticationPause,
+  isTaobaoCartAuthenticationPause
+} from "@/components/dashboard-helpers";
+import { deriveShoppingListView } from "@/components/dashboard-shopping-list";
+import type { DashboardShoppingListItem, HostedWorkerStatus, MpcStatus } from "@/components/dashboard-types";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { formatCurrency } from "@/lib/utils";
-import { SessionState } from "@/lib/session/types";
+import type { ProductCandidate, SessionState } from "@/lib/session/types";
 
 export function SearchSummaryPage({
   session,
@@ -241,73 +248,131 @@ export function SearchSummaryPage({
 }
 
 export function CartReviewPage({
-  items,
-  total,
+  session,
+  mcpStatus,
   onBack,
+  onRefresh,
+  onAddToCart,
   onRemoveDemoItem,
-  removingProductId
+  cartingProductId,
+  busy,
+  removingProductId,
+  errorMessage
 }: {
-  items: CartReviewItem[];
-  total: number;
+  session: SessionState;
+  mcpStatus: MpcStatus | null;
   onBack: () => void;
-  onRemoveDemoItem: (item: CartReviewItem) => void;
+  onRefresh: () => void;
+  onAddToCart: (product: ProductCandidate) => void;
+  onRemoveDemoItem: (item: DashboardShoppingListItem) => void;
+  cartingProductId: string;
+  busy: boolean;
   removingProductId: string;
+  errorMessage: string;
 }) {
-  const hasTaobaoCartItems = items.some((item) => item.cart_source !== "demo");
-  const taobaoItemCount = items.filter((item) => item.cart_source !== "demo").length;
-  const demoItemCount = items.length - taobaoItemCount;
+  const shoppingList = deriveShoppingListView(session);
+  const items = shoppingList.listItems;
+  const taobaoItemCount = shoppingList.realAddedCount;
+  const demoItemCount = shoppingList.demoAddedCount;
+  const listTotal = items.reduce((total, item) => total + item.price, 0);
+  const waitingCount = shoppingList.awaitingCount + shoppingList.failedCount;
+  const cartAuthenticationPaused = isTaobaoAuthenticationPause(session)
+    || isTaobaoCartAuthenticationPause(session, mcpStatus);
 
   return (
-    <div className="space-y-4">
-      <AgentBrief
-        compact
-        eyebrow="最后一步"
-        title={items.length > 0 ? `你的购买清单里有 ${items.length} 件商品` : "购买清单还是空的"}
-        description={items.length > 0 ? "我已经把本轮选中的商品整理在一起。请确认价格和规格，再决定是否前往淘宝完成结算。" : "返回推荐页选择商品后，我会在这里帮你做最后一次汇总。"}
-        highlights={[`${taobaoItemCount} 件真实加购`, `${demoItemCount} 件演示清单`, `预计 ${formatCurrency(total)}`]}
-      />
-      <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_320px]">
+    <div className="workflow-content space-y-4">
+      <section className="purchase-bundle-card" aria-labelledby="cart-review-title">
+        <div className="grid gap-5 p-5 md:grid-cols-[minmax(0,1fr)_auto] md:items-end md:p-6">
+          <div className="flex items-start gap-3.5">
+            <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-[15px] bg-primary text-white shadow-card" aria-hidden="true">
+              <PackageCheck className="h-4 w-4" />
+            </span>
+            <div>
+              <p className="agent-brief-eyebrow">购买确认</p>
+              <h1 id="cart-review-title" className="mt-1.5 text-2xl font-semibold tracking-tight md:text-[28px]">
+                {items.length > 0 ? `购物清单共 ${items.length} 件` : "购物清单还是空的"}
+              </h1>
+              <p className="mt-2 text-sm leading-6 text-muted-foreground">
+                {items.length > 0
+                  ? "待处理商品不会被误标为已加购；你可以在这里逐件确认，并查看淘宝真实回填进度。"
+                  : "返回推荐页采用 Agent 清单或手动选择商品。"}
+              </p>
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+            <div className="rounded-[16px] bg-white/80 px-3 py-2.5 text-center"><strong className="block text-lg">{taobaoItemCount}</strong><span className="text-[10px] text-muted-foreground">淘宝已加购</span></div>
+            <div className="rounded-[16px] bg-white/80 px-3 py-2.5 text-center"><strong className="block text-lg">{shoppingList.queuedCount}</strong><span className="text-[10px] text-muted-foreground">处理中</span></div>
+            <div className="rounded-[16px] bg-white/80 px-3 py-2.5 text-center"><strong className="block text-lg">{waitingCount}</strong><span className="text-[10px] text-muted-foreground">待确认</span></div>
+            <div className="rounded-[16px] bg-white/80 px-3 py-2.5 text-center"><strong className="block text-lg text-primary">{formatCurrency(listTotal)}</strong><span className="text-[10px] text-muted-foreground">清单估算</span></div>
+          </div>
+        </div>
+      </section>
+
+      {cartAuthenticationPaused ? (
+        <div role="alert" className="rounded-[20px] border border-amber-200 bg-amber-50 px-5 py-4 text-sm leading-6 text-amber-900">
+          <p>淘宝登录已失效，加购保持暂停。重新登录后刷新状态，再由你显式继续。</p>
+          <Button type="button" className="mt-3" size="sm" variant="outline" onClick={onRefresh} disabled={busy}>
+            重新登录后刷新状态
+          </Button>
+        </div>
+      ) : null}
+
+      {errorMessage ? (
+        <div role="alert" aria-live="assertive" className="rounded-[20px] border border-red-200 bg-red-50 px-5 py-4 text-sm leading-6 text-red-700">
+          {errorMessage}
+        </div>
+      ) : null}
+
       <Card className="section-card">
-        <CardHeader>
-          <CardTitle>确认下单清单</CardTitle>
+        <CardHeader className="flex-row items-end justify-between gap-4">
+          <div><p className="label-text">逐件确认</p><CardTitle className="mt-2">我的购物清单</CardTitle></div>
+          <p className="text-xs text-muted-foreground">真实已加购金额 {formatCurrency(shoppingList.realAddedTotal)}</p>
         </CardHeader>
-        <CardContent className="space-y-4">
+        <CardContent className="space-y-3">
           {items.length === 0 ? (
             <div className="rounded-[22px] border border-dashed border-border/80 bg-white p-8 shadow-sm">
-              <p className="text-lg font-semibold">当前还没有加入购物车的商品</p>
+              <p className="text-lg font-semibold">当前还没有待处理商品</p>
               <p className="mt-3 text-sm leading-7 text-muted-foreground">
-                你可以先返回推荐页继续加购，再回到这里统一确认下单清单。
+                返回推荐页采用 Agent 建议清单，或直接从任一分类手动加购。
               </p>
             </div>
           ) : (
-            items.map((item) => (
-              <div key={item.product_id} className="grid gap-4 rounded-[26px] border border-border/80 bg-white p-4 shadow-card md:grid-cols-[160px_1fr]">
+            items.map((item) => {
+              const running = item.status === "queued" || cartingProductId === item.product_id;
+              const added = item.status === "added";
+              const failed = item.status === "failed";
+              return (
+              <article key={item.product_id} className="grid grid-cols-[72px_minmax(0,1fr)] gap-3 rounded-[20px] border border-border/75 bg-white p-3 shadow-sm sm:grid-cols-[112px_1fr] sm:gap-4 sm:p-4">
                 {item.image_url ? (
-                  <img src={item.image_url} alt={item.title} className="h-40 w-full rounded-[20px] object-cover" />
+                  <img src={item.image_url} alt={item.title} className="h-[72px] w-[72px] rounded-[14px] object-cover sm:h-28 sm:w-28 sm:rounded-[16px]" loading="lazy" />
                 ) : (
-                  <div className="flex h-40 w-full items-center justify-center rounded-[20px] bg-secondary/40 text-sm text-muted-foreground">
+                  <div className="flex h-[72px] w-[72px] items-center justify-center rounded-[14px] bg-secondary/40 text-center text-[10px] text-muted-foreground sm:h-28 sm:w-28 sm:rounded-[16px] sm:text-xs">
                     暂无商品图片
                   </div>
                 )}
-                <div className="space-y-3">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <Badge>{item.module_name ?? "已选商品"}</Badge>
-                    <Badge variant="outline">{item.cart_source === "demo" ? "演示购物车" : "淘宝购物车"}</Badge>
+                <div className="flex min-w-0 flex-col gap-3">
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <Badge variant="secondary">{item.module_name ?? "已选商品"}</Badge>
+                    <Badge variant={added ? "success" : failed ? "danger" : "outline"}>
+                      {running ? <Loader2 className="mr-1 h-3 w-3 animate-spin" /> : added ? <CheckCircle2 className="mr-1 h-3 w-3" /> : null}
+                      {running ? "正在加购" : added ? item.cart_source === "demo" ? "演示清单" : "淘宝已加购" : failed ? "加购失败" : "待确认加购"}
+                    </Badge>
                   </div>
-                  <h3 className="text-lg font-semibold leading-8">{item.title}</h3>
-                  <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                  <h2 className="line-clamp-2 text-base font-semibold leading-6">{item.title}</h2>
+                  <div className="flex items-center gap-2 text-xs text-muted-foreground">
                     <Store className="h-4 w-4" />
                     {item.shop_name ?? "淘宝店铺"}
                   </div>
-                  <div className="grid gap-2 text-sm text-muted-foreground">
-                    <p>已选规格：{item.selected_spec ?? "默认可选规格（以淘宝购物车页为准）"}</p>
-                    <p>商品金额：{formatCurrency(item.price)}</p>
-                    {item.cart_note ? <p>说明：{item.cart_note}</p> : null}
+                  <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
+                    <strong className="text-lg text-primary">{formatCurrency(item.price)}</strong>
+                    {item.bundleItem?.reason ? <span className="hidden line-clamp-1 sm:inline">{item.bundleItem.reason}</span> : null}
+                    {added ? <span>规格：{item.selected_spec ?? "以淘宝购物车为准"}</span> : null}
                   </div>
-                  <div className="flex flex-wrap gap-3">
+                  <div className="mt-auto flex flex-col gap-2 sm:flex-row sm:flex-wrap">
                     <Button
                       variant="outline"
                       size="sm"
+                      className="w-full sm:w-auto"
                       disabled={!hasRealDetailUrl(item.detail_url)}
                       onClick={() => {
                         if (!hasRealDetailUrl(item.detail_url)) {
@@ -318,68 +383,56 @@ export function CartReviewPage({
                     >
                       查看商品页
                     </Button>
-                    {item.cart_source === "demo" ? (
+                    {added && item.cart_source === "demo" ? (
                       <Button
                         variant="outline"
                         size="sm"
+                        className="w-full sm:w-auto"
                         disabled={Boolean(removingProductId)}
                         onClick={() => onRemoveDemoItem(item)}
                       >
                         <Trash2 className="h-4 w-4" />
                         {removingProductId === item.product_id ? "正在移除" : "从演示清单移除"}
                       </Button>
-                    ) : (
+                    ) : added ? (
                       <Button
                         variant="outline"
                         size="sm"
+                        className="w-full sm:w-auto"
                         onClick={() => window.open("https://cart.taobao.com/cart.htm", "_blank", "noopener,noreferrer")}
                       >
                         <ExternalLink className="h-4 w-4" />
                         在淘宝购物车中管理
                       </Button>
+                    ) : (
+                      <Button
+                        size="sm"
+                        className="w-full sm:w-auto"
+                        disabled={!item.candidate || running || busy || cartAuthenticationPaused}
+                        onClick={() => item.candidate && onAddToCart(item.candidate)}
+                      >
+                        {running ? <Loader2 className="h-4 w-4 animate-spin" /> : <ShoppingCart className="h-4 w-4" />}
+                        {running ? "正在加购" : failed ? "重新确认加购" : "确认加入购物车"}
+                      </Button>
                     )}
                   </div>
                 </div>
-              </div>
-            ))
+              </article>
+              );
+            })
           )}
-          <div className="flex gap-3">
+          <div className="flex flex-col-reverse gap-2 border-t border-border/60 pt-4 sm:flex-row sm:items-center sm:justify-between">
             <Button variant="outline" onClick={onBack}>返回上一步继续加购</Button>
             <Button
-              disabled={items.length === 0 || !hasTaobaoCartItems}
+              disabled={taobaoItemCount === 0}
               onClick={() => window.open("https://cart.taobao.com/cart.htm", "_blank", "noopener,noreferrer")}
             >
-              <ShoppingCart className="mr-2 h-4 w-4" />
-              {hasTaobaoCartItems ? "打开淘宝购物车结算" : "当前仅有演示购物车商品"}
+              <ShoppingCart className="h-4 w-4" />
+              {taobaoItemCount > 0 ? "打开淘宝购物车核对" : demoItemCount > 0 ? "当前仅有演示清单" : "还没有真实加购商品"}
             </Button>
           </div>
-          <details className="panel-muted p-4 text-sm text-muted-foreground">
-            <summary className="cursor-pointer font-medium text-foreground">购物车状态说明</summary>
-            <p className="mt-2 leading-6">“淘宝购物车”表示真实加购已成功；“演示购物车”表示真实加购失败后自动回退到产品内清单。演示项可直接移除，真实商品需前往淘宝管理。</p>
-          </details>
         </CardContent>
       </Card>
-
-      <Card className="section-card xl:sticky xl:top-6">
-        <CardHeader>
-          <CardTitle>下单摘要</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <InfoBlock label="已加购商品" value={`${items.length} 件`} />
-          <InfoBlock label="淘宝真实加购" value={`${taobaoItemCount} 件`} />
-          <InfoBlock label="产品内演示项" value={`${demoItemCount} 件`} />
-          <InfoBlock label="清单估算总价" value={formatCurrency(total)} />
-          <InfoBlock
-            label="当前状态"
-            value={taobaoItemCount > 0
-              ? "可前往淘宝确认规格与结算"
-              : demoItemCount > 0
-                ? "当前只有演示清单，尚未真实加购"
-                : "请先从推荐页加入商品"}
-          />
-        </CardContent>
-      </Card>
-      </div>
     </div>
   );
 }

@@ -82,6 +82,7 @@ export function queueModuleSearchTask(
       module_id: input.module_id,
       module_name: input.module_name,
       search_intent: input.search_intent,
+      workflow_run_id: state.agent_runtime.workflow_run_id ?? "manual",
       recommendation_goal: ["稳妥推荐", "性价比推荐", "升级推荐"]
     }
   };
@@ -248,6 +249,9 @@ export function resolveHostedAddToCartTask(
     status: "completed" | "failed";
     result_summary?: string;
     error_message?: string;
+    selected_spec?: string;
+    cart_source?: "taobao" | "demo";
+    cart_note?: string;
   }
 ) {
   const task = state.hosted_tasks.find((entry) => entry.task_id === input.task_id);
@@ -276,8 +280,9 @@ export function resolveHostedAddToCartTask(
         detail_url: product.detail_url,
         shop_name: product.shop_name,
         module_name: task.module_name,
-        selected_spec: "默认可选规格（以淘宝购物车页为准）",
-        cart_source: "taobao",
+        selected_spec: input.selected_spec || "默认可选规格（以淘宝购物车页为准）",
+        cart_source: input.cart_source ?? "taobao",
+        cart_note: input.cart_note,
         added_at: new Date().toISOString()
       };
       state.selected_items = [...state.selected_items.filter((item) => item.product_id !== product.product_id), selected];

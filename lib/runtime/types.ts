@@ -10,6 +10,12 @@ export type RuntimeJobStatus =
 
 export type RuntimeJobType = "module_search" | "add_to_cart";
 
+export type ExecutorDeviceStatus =
+  | "online"
+  | "offline"
+  | "authentication_required"
+  | "revoked";
+
 export interface RuntimeUser {
   id: string;
   email: string;
@@ -33,7 +39,7 @@ export interface ExecutorDevice {
   name: string;
   token_hash: string;
   capabilities: RuntimeJobType[];
-  status: "online" | "offline" | "revoked";
+  status: ExecutorDeviceStatus;
   last_heartbeat_at?: string;
   created_at: string;
   updated_at: string;
@@ -53,6 +59,8 @@ export interface RuntimeJob {
   available_at: string;
   lease_owner_id?: string;
   lease_expires_at?: string;
+  lease_token?: string;
+  last_auth_failure_token_hash?: string;
   result?: Record<string, unknown>;
   error_message?: string;
   created_at: string;
@@ -68,6 +76,15 @@ export interface ExecutionEvent {
   event_type: string;
   payload: Record<string, unknown>;
   created_at: string;
+}
+
+export interface AuthenticationFailureHold {
+  job_id: string;
+  session_id: string;
+  user_id?: string;
+  device_id: string;
+  attempt: number;
+  lease_token: string;
 }
 
 export interface RuntimeServiceHeartbeat {
@@ -104,7 +121,10 @@ export interface RuntimeRepository {
 
   createDevice(device: ExecutorDevice): Promise<ExecutorDevice>;
   findDeviceByToken(tokenHash: string): Promise<ExecutorDevice | null>;
-  heartbeatDevice(deviceId: string): Promise<ExecutorDevice | null>;
+  heartbeatDevice(
+    deviceId: string,
+    status?: Extract<ExecutorDeviceStatus, "online" | "authentication_required">
+  ): Promise<ExecutorDevice | null>;
   listDevices(userId: string): Promise<ExecutorDevice[]>;
   updateDeviceCapabilities(
     deviceId: string,
@@ -130,6 +150,35 @@ export interface RuntimeRepository {
     retryDelayMs?: number,
     terminal?: boolean
   ): Promise<RuntimeJob>;
+  failAuthenticationJob(
+    jobId: string,
+    device: ExecutorDevice,
+    errorMessage: string,
+    leaseToken: string,
+    leaseTokenHash: string
+  ): Promise<RuntimeJob>;
+  holdAuthenticationJob(
+    jobId: string,
+    device: ExecutorDevice,
+    errorMessage: string,
+    leaseToken: string
+  ): Promise<{ job: RuntimeJob; device: ExecutorDevice; hold: AuthenticationFailureHold }>;
+  getActiveAuthenticationFailureHold(jobId: string): Promise<AuthenticationFailureHold | null>;
+  listActiveAuthenticationFailureHolds(deviceId: string): Promise<AuthenticationFailureHold[]>;
+  hasActiveAuthenticationFailureHold(deviceId: string): Promise<boolean>;
+  isAuthenticationFailureHoldReleased(
+    jobId: string,
+    deviceId: string,
+    leaseToken: string
+  ): Promise<boolean>;
+  releaseAuthenticationFailureHold(
+    hold: AuthenticationFailureHold,
+    reason:
+      | "callback_acknowledged"
+      | "user_retry"
+      | "partial_results_accepted"
+      | "cart_authentication_recovered"
+  ): Promise<boolean>;
   cancelJob(jobId: string, userId?: string): Promise<RuntimeJob | null>;
   recoverExpiredJobs(): Promise<number>;
 

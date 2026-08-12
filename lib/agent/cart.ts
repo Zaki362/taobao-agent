@@ -57,7 +57,7 @@ function buildSelectedItem(
 export function removeDemoCartItem(state: SessionState, productId: string) {
   const selectedItem = state.selected_items.find((item) => item.product_id === productId);
   if (!selectedItem) {
-    throw new CartItemRemovalError("当前下单清单中没有这件商品。", "cart_item_not_found");
+    throw new CartItemRemovalError("当前购买清单中没有这件商品。", "cart_item_not_found");
   }
 
   // Missing source is treated as a historical real-cart record. Only explicitly

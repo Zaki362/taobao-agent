@@ -14,7 +14,8 @@ import {
   RefinementImpactSummary,
   SelectedItem,
   SessionLlmCall,
-  SessionState
+  SessionState,
+  TaobaoMcpSearchEvidence
 } from "@/lib/session/types";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -23,6 +24,31 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function isStringArray(value: unknown) {
   return Array.isArray(value) && value.every((item) => typeof item === "string");
+}
+
+export function isTaobaoMcpSearchEvidence(value: unknown): value is TaobaoMcpSearchEvidence {
+  if (!isRecord(value)) return false;
+  return (
+    value.schema === "scenecart.taobao-mcp-search-evidence/v1" &&
+    value.source === "taobao-mcp" &&
+    value.tool === "search_products" &&
+    typeof value.source_app === "string" &&
+    value.source_app.trim().length > 0 &&
+    typeof value.job_id === "string" &&
+    value.job_id.trim().length > 0 &&
+    typeof value.module_id === "string" &&
+    value.module_id.trim().length > 0 &&
+    typeof value.workflow_run_id === "string" &&
+    value.workflow_run_id.trim().length > 0 &&
+    typeof value.keyword === "string" &&
+    value.keyword.trim().length > 0 &&
+    typeof value.captured_at === "string" &&
+    Number.isFinite(Date.parse(value.captured_at)) &&
+    value.cache_hit === false &&
+    typeof value.raw_result_count === "number" &&
+    Number.isInteger(value.raw_result_count) &&
+    value.raw_result_count >= 0
+  );
 }
 
 function isExecutionMode(value: unknown): value is ExecutionMode {

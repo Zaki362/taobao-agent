@@ -33,8 +33,11 @@ await check("taobao_mcp", async () => {
   try {
     const tools = await client.listTools();
     taobaoToolNames = new Set(tools.map((tool) => tool?.name));
-    if (!taobaoToolNames.has("search_products")) {
-      throw new Error("淘宝桌面版 MCP 未暴露 search_products 工具");
+    const missingSearchTools = ["search_products", "get_current_tab"].filter(
+      (name) => !taobaoToolNames.has(name)
+    );
+    if (missingSearchTools.length > 0) {
+      throw new Error(`淘宝桌面版 MCP 缺少搜索/登录恢复工具：${missingSearchTools.join("、")}`);
     }
     return `${taobaoMcpUrl} · search_products 已就绪 · source=${taobaoSourceApp}`;
   } finally {
@@ -79,13 +82,21 @@ await check("device_token", async () => {
   if (!capabilities.includes("module_search")) {
     throw new Error("设备令牌有效，但缺少 module_search 能力；请在设置页重新注册设备");
   }
-  if (capabilities.includes("add_to_cart") && !taobaoToolNames.has("add_to_cart")) {
-    throw new Error("设备启用了真实加购，但淘宝桌面版 MCP 缺少 add_to_cart 工具");
+  if (capabilities.includes("add_to_cart")) {
+    const missingCartTools = ["get_product_skus", "add_to_cart"].filter(
+      (name) => !taobaoToolNames.has(name)
+    );
+    if (missingCartTools.length > 0) {
+      throw new Error(`设备启用了真实加购，但淘宝桌面版 MCP 缺少：${missingCartTools.join("、")}`);
+    }
   }
   const labels = capabilities.map((capability) =>
     capability === "module_search" ? "商品搜索" : capability === "add_to_cart" ? "真实加购" : capability
   );
-  return `设备令牌有效，服务端已收到心跳；授权能力：${labels.join("、")}`;
+  const authenticationState = payload.executor_state === "authentication_required"
+    ? "；设备仍保持登录暂停，Worker 会在淘宝登录恢复后自动解除"
+    : "";
+  return `设备令牌有效，服务端已收到心跳${authenticationState}；授权能力：${labels.join("、")}`;
 });
 
 for (const item of checks) {

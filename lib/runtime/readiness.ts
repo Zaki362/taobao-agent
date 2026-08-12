@@ -265,7 +265,11 @@ export async function inspectRuntimeReadiness(userId?: string) {
       "本地执行器在线",
       executorCapabilities.online > 0 ? "pass" : "warn",
       false,
-      executorCapabilities.online > 0 ? `${executorCapabilities.online} 台本地执行器在线` : "当前账号没有在线执行器",
+      executorCapabilities.online > 0
+        ? `${executorCapabilities.online} 台本地执行器在线`
+        : executorCapabilities.authentication_required > 0
+          ? `${executorCapabilities.authentication_required} 台本地执行器正在等待淘宝重新登录`
+          : "当前账号没有在线执行器",
       "在淘宝与 Qoder 所在电脑运行 npm run executor:doctor 和 npm run worker:local"
     ));
     checks.push(check(

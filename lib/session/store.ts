@@ -556,7 +556,6 @@ export function getSession(sessionId: string) {
 
 export function saveSession(state: SessionState) {
   const normalized = normalizeSessionState(state);
-  store.set(normalized.session_id, normalized);
   const file = sessionFile(normalized.session_id);
   const tempFile = `${file}.${process.pid}.${Date.now()}.tmp`;
 
@@ -575,6 +574,9 @@ export function saveSession(state: SessionState) {
     throw error;
   }
 
+  // Publish the new in-memory snapshot only after its durable rename succeeds.
+  // Otherwise a failed write can make reconciliation believe disk is current.
+  store.set(normalized.session_id, normalized);
   return normalized;
 }
 

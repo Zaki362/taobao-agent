@@ -1,6 +1,7 @@
 import {
   createAgentDecision,
-  decideNextAgentAction
+  decideNextAgentAction,
+  isTaskFromCurrentWorkflowRun
 } from "@/lib/agent/decision-engine";
 import { decideAgentNextAction } from "@/lib/llm/deepseek";
 import { normalizeModelSearchKeyword } from "@/lib/agent/search-strategy";
@@ -92,6 +93,7 @@ export function validateModelProposal(
         (task) =>
           task.task_type === "module_search" &&
           task.module_id === module.module_id &&
+          isTaskFromCurrentWorkflowRun(state, task) &&
           (task.status === "completed" || task.status === "failed" || task.status === "cancelled")
       )
     ) {

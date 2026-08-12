@@ -1,6 +1,8 @@
 import type { PoolClient } from "pg";
+import { createHash, randomUUID } from "node:crypto";
 import { query, withTransaction } from "@/lib/runtime/database";
 import type {
+  AuthenticationFailureHold,
   AuthSessionRecord,
   CreateRuntimeJobInput,
   ExecutionEvent,
@@ -68,6 +70,10 @@ function normalizeJob(row: Record<string, unknown>): RuntimeJob {
     available_at: iso(row.available_at as Date)!,
     lease_owner_id: row.lease_owner_id ? String(row.lease_owner_id) : undefined,
     lease_expires_at: iso(row.lease_expires_at as Date),
+    lease_token: row.lease_token ? String(row.lease_token) : undefined,
+    last_auth_failure_token_hash: row.last_auth_failure_token_hash
+      ? String(row.last_auth_failure_token_hash)
+      : undefined,
     result: row.result ? row.result as Record<string, unknown> : undefined,
     error_message: row.error_message ? String(row.error_message) : undefined,
     created_at: iso(row.created_at as Date)!,
@@ -86,6 +92,75 @@ function normalizeEvent(row: Record<string, unknown>): ExecutionEvent {
     payload: (row.payload ?? {}) as Record<string, unknown>,
     created_at: iso(row.created_at as Date)!
   };
+}
+
+function authenticationFailureTokenHash(leaseToken: string) {
+  return createHash("sha256").update(leaseToken).digest("hex");
+}
+
+function normalizeAuthenticationFailureHold(row: Record<string, unknown>): AuthenticationFailureHold {
+  return {
+    job_id: String(row.job_id),
+    session_id: String(row.session_id),
+    user_id: row.user_id ? String(row.user_id) : undefined,
+    device_id: String(row.device_id),
+    attempt: Number(row.attempt),
+    lease_token: String(row.lease_token)
+  };
+}
+
+async function selectActiveAuthenticationFailureHold(jobId: string, client?: PoolClient) {
+  const result = await (client ? client.query.bind(client) : query)(
+    `SELECT latest.job_id, latest.session_id, latest.user_id,
+            latest.payload->>'device_id' AS device_id,
+            (latest.payload->>'attempt')::integer AS attempt,
+            latest.payload->>'lease_token' AS lease_token
+     FROM agent_jobs AS jobs
+     JOIN LATERAL (
+       SELECT events.*
+       FROM execution_events AS events
+       WHERE events.job_id = jobs.id
+         AND events.event_type IN (
+           'job.authentication_failure_hold_pending',
+           'job.authentication_failure_hold_released'
+         )
+         AND events.payload->>'attempt' = jobs.attempts::text
+         AND events.payload->>'lease_token' = jobs.lease_token
+       ORDER BY events.id DESC
+       LIMIT 1
+     ) AS latest ON TRUE
+     WHERE jobs.id = $1
+       AND latest.event_type = 'job.authentication_failure_hold_pending'`,
+    [jobId]
+  );
+  return result.rowCount ? normalizeAuthenticationFailureHold(result.rows[0]) : null;
+}
+
+async function selectActiveAuthenticationFailureHoldsByDevice(deviceId: string, client?: PoolClient) {
+  const result = await (client ? client.query.bind(client) : query)(
+    `SELECT latest.job_id, latest.session_id, latest.user_id,
+            latest.payload->>'device_id' AS device_id,
+            (latest.payload->>'attempt')::integer AS attempt,
+            latest.payload->>'lease_token' AS lease_token
+     FROM agent_jobs AS jobs
+     JOIN LATERAL (
+       SELECT events.*
+       FROM execution_events AS events
+       WHERE events.job_id = jobs.id
+         AND events.event_type IN (
+           'job.authentication_failure_hold_pending',
+           'job.authentication_failure_hold_released'
+         )
+         AND events.payload->>'attempt' = jobs.attempts::text
+         AND events.payload->>'lease_token' = jobs.lease_token
+       ORDER BY events.id DESC
+       LIMIT 1
+     ) AS latest ON TRUE
+     WHERE latest.event_type = 'job.authentication_failure_hold_pending'
+       AND latest.payload->>'device_id' = $1`,
+    [deviceId]
+  );
+  return result.rows.map(normalizeAuthenticationFailureHold);
 }
 
 function normalizeServiceHeartbeat(row: Record<string, unknown>): RuntimeServiceHeartbeat {
@@ -244,13 +319,28 @@ export const postgresRuntimeRepository: RuntimeRepository = {
     return result.rowCount ? normalizeDevice(result.rows[0]) : null;
   },
 
-  async heartbeatDevice(deviceId) {
-    const result = await query(
-      `UPDATE executor_devices SET status = 'online', last_heartbeat_at = NOW(), updated_at = NOW()
-       WHERE id = $1 AND status <> 'revoked' RETURNING *`,
-      [deviceId]
-    );
-    return result.rowCount ? normalizeDevice(result.rows[0]) : null;
+  async heartbeatDevice(deviceId, status = "online") {
+    return withTransaction(async (client) => {
+      const lockedDevice = await client.query(
+        `SELECT id, status FROM executor_devices
+         WHERE id = $1 AND status <> 'revoked'
+         FOR UPDATE`,
+        [deviceId]
+      );
+      if (!lockedDevice.rowCount) return null;
+      const activeHolds = status === "online"
+        ? await selectActiveAuthenticationFailureHoldsByDevice(deviceId, client)
+        : [];
+      const effectiveStatus = status === "online" && activeHolds.length > 0
+        ? "authentication_required"
+        : status;
+      const result = await client.query(
+        `UPDATE executor_devices SET status = $2, last_heartbeat_at = NOW(), updated_at = NOW()
+         WHERE id = $1 AND status <> 'revoked' RETURNING *`,
+        [deviceId, effectiveStatus]
+      );
+      return result.rowCount ? normalizeDevice(result.rows[0]) : null;
+    });
   },
 
   async listDevices(userId) {
@@ -279,6 +369,7 @@ export const postgresRuntimeRepository: RuntimeRepository = {
   },
 
   async createJob(input: CreateRuntimeJobInput) {
+    const maxAttempts = input.job_type === "add_to_cart" ? 1 : input.max_attempts ?? 3;
     const result = await query(
       `INSERT INTO agent_jobs(id, user_id, session_id, job_type, idempotency_key, payload, priority, max_attempts)
        SELECT $1, $2, $3, $4, $5, $6::jsonb, $7, $8
@@ -297,8 +388,26 @@ export const postgresRuntimeRepository: RuntimeRepository = {
          result = CASE WHEN agent_jobs.status IN ('failed', 'cancelled') THEN NULL ELSE agent_jobs.result END,
          lease_owner_id = CASE WHEN agent_jobs.status IN ('failed', 'cancelled') THEN NULL ELSE agent_jobs.lease_owner_id END,
          lease_expires_at = CASE WHEN agent_jobs.status IN ('failed', 'cancelled') THEN NULL ELSE agent_jobs.lease_expires_at END,
+         lease_token = CASE WHEN agent_jobs.status IN ('failed', 'cancelled') THEN NULL ELSE agent_jobs.lease_token END,
          completed_at = CASE WHEN agent_jobs.status IN ('failed', 'cancelled') THEN NULL ELSE agent_jobs.completed_at END,
          updated_at = CASE WHEN agent_jobs.status IN ('failed', 'cancelled') THEN NOW() ELSE agent_jobs.updated_at END
+       WHERE NOT EXISTS (
+         SELECT 1
+         FROM LATERAL (
+           SELECT hold_events.event_type
+           FROM execution_events AS hold_events
+           WHERE hold_events.job_id = agent_jobs.id
+             AND hold_events.event_type IN (
+               'job.authentication_failure_hold_pending',
+               'job.authentication_failure_hold_released'
+             )
+             AND hold_events.payload->>'attempt' = agent_jobs.attempts::text
+             AND hold_events.payload->>'lease_token' = agent_jobs.lease_token
+           ORDER BY hold_events.id DESC
+           LIMIT 1
+         ) AS latest_hold
+         WHERE latest_hold.event_type = 'job.authentication_failure_hold_pending'
+       )
        RETURNING *`,
       [
         input.id,
@@ -308,10 +417,22 @@ export const postgresRuntimeRepository: RuntimeRepository = {
         input.idempotency_key,
         JSON.stringify(input.payload),
         input.priority ?? 100,
-        input.max_attempts ?? 3
+        maxAttempts
       ]
     );
-    if (!result.rowCount) throw new Error("session archived");
+    if (!result.rowCount) {
+      const existing = await query(
+        "SELECT id FROM agent_jobs WHERE idempotency_key = $1",
+        [input.idempotency_key]
+      );
+      if (
+        existing.rowCount &&
+        await selectActiveAuthenticationFailureHold(String(existing.rows[0].id))
+      ) {
+        throw new Error("authentication failure hold requires explicit user release");
+      }
+      throw new Error("session archived");
+    }
     return normalizeJob(result.rows[0]);
   },
 
@@ -332,7 +453,17 @@ export const postgresRuntimeRepository: RuntimeRepository = {
   },
 
   async claimJob(device, leaseMs) {
+    if (device.status !== "online") return null;
     return withTransaction(async (client) => {
+      const deviceResult = await client.query(
+        `SELECT * FROM executor_devices
+         WHERE id = $1 AND status <> 'revoked'
+         FOR UPDATE`,
+        [device.id]
+      );
+      if (!deviceResult.rowCount) return null;
+      const storedDevice = normalizeDevice(deviceResult.rows[0]);
+      if (storedDevice.status !== "online") return null;
       await client.query(
         `UPDATE agent_jobs SET
            status = CASE WHEN attempts < max_attempts THEN 'pending' ELSE 'failed' END,
@@ -349,6 +480,36 @@ export const postgresRuntimeRepository: RuntimeRepository = {
            AND available_at <= NOW()
            AND (user_id IS NULL OR user_id = $1)
            AND job_type = ANY($2::text[])
+           AND NOT (
+             lease_token IS NOT NULL AND EXISTS (
+               SELECT 1
+               FROM execution_events AS claim_events
+               JOIN executor_devices AS claim_devices
+                 ON claim_devices.id::text = claim_events.payload->>'device_id'
+               WHERE claim_events.job_id = agent_jobs.id
+                 AND claim_events.event_type = 'job.claimed'
+                 AND claim_events.payload->>'attempt' = agent_jobs.attempts::text
+                 AND claim_events.payload->>'lease_token' = agent_jobs.lease_token
+                 AND claim_devices.status = 'authentication_required'
+             )
+           )
+           AND NOT EXISTS (
+             SELECT 1
+             FROM LATERAL (
+               SELECT hold_events.event_type
+               FROM execution_events AS hold_events
+               WHERE hold_events.job_id = agent_jobs.id
+                 AND hold_events.event_type IN (
+                   'job.authentication_failure_hold_pending',
+                   'job.authentication_failure_hold_released'
+                 )
+                 AND hold_events.payload->>'attempt' = agent_jobs.attempts::text
+                 AND hold_events.payload->>'lease_token' = agent_jobs.lease_token
+               ORDER BY hold_events.id DESC
+               LIMIT 1
+             ) AS latest_hold
+             WHERE latest_hold.event_type = 'job.authentication_failure_hold_pending'
+           )
            AND NOT EXISTS (
              SELECT 1 FROM shopping_sessions AS sessions
              WHERE sessions.id = agent_jobs.session_id
@@ -357,7 +518,7 @@ export const postgresRuntimeRepository: RuntimeRepository = {
          ORDER BY priority DESC, created_at ASC
          FOR UPDATE SKIP LOCKED
          LIMIT 1`,
-        [device.user_id, device.capabilities]
+        [storedDevice.user_id, storedDevice.capabilities]
       );
       if (!selected.rowCount) return null;
       const claimed = await client.query(
@@ -365,10 +526,11 @@ export const postgresRuntimeRepository: RuntimeRepository = {
            status = 'leased',
            lease_owner_id = $2,
            lease_expires_at = NOW() + ($3::text || ' milliseconds')::interval,
+           lease_token = $4,
            attempts = attempts + 1,
            updated_at = NOW()
          WHERE id = $1 RETURNING *`,
-        [selected.rows[0].id, device.id, Math.max(leaseMs, 5_000)]
+        [selected.rows[0].id, storedDevice.id, Math.max(leaseMs, 5_000), randomUUID()]
       );
       return normalizeJob(claimed.rows[0]);
     });
@@ -414,12 +576,253 @@ export const postgresRuntimeRepository: RuntimeRepository = {
            available_at = CASE WHEN $2 = 'pending' THEN NOW() + ($4::text || ' milliseconds')::interval ELSE available_at END,
            lease_owner_id = NULL,
            lease_expires_at = NULL,
+           lease_token = CASE WHEN $2 = 'pending' THEN NULL ELSE lease_token END,
            completed_at = CASE WHEN $2 = 'failed' THEN NOW() ELSE completed_at END,
            updated_at = NOW()
          WHERE id = $1 RETURNING *`,
         [jobId, shouldRetry ? "pending" : "failed", errorMessage.slice(0, 1000), Math.max(retryDelayMs, 0)]
       );
       return normalizeJob(updated.rows[0]);
+    });
+  },
+
+  async failAuthenticationJob(jobId, device, errorMessage, leaseToken, leaseTokenHash) {
+    return withTransaction(async (client) => {
+      const deviceResult = await client.query(
+        `SELECT id, user_id, capabilities, status
+         FROM executor_devices
+         WHERE id = $1
+         FOR UPDATE`,
+        [device.id]
+      );
+      const storedDevice = deviceResult.rows[0];
+      if (!storedDevice || storedDevice.status !== "authentication_required") {
+        throw new Error("executor authentication pause is not active");
+      }
+      const job = await selectJobForUpdate(client, jobId);
+      if (job.status === "failed") {
+        const capabilities = Array.isArray(storedDevice.capabilities)
+          ? storedDevice.capabilities as string[]
+          : [];
+        if (
+          !capabilities.includes(job.job_type) ||
+          job.attempts <= 0 ||
+          !job.lease_token ||
+          job.lease_token !== leaseToken ||
+          (job.user_id !== undefined && job.user_id !== String(storedDevice.user_id))
+        ) {
+          throw new Error("failed job does not match authentication callback lease");
+        }
+        const acknowledged = await client.query(
+          `UPDATE agent_jobs SET
+             last_auth_failure_token_hash = $2,
+             updated_at = NOW()
+           WHERE id = $1
+           RETURNING *`,
+          [jobId, leaseTokenHash]
+        );
+        return normalizeJob(acknowledged.rows[0]);
+      }
+      if (job.status === "completed" || job.status === "cancelled") {
+        throw new Error("terminal job cannot accept authentication failure callback");
+      }
+      const pendingClaim = job.status === "pending"
+        ? await client.query(
+            `SELECT 1
+             FROM execution_events
+             WHERE job_id = $1
+               AND event_type = 'job.claimed'
+               AND payload->>'device_id' = $2
+               AND payload->>'attempt' = $3
+               AND payload->>'lease_token' = $4
+             LIMIT 1`,
+            [job.id, device.id, String(job.attempts), job.lease_token]
+          )
+        : null;
+      const capabilities = Array.isArray(storedDevice.capabilities)
+        ? storedDevice.capabilities as string[]
+        : [];
+      if (
+        (job.job_type !== "module_search" && job.job_type !== "add_to_cart") ||
+        !capabilities.includes(job.job_type) ||
+        job.attempts <= 0 ||
+        !job.lease_token ||
+        job.lease_token !== leaseToken ||
+        (job.user_id !== undefined && job.user_id !== String(storedDevice.user_id)) ||
+        (job.status !== "pending" && job.status !== "leased" && job.status !== "running") ||
+        (job.status !== "pending" && job.lease_owner_id !== device.id) ||
+        (job.status === "pending" && !pendingClaim?.rowCount)
+      ) {
+        throw new Error("job is not eligible for authentication failure recovery");
+      }
+      const updated = await client.query(
+        `UPDATE agent_jobs SET
+           status = 'failed',
+           error_message = $2,
+           last_auth_failure_token_hash = $3,
+           lease_owner_id = NULL,
+           lease_expires_at = NULL,
+           completed_at = NOW(),
+           updated_at = NOW()
+         WHERE id = $1
+         RETURNING *`,
+        [jobId, errorMessage.slice(0, 1000), leaseTokenHash]
+      );
+      return normalizeJob(updated.rows[0]);
+    });
+  },
+
+  async holdAuthenticationJob(jobId, device, errorMessage, leaseToken) {
+    return withTransaction(async (client) => {
+      const deviceResult = await client.query(
+        `SELECT * FROM executor_devices WHERE id = $1 FOR UPDATE`,
+        [device.id]
+      );
+      const storedDevice = deviceResult.rows[0];
+      if (!storedDevice || storedDevice.status === "revoked") {
+        throw new Error("executor device unavailable");
+      }
+      const job = await selectJobForUpdate(client, jobId);
+      if (job.status === "completed" || job.status === "cancelled") {
+        throw new Error("job cannot accept authentication failure hold");
+      }
+      const claimed = await client.query(
+        `SELECT 1 FROM execution_events
+         WHERE job_id = $1
+           AND event_type = 'job.claimed'
+           AND payload->>'device_id' = $2
+           AND payload->>'attempt' = $3
+           AND payload->>'lease_token' = $4
+         LIMIT 1`,
+        [job.id, device.id, String(job.attempts), leaseToken]
+      );
+      const capabilities = Array.isArray(storedDevice.capabilities)
+        ? storedDevice.capabilities as string[]
+        : [];
+      if (
+        (job.job_type !== "module_search" && job.job_type !== "add_to_cart") ||
+        !capabilities.includes(job.job_type) ||
+        job.attempts <= 0 ||
+        !job.lease_token ||
+        job.lease_token !== leaseToken ||
+        (job.user_id !== undefined && job.user_id !== String(storedDevice.user_id)) ||
+        (job.status !== "failed" && job.status !== "pending" && job.status !== "leased" && job.status !== "running") ||
+        ((job.status === "leased" || job.status === "running") && job.lease_owner_id !== device.id) ||
+        ((job.status === "pending" || job.status === "failed") && !claimed.rowCount)
+      ) {
+        throw new Error("job is not eligible for authentication failure hold");
+      }
+
+      const updatedDevice = await client.query(
+        `UPDATE executor_devices SET
+           status = 'authentication_required',
+           last_heartbeat_at = NOW(),
+           updated_at = NOW()
+         WHERE id = $1
+         RETURNING *`,
+        [device.id]
+      );
+      const updatedJob = await client.query(
+        `UPDATE agent_jobs SET
+           status = 'failed',
+           error_message = $2,
+           lease_owner_id = NULL,
+           lease_expires_at = NULL,
+           completed_at = COALESCE(completed_at, NOW()),
+           updated_at = NOW()
+         WHERE id = $1
+         RETURNING *`,
+        [job.id, errorMessage.slice(0, 1000)]
+      );
+
+      let hold = await selectActiveAuthenticationFailureHold(job.id, client);
+      if (!hold) {
+        const event = await client.query(
+          `INSERT INTO execution_events(user_id, session_id, job_id, event_type, payload)
+           VALUES($1, $2, $3, 'job.authentication_failure_hold_pending', $4::jsonb)
+           RETURNING job_id, session_id, user_id,
+             payload->>'device_id' AS device_id,
+             (payload->>'attempt')::integer AS attempt,
+             payload->>'lease_token' AS lease_token`,
+          [
+            job.user_id ?? null,
+            job.session_id,
+            job.id,
+            JSON.stringify({
+              job_type: job.job_type,
+              device_id: device.id,
+              attempt: job.attempts,
+              lease_token: leaseToken,
+              error: errorMessage.slice(0, 500)
+            })
+          ]
+        );
+        hold = normalizeAuthenticationFailureHold(event.rows[0]);
+      }
+      return {
+        job: normalizeJob(updatedJob.rows[0]),
+        device: normalizeDevice(updatedDevice.rows[0]),
+        hold
+      };
+    });
+  },
+
+  async getActiveAuthenticationFailureHold(jobId) {
+    return selectActiveAuthenticationFailureHold(jobId);
+  },
+
+  async hasActiveAuthenticationFailureHold(deviceId) {
+    return (await selectActiveAuthenticationFailureHoldsByDevice(deviceId)).length > 0;
+  },
+
+  async listActiveAuthenticationFailureHolds(deviceId) {
+    return selectActiveAuthenticationFailureHoldsByDevice(deviceId);
+  },
+
+  async isAuthenticationFailureHoldReleased(jobId, deviceId, leaseToken) {
+    const result = await query(
+      `SELECT 1 FROM execution_events
+       WHERE job_id = $1
+         AND event_type = 'job.authentication_failure_hold_released'
+         AND payload->>'device_id' = $2
+         AND payload->>'lease_token' = $3
+       LIMIT 1`,
+      [jobId, deviceId, leaseToken]
+    );
+    return Boolean(result.rowCount);
+  },
+
+  async releaseAuthenticationFailureHold(hold, reason) {
+    return withTransaction(async (client) => {
+      await client.query("SELECT id FROM agent_jobs WHERE id = $1 FOR UPDATE", [hold.job_id]);
+      const active = await selectActiveAuthenticationFailureHold(hold.job_id, client);
+      if (
+        !active ||
+        active.device_id !== hold.device_id ||
+        active.attempt !== hold.attempt ||
+        active.lease_token !== hold.lease_token
+      ) return false;
+      await client.query(
+        `INSERT INTO execution_events(user_id, session_id, job_id, event_type, payload)
+         VALUES($1, $2, $3, 'job.authentication_failure_hold_released', $4::jsonb)`,
+        [
+          active.user_id ?? null,
+          active.session_id,
+          active.job_id,
+          JSON.stringify({
+            device_id: active.device_id,
+            attempt: active.attempt,
+            lease_token: active.lease_token,
+            reason
+          })
+        ]
+      );
+      await client.query(
+        `UPDATE agent_jobs SET last_auth_failure_token_hash = $2, updated_at = NOW()
+         WHERE id = $1`,
+        [active.job_id, authenticationFailureTokenHash(active.lease_token)]
+      );
+      return true;
     });
   },
 
@@ -432,6 +835,7 @@ export const postgresRuntimeRepository: RuntimeRepository = {
          status = 'cancelled',
          error_message = '用户在执行器领取前取消任务',
          completed_at = NOW(),
+         lease_token = NULL,
          updated_at = NOW()
        WHERE id = $1 AND status = 'pending' ${ownerClause}
        RETURNING *`,

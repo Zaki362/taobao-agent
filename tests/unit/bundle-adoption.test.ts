@@ -152,6 +152,43 @@ describe("Agent purchase bundle adoption", () => {
     expect(state.bundle_adoption?.pending_product_ids).not.toContain(productId);
   });
 
+  it("keeps an explicitly declared interview result in the product-only demo cart", () => {
+    const state = stateWithBundle();
+    const bundle = state.completion_report!.purchase_bundle!;
+    const adoption = acceptCurrentPurchaseBundle(state, bundle.generated_at);
+    const productId = adoption.product_ids[0];
+    const product = Object.values(state.module_candidates).flat().find((item) => item.product_id === productId)!;
+    state.hosted_tasks.push({
+      task_id: "interview-demo-cart-task",
+      task_type: "add_to_cart",
+      session_id: state.session_id,
+      status: "running",
+      title: "加入产品内演示清单",
+      description: "不调用淘宝加购",
+      product_id: productId,
+      module_id: product.module_id,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+      payload: {}
+    });
+
+    resolveHostedAddToCartTask(state, {
+      task_id: "interview-demo-cart-task",
+      status: "completed",
+      result_summary: "面试演示清单已更新，未调用淘宝",
+      selected_spec: "面试演示模式（未读取淘宝规格）",
+      cart_source: "demo",
+      cart_note: "只写入 SceneCart 产品内演示清单"
+    });
+
+    expect(state.selected_items.find((item) => item.product_id === productId)).toMatchObject({
+      cart_source: "demo",
+      selected_spec: "面试演示模式（未读取淘宝规格）",
+      cart_note: "只写入 SceneCart 产品内演示清单"
+    });
+    expect(state.bundle_adoption?.added_product_ids).toContain(productId);
+  });
+
   it("drops orphaned persisted adoption state and invalidates both artifacts on replanning", () => {
     const state = stateWithBundle();
     const bundle = state.completion_report!.purchase_bundle!;

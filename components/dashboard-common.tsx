@@ -54,7 +54,7 @@ export function StatusPage({ title, description, loading }: { title: string; des
     : ["提取场景与约束", "识别预算和偏好", "整理成可确认需求"];
 
   return (
-    <div className="mx-auto w-full max-w-4xl space-y-4">
+    <div className="workflow-content space-y-4">
       <AgentBrief
         eyebrow="SceneCart 正在协作"
         title={title}

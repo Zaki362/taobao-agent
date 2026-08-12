@@ -442,7 +442,7 @@ export function ResultsPage({
               onClick={onProceedToCartReview}
             >
               <ArrowRight className="mr-2 h-4 w-4" />
-              进入下单购买
+              进入购买确认
             </Button>
           </CardContent>
         </Card>

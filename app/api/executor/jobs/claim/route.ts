@@ -14,12 +14,22 @@ export async function POST(request: NextRequest) {
     const device = await authenticateExecutorToken(bearerToken(request));
     if (!device) throw new ApiRouteError("invalid executor token", 401, "invalid_executor_token");
     const repository = getRuntimeRepository();
-    await repository.heartbeatDevice(device.id);
-    let job = await repository.claimJob(device, DEFAULT_JOB_LEASE_MS);
+    if (device.status === "authentication_required") {
+      await repository.heartbeatDevice(device.id, "authentication_required");
+      return apiOk({
+        job: null,
+        recovery: { recovered: false, reason: "authentication_required" },
+        executor_state: "authentication_required",
+        protocol_version: EXECUTOR_PROTOCOL_VERSION
+      });
+    }
+    const activeDevice = await repository.heartbeatDevice(device.id, "online");
+    if (!activeDevice) throw new ApiRouteError("executor device unavailable", 401, "invalid_executor_token");
+    let job = await repository.claimJob(activeDevice, DEFAULT_JOB_LEASE_MS);
     let recovery: WorkflowRecoveryResult = { recovered: false };
     if (!job) {
       try {
-        recovery = await recoverAgentWorkflowForExecutor(device);
+        recovery = await recoverAgentWorkflowForExecutor(activeDevice);
       } catch (error) {
         recovery = {
           recovered: false,
@@ -29,7 +39,7 @@ export async function POST(request: NextRequest) {
       }
     }
     if (!job && recovery.recovered) {
-      job = await repository.claimJob(device, DEFAULT_JOB_LEASE_MS);
+      job = await repository.claimJob(activeDevice, DEFAULT_JOB_LEASE_MS);
     }
     if (job) {
       await repository.appendEvent({
@@ -37,10 +47,15 @@ export async function POST(request: NextRequest) {
         session_id: job.session_id,
         job_id: job.id,
         event_type: "job.claimed",
-        payload: { device_id: device.id, device_name: device.name, attempt: job.attempts }
+        payload: {
+          device_id: activeDevice.id,
+          device_name: activeDevice.name,
+          attempt: job.attempts,
+          lease_token: job.lease_token
+        }
       });
     }
-    return apiOk({ job, recovery, protocol_version: EXECUTOR_PROTOCOL_VERSION });
+    return apiOk({ job, recovery, executor_state: activeDevice.status, protocol_version: EXECUTOR_PROTOCOL_VERSION });
   } catch (error) {
     return apiRouteError(error, "failed to claim executor job");
   }

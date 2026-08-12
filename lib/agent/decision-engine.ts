@@ -1,5 +1,6 @@
 import {
   AgentDecision,
+  HostedExecutionTask,
   ModuleSearchTrace,
   SessionState,
   ShoppingPlanModule
@@ -32,6 +33,20 @@ function activeSearchTask(state: SessionState, moduleId: string) {
   );
 }
 
+export function isTaskFromCurrentWorkflowRun(
+  state: SessionState,
+  task: HostedExecutionTask
+) {
+  const currentWorkflowRunId = state.agent_runtime.workflow_run_id;
+  const taskWorkflowRunId = typeof task.payload.workflow_run_id === "string"
+    ? task.payload.workflow_run_id
+    : undefined;
+
+  // Tasks created before workflow-run scoping was introduced remain authoritative.
+  // Explicit recovery stamps those historical tasks before starting a fresh run.
+  return !currentWorkflowRunId || !taskWorkflowRunId || taskWorkflowRunId === currentWorkflowRunId;
+}
+
 function hasSkippedModule(state: SessionState, moduleId: string) {
   return state.agent_decisions.some(
     (decision) => decision.module_id === moduleId && decision.action === "skip_module"
@@ -43,6 +58,7 @@ function terminalSearchTask(state: SessionState, moduleId: string) {
     (task) =>
       task.task_type === "module_search" &&
       task.module_id === moduleId &&
+      isTaskFromCurrentWorkflowRun(state, task) &&
       (task.status === "completed" || task.status === "failed" || task.status === "cancelled")
   );
 }

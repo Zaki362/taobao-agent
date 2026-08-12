@@ -43,6 +43,38 @@ describe("shopping session summaries", () => {
     expect(completed).toMatchObject({ status_label: "推荐已生成", resume_stage: "review_results" });
   });
 
+  it("resumes a refined idle plan at confirmation even when reusable candidates remain", () => {
+    const state = createSessionFixture();
+    const module = state.shopping_plan.modules[0];
+    state.module_candidates[module.module_id] = [{
+      product_id: "reusable-candidate",
+      module_id: module.module_id,
+      title: "可复用候选",
+      price: 99,
+      source: "淘宝",
+      shop_name: "测试店铺",
+      image_url: "https://img.alicdn.com/reusable.jpg",
+      detail_url: "https://item.taobao.com/item.htm?id=reusable-candidate",
+      shop_badges: [],
+      highlights: [],
+      risk_notes: [],
+      fit_reason: "保留未受影响模块",
+      recommendation_type: "稳妥推荐"
+    }];
+    state.agent_runtime.workflow_status = "idle";
+    state.last_refinement = {
+      quick_action: "应用市场预算建议",
+      summary: "等待确认新规划",
+      impacted_modules: state.shopping_plan.modules.slice(0, 2).map((item) => item.module_id),
+      reusable_modules: [module.module_id],
+      removed_modules: [],
+      module_decisions: [],
+      generated_at: "2026-08-12T00:00:00.000Z"
+    };
+
+    expect(summarizeShoppingSession(state).resume_stage).toBe("confirm_plan");
+  });
+
   it("orders tasks by real activity and enforces the response limit", () => {
     const older = createSessionFixture({
       session_id: "session-1735689600000",

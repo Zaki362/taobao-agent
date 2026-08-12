@@ -56,7 +56,7 @@ describe("local executor configuration", () => {
       requested.push(url);
       const isSceneCart = url === "http://127.0.0.1:3001/api/runtime/health";
       return new Response(JSON.stringify(isSceneCart
-        ? { status: "healthy", executor_protocol_version: "1" }
+        ? { status: "healthy", executor_protocol_version: "2" }
         : { error: "not found" }), {
         status: isSceneCart ? 200 : 404,
         headers: { "Content-Type": "application/json" }

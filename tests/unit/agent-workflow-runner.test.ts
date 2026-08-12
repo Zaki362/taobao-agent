@@ -4,7 +4,9 @@ import path from "node:path";
 import { createAgentDecision } from "@/lib/agent/decision-engine";
 import { buildAgentCompletionReport } from "@/lib/agent/completion-review";
 import { reviewModuleCandidates } from "@/lib/agent/candidate-reviewer";
+import { searchModule } from "@/lib/agent/orchestrator";
 import {
+  acceptPartialAgentResults,
   advanceAgentWorkflow,
   improveAgentCompletionQuality,
   pauseAgentWorkflow,
@@ -12,7 +14,12 @@ import {
   recoverAgentCompletionGaps
 } from "@/lib/agent/workflow-runner";
 import { recoverAgentWorkflowForExecutor, recoverAgentWorkflows } from "@/lib/agent/workflow-recovery";
-import { applyCompletedRuntimeJob, applyFailedRuntimeJob, enqueueModuleSearchJob } from "@/lib/runtime/jobs";
+import {
+  applyCompletedRuntimeJob,
+  applyFailedRuntimeJob,
+  enqueueModuleSearchJob,
+  establishAuthenticationFailureHold
+} from "@/lib/runtime/jobs";
 import { localRuntimeRepository, resetLocalRuntimeForTests } from "@/lib/runtime/local-repository";
 import type { ExecutorDevice } from "@/lib/runtime/types";
 import type { ProductCandidate } from "@/lib/session/types";
@@ -36,7 +43,7 @@ function candidates(moduleId: string, moduleName: string): ProductCandidate[] {
     product_id: `${moduleId}-${index}`,
     title: `${moduleName} 自动续跑候选 ${index + 1}`,
     price: 99 + index * 30,
-    source: "淘宝本地执行器测试",
+    source: "淘宝",
     shop_name: "续跑测试旗舰店",
     image_url: "https://example.com/item.jpg",
     detail_url: `https://item.taobao.com/item.htm?id=${moduleId}-${index}`,
@@ -47,6 +54,28 @@ function candidates(moduleId: string, moduleName: string): ProductCandidate[] {
     recommendation_type: type,
     module_id: moduleId
   }));
+}
+
+function verifiedSearchResult(
+  job: { id: string; payload: Record<string, unknown> },
+  result: { summary: string; candidates: ProductCandidate[] }
+) {
+  return {
+    ...result,
+    evidence: {
+      schema: "scenecart.taobao-mcp-search-evidence/v1",
+      source: "taobao-mcp",
+      tool: "search_products",
+      source_app: "SceneCartWorkflowUnit",
+      job_id: job.id,
+      module_id: String(job.payload.module_id ?? ""),
+      workflow_run_id: String(job.payload.workflow_run_id ?? ""),
+      keyword: String(job.payload.keyword ?? ""),
+      captured_at: new Date().toISOString(),
+      cache_hit: false,
+      raw_result_count: result.candidates.length
+    }
+  };
 }
 
 async function removeSessionFile(sessionId: string) {
@@ -81,10 +110,10 @@ describe("server-managed Agent workflow", () => {
       expect(job).not.toBeNull();
       const moduleId = String(job!.payload.module_id);
       const moduleName = String(job!.payload.module_name);
-      await applyCompletedRuntimeJob(job!.id, device, {
+      await applyCompletedRuntimeJob(job!.id, device, verifiedSearchResult(job!, {
         summary: "测试执行器完成候选回填",
         candidates: candidates(moduleId, moduleName)
-      });
+      }));
       completedJobs += 1;
       advance = await advanceAgentWorkflow(sessionId, device.user_id, {
         trigger: "job_completed"
@@ -130,10 +159,10 @@ describe("server-managed Agent workflow", () => {
     expect(firstJob).not.toBeNull();
     const firstModuleId = String(firstJob!.payload.module_id);
 
-    await applyCompletedRuntimeJob(firstJob!.id, device, {
+    await applyCompletedRuntimeJob(firstJob!.id, device, verifiedSearchResult(firstJob!, {
       summary: "淘宝搜索完成但没有可展示候选",
       candidates: []
-    });
+    }));
     const continued = await advanceAgentWorkflow(sessionId, device.user_id, {
       trigger: "job_completed"
     });
@@ -147,6 +176,456 @@ describe("server-managed Agent workflow", () => {
       expect.objectContaining({ action: "skip_module", module_id: firstModuleId })
     ]));
     expect(restored?.hosted_tasks.filter((task) => task.module_id === firstModuleId)).toHaveLength(1);
+  });
+
+  it("revives the same failed search job only after an explicit user-confirmed retry", async () => {
+    const sessionId = `session-workflow-confirmed-task-retry-${Date.now()}`;
+    sessionFiles.add(sessionId);
+    const state = createSessionFixture({ session_id: sessionId });
+    state.agent_runtime.workflow_run_id = "confirmed-retry-run";
+    await localRuntimeRepository.saveSession(state);
+    const module = state.shopping_plan.modules[0];
+
+    await searchModule(sessionId, module.module_id, undefined, device.user_id);
+    const failedJob = await localRuntimeRepository.claimJob(device, 30_000);
+    expect(failedJob).not.toBeNull();
+    const originalKeyword = String(failedJob!.payload.keyword);
+    await applyFailedRuntimeJob(failedJob!.id, device, "用户可确认重试的终态失败", { retryable: false });
+
+    await searchModule(sessionId, module.module_id, {
+      keywordOverride: originalKeyword
+    }, device.user_id);
+    expect((await localRuntimeRepository.getJob(failedJob!.id))?.status).toBe("failed");
+    expect(await localRuntimeRepository.claimJob(device, 30_000)).toBeNull();
+
+    const retried = await searchModule(sessionId, module.module_id, {
+      keywordOverride: originalKeyword,
+      confirmedRetry: true
+    }, device.user_id);
+    const revivedJob = await localRuntimeRepository.getJob(failedJob!.id);
+    const moduleTasks = retried.state.hosted_tasks.filter(
+      (task) => task.task_type === "module_search" && task.module_id === module.module_id
+    );
+
+    expect(revivedJob).toMatchObject({
+      id: failedJob!.id,
+      status: "pending",
+      attempts: 0,
+      payload: {
+        keyword: originalKeyword,
+        workflow_run_id: "confirmed-retry-run"
+      }
+    });
+    expect(moduleTasks).toHaveLength(1);
+    expect(moduleTasks[0]).toMatchObject({
+      task_id: failedJob!.id,
+      status: "pending",
+      error_message: undefined,
+      payload: { keyword: originalKeyword }
+    });
+    expect((await localRuntimeRepository.claimJob(device, 30_000))?.id).toBe(failedJob!.id);
+    const events = await localRuntimeRepository.listEvents(sessionId, 0, device.user_id, 100);
+    expect(events.some((event) => event.event_type === "job.requeued" && event.job_id === failedJob!.id)).toBe(true);
+  });
+
+  it("atomically revives an authentication-failed search and resumes the paused workflow", async () => {
+    const sessionId = `session-workflow-auth-resume-${Date.now()}`;
+    sessionFiles.add(sessionId);
+    const state = createSessionFixture({ session_id: sessionId });
+    await localRuntimeRepository.saveSession(state);
+
+    const started = await advanceAgentWorkflow(sessionId, device.user_id, {
+      start: true,
+      trigger: "user_start"
+    });
+    const failedJob = await localRuntimeRepository.claimJob(device, 30_000);
+    expect(failedJob).not.toBeNull();
+    const workflowRunId = started.state.agent_runtime.workflow_run_id;
+    const failedModuleId = String(failedJob!.payload.module_id);
+    const originalKeyword = String(failedJob!.payload.keyword);
+    await applyFailedRuntimeJob(
+      failedJob!.id,
+      device,
+      "[auth_required] 淘宝未登录，已打开登录页面，请先登录",
+      { retryable: false }
+    );
+
+    const paused = await localRuntimeRepository.getSession(sessionId, device.user_id);
+    expect(paused?.agent_runtime).toMatchObject({
+      workflow_status: "paused",
+      auto_continue: false,
+      workflow_run_id: workflowRunId,
+      current_module_id: failedModuleId
+    });
+
+    const resumed = await resumeAgentWorkflow(sessionId, device.user_id, {
+      retryAuthenticationFailure: true
+    });
+    const revivedJob = await localRuntimeRepository.getJob(failedJob!.id);
+    const moduleTasks = resumed.state.hosted_tasks.filter(
+      (task) => task.task_type === "module_search" && task.module_id === failedModuleId
+    );
+
+    expect(resumed.outcome).toBe("waiting");
+    expect(resumed.state.agent_runtime).toMatchObject({
+      workflow_status: "waiting_for_tools",
+      auto_continue: true,
+      workflow_run_id: workflowRunId,
+      current_module_id: failedModuleId
+    });
+    expect(revivedJob).toMatchObject({
+      id: failedJob!.id,
+      status: "pending",
+      attempts: 0,
+      payload: {
+        module_id: failedModuleId,
+        keyword: originalKeyword,
+        workflow_run_id: workflowRunId
+      }
+    });
+    expect(moduleTasks).toEqual([
+      expect.objectContaining({
+        task_id: failedJob!.id,
+        status: "pending",
+        error_message: undefined,
+        payload: expect.objectContaining({
+          keyword: originalKeyword,
+          workflow_run_id: workflowRunId
+        })
+      })
+    ]);
+    expect(resumed.state.agent_decisions.some(
+      (decision) => decision.action === "skip_module" && decision.module_id === failedModuleId
+    )).toBe(false);
+    expect((await localRuntimeRepository.claimJob(device, 30_000))?.id).toBe(failedJob!.id);
+    expect(await localRuntimeRepository.claimJob(device, 30_000)).toBeNull();
+  });
+
+  it("idempotently resumes an authentication retry that is already queued", async () => {
+    const sessionId = `session-workflow-auth-already-queued-${Date.now()}`;
+    sessionFiles.add(sessionId);
+    const state = createSessionFixture({ session_id: sessionId });
+    await localRuntimeRepository.saveSession(state);
+
+    await advanceAgentWorkflow(sessionId, device.user_id, {
+      start: true,
+      trigger: "user_start"
+    });
+    const failedJob = await localRuntimeRepository.claimJob(device, 30_000);
+    expect(failedJob).not.toBeNull();
+    const moduleId = String(failedJob!.payload.module_id);
+    const keyword = String(failedJob!.payload.keyword);
+    await applyFailedRuntimeJob(
+      failedJob!.id,
+      device,
+      "[auth_required] 淘宝未登录，请先登录",
+      { retryable: false }
+    );
+
+    // Reproduce the state left by the old two-request UI when the retry request
+    // succeeded but the subsequent workflow-resume request never arrived.
+    await searchModule(sessionId, moduleId, {
+      keywordOverride: keyword,
+      confirmedRetry: true
+    }, device.user_id);
+    const beforeResume = await localRuntimeRepository.getSession(sessionId, device.user_id);
+    expect(beforeResume?.agent_runtime).toMatchObject({
+      workflow_status: "paused",
+      auto_continue: false
+    });
+    expect((await localRuntimeRepository.getJob(failedJob!.id))?.status).toBe("pending");
+
+    const resumed = await resumeAgentWorkflow(sessionId, device.user_id, {
+      retryAuthenticationFailure: true
+    });
+    const moduleTasks = resumed.state.hosted_tasks.filter(
+      (task) => task.task_type === "module_search" && task.module_id === moduleId
+    );
+
+    expect(resumed.outcome).toBe("waiting");
+    expect(moduleTasks).toEqual([
+      expect.objectContaining({ task_id: failedJob!.id, status: "pending" })
+    ]);
+    expect((await localRuntimeRepository.claimJob(device, 30_000))?.id).toBe(failedJob!.id);
+    expect(await localRuntimeRepository.claimJob(device, 30_000)).toBeNull();
+    const events = await localRuntimeRepository.listEvents(sessionId, 0, device.user_id, 100);
+    expect(events.filter(
+      (event) => event.event_type === "job.requeued" && event.job_id === failedJob!.id
+    )).toHaveLength(1);
+  });
+
+  it("advances without requeueing when an authentication retry completed while paused", async () => {
+    const sessionId = `session-workflow-auth-already-completed-${Date.now()}`;
+    sessionFiles.add(sessionId);
+    const state = createSessionFixture({ session_id: sessionId });
+    await localRuntimeRepository.saveSession(state);
+
+    await advanceAgentWorkflow(sessionId, device.user_id, {
+      start: true,
+      trigger: "user_start"
+    });
+    const failedJob = await localRuntimeRepository.claimJob(device, 30_000);
+    expect(failedJob).not.toBeNull();
+    const moduleId = String(failedJob!.payload.module_id);
+    const moduleName = String(failedJob!.payload.module_name);
+    const keyword = String(failedJob!.payload.keyword);
+    await applyFailedRuntimeJob(
+      failedJob!.id,
+      device,
+      "[auth_required] 淘宝未登录，请先登录",
+      { retryable: false }
+    );
+    await searchModule(sessionId, moduleId, {
+      keywordOverride: keyword,
+      confirmedRetry: true
+    }, device.user_id);
+    const retriedJob = await localRuntimeRepository.claimJob(device, 30_000);
+    expect(retriedJob?.id).toBe(failedJob!.id);
+    await applyCompletedRuntimeJob(failedJob!.id, device, verifiedSearchResult(failedJob!, {
+      summary: "重新登录后搜索已完成",
+      candidates: candidates(moduleId, moduleName)
+    }));
+    const completedWhilePaused = await localRuntimeRepository.getSession(sessionId, device.user_id);
+    expect(completedWhilePaused?.agent_runtime).toMatchObject({
+      workflow_status: "paused",
+      auto_continue: false
+    });
+
+    const resumed = await resumeAgentWorkflow(sessionId, device.user_id, {
+      retryAuthenticationFailure: true
+    });
+    const nextJob = await localRuntimeRepository.claimJob(device, 30_000);
+
+    expect(resumed.outcome).toBe("queued");
+    expect(resumed.state.hosted_tasks.filter(
+      (task) => task.task_type === "module_search" && task.module_id === moduleId
+    )).toEqual([
+      expect.objectContaining({ task_id: failedJob!.id, status: "completed" })
+    ]);
+    expect((await localRuntimeRepository.getJob(failedJob!.id))?.status).toBe("completed");
+    expect(nextJob?.id).not.toBe(failedJob!.id);
+    expect(nextJob?.payload.module_id).not.toBe(moduleId);
+    const events = await localRuntimeRepository.listEvents(sessionId, 0, device.user_id, 100);
+    expect(events.filter(
+      (event) => event.event_type === "job.requeued" && event.job_id === failedJob!.id
+    )).toHaveLength(1);
+  });
+
+  it("rejects a forged authentication retry for an ordinary user pause", async () => {
+    const sessionId = `session-workflow-forged-auth-resume-${Date.now()}`;
+    sessionFiles.add(sessionId);
+    const state = createSessionFixture({ session_id: sessionId });
+    await localRuntimeRepository.saveSession(state);
+
+    await advanceAgentWorkflow(sessionId, device.user_id, {
+      start: true,
+      trigger: "user_start"
+    });
+    await pauseAgentWorkflow(sessionId, device.user_id);
+
+    await expect(resumeAgentWorkflow(sessionId, device.user_id, {
+      retryAuthenticationFailure: true
+    })).rejects.toMatchObject({
+      code: "authentication_retry_not_available"
+    });
+    const restored = await localRuntimeRepository.getSession(sessionId, device.user_id);
+    expect(restored?.agent_runtime).toMatchObject({
+      workflow_status: "paused",
+      auto_continue: false
+    });
+    expect(restored?.hosted_tasks.filter(
+      (task) => task.task_type === "module_search" && (task.status === "pending" || task.status === "running")
+    )).toHaveLength(1);
+  });
+
+  it("does not let direct confirmed_retry bypass an active authentication hold", async () => {
+    const sessionId = `session-workflow-held-direct-retry-${Date.now()}`;
+    sessionFiles.add(sessionId);
+    const state = createSessionFixture({ session_id: sessionId });
+    await localRuntimeRepository.saveSession(state);
+    await advanceAgentWorkflow(sessionId, device.user_id, {
+      start: true,
+      trigger: "user_start"
+    });
+    const failedJob = await localRuntimeRepository.claimJob(device, 30_000);
+    const moduleId = String(failedJob!.payload.module_id);
+    const keyword = String(failedJob!.payload.keyword);
+    await establishAuthenticationFailureHold(
+      failedJob!.id,
+      device,
+      "[auth_required] 淘宝未登录，请先登录淘宝账号",
+      failedJob!.lease_token!
+    );
+
+    await expect(searchModule(
+      sessionId,
+      moduleId,
+      { keywordOverride: keyword, confirmedRetry: true },
+      device.user_id
+    )).rejects.toThrow("explicit user release");
+    expect(await localRuntimeRepository.hasActiveAuthenticationFailureHold(device.id)).toBe(true);
+    expect(await localRuntimeRepository.getJob(failedJob!.id)).toMatchObject({
+      status: "failed",
+      lease_token: failedJob!.lease_token
+    });
+  });
+
+  it("accepts 12 preserved candidates without requeueing an authentication-failed search", async () => {
+    const sessionId = `session-workflow-accept-partial-${Date.now()}`;
+    sessionFiles.add(sessionId);
+    const state = createSessionFixture({ session_id: sessionId });
+    await localRuntimeRepository.saveSession(state);
+
+    await advanceAgentWorkflow(sessionId, device.user_id, {
+      start: true,
+      trigger: "user_start"
+    });
+    const failedJob = await localRuntimeRepository.claimJob(device, 30_000);
+    expect(failedJob).not.toBeNull();
+    const failedModuleId = String(failedJob!.payload.module_id);
+    const withCandidates = await localRuntimeRepository.getSession(sessionId, device.user_id);
+    const coveredModules = withCandidates!.shopping_plan.modules
+      .filter((module) => module.module_id !== failedModuleId)
+      .slice(0, 4);
+    expect(coveredModules).toHaveLength(4);
+    for (const module of coveredModules) {
+      withCandidates!.module_candidates[module.module_id] = candidates(module.module_id, module.module_name);
+    }
+    const activeTask = withCandidates!.hosted_tasks.find((task) => task.task_id === failedJob!.id)!;
+    withCandidates!.hosted_tasks.unshift({
+      ...structuredClone(activeTask),
+      task_id: `${activeTask.task_id}-older-network-failure`,
+      runtime_job_id: undefined,
+      status: "failed",
+      error_message: "older network timeout"
+    });
+    await localRuntimeRepository.saveSession(withCandidates!);
+
+    const authenticationError = "[auth_required] 淘宝未登录，已打开登录页面，请先登录";
+    await establishAuthenticationFailureHold(
+      failedJob!.id,
+      device,
+      authenticationError,
+      failedJob!.lease_token!
+    );
+    const jobsBeforeAcceptance = await localRuntimeRepository.listJobs(sessionId, device.user_id);
+
+    const accepted = await acceptPartialAgentResults(sessionId, device.user_id);
+    const jobsAfterAcceptance = await localRuntimeRepository.listJobs(sessionId, device.user_id);
+    const failedTask = accepted.state.hosted_tasks.find((task) => task.task_id === failedJob!.id);
+
+    expect(accepted.preservedCandidateCount).toBe(12);
+    expect(Object.values(accepted.state.module_candidates).flat()).toHaveLength(12);
+    expect(jobsAfterAcceptance.map((job) => job.id)).toEqual(jobsBeforeAcceptance.map((job) => job.id));
+    expect(jobsAfterAcceptance).toHaveLength(1);
+    expect(failedTask).toMatchObject({
+      status: "failed",
+      error_message: authenticationError,
+      payload: {
+        user_resolution: "user_skipped",
+        partial_results_status: "partial_results_accepted"
+      }
+    });
+    expect(await localRuntimeRepository.hasActiveAuthenticationFailureHold(device.id)).toBe(false);
+    expect(accepted.state.agent_runtime).toMatchObject({
+      workflow_status: "completed",
+      auto_continue: false,
+      current_module_id: undefined
+    });
+    expect(accepted.state.agent_runtime.workflow_message).not.toMatch(/未登录|auth_required/);
+    expect(accepted.state.agent_decisions).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        action: "skip_module",
+        module_id: failedModuleId,
+        guardrail_notes: ["user_skipped", "partial_results_accepted"]
+      })
+    ]));
+    expect(accepted.state.completion_report).toMatchObject({
+      total_candidates: 12,
+      skipped_module_ids: expect.arrayContaining([failedModuleId])
+    });
+
+    const pausedDevice = await localRuntimeRepository.heartbeatDevice(
+      device.id,
+      "authentication_required"
+    );
+    await expect(applyFailedRuntimeJob(
+      failedJob!.id,
+      pausedDevice!,
+      authenticationError,
+      {
+        retryable: false,
+        authenticationFailureCallback: true,
+        leaseToken: failedJob!.lease_token
+      }
+    )).resolves.toMatchObject({ id: failedJob!.id, status: "failed" });
+    const afterLateCallback = await localRuntimeRepository.getSession(sessionId, device.user_id);
+    expect(afterLateCallback?.agent_runtime).toMatchObject({
+      workflow_status: "completed",
+      auto_continue: false,
+      current_module_id: undefined
+    });
+    expect(Object.values(afterLateCallback!.module_candidates).flat()).toHaveLength(12);
+    expect(afterLateCallback?.hosted_tasks.find((task) => task.task_id === failedJob!.id)?.payload)
+      .toMatchObject({
+        user_resolution: "user_skipped",
+        partial_results_status: "partial_results_accepted"
+      });
+
+    const noAutomaticReplay = await advanceAgentWorkflow(sessionId, device.user_id, {
+      trigger: "recovery"
+    });
+    expect(noAutomaticReplay.outcome).toBe("no_op");
+    expect(await localRuntimeRepository.claimJob(device, 30_000)).toBeNull();
+    const events = await localRuntimeRepository.listEvents(sessionId, 0, device.user_id, 100);
+    expect(events).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        event_type: "agent.partial_results.accepted",
+        payload: expect.objectContaining({
+          module_id: failedModuleId,
+          user_resolution: "user_skipped",
+          status: "partial_results_accepted",
+          preserved_candidate_count: 12
+        })
+      })
+    ]));
+  });
+
+  it("does not repeat a completed search when confirmed_retry is forged", async () => {
+    const sessionId = `session-workflow-reject-completed-retry-${Date.now()}`;
+    sessionFiles.add(sessionId);
+    const state = createSessionFixture({ session_id: sessionId });
+    state.agent_runtime.workflow_run_id = "completed-search-run";
+    await localRuntimeRepository.saveSession(state);
+    const module = state.shopping_plan.modules[0];
+
+    await searchModule(sessionId, module.module_id, undefined, device.user_id);
+    const completedJob = await localRuntimeRepository.claimJob(device, 30_000);
+    expect(completedJob).not.toBeNull();
+    const originalKeyword = String(completedJob!.payload.keyword);
+    await applyCompletedRuntimeJob(completedJob!.id, device, verifiedSearchResult(completedJob!, {
+      summary: "真实搜索已完成，但没有可展示候选",
+      candidates: []
+    }));
+    const completedState = await localRuntimeRepository.getSession(sessionId, device.user_id);
+    completedState!.completion_report = buildAgentCompletionReport(completedState!);
+    await localRuntimeRepository.saveSession(completedState!);
+
+    const repeated = await searchModule(sessionId, module.module_id, {
+      keywordOverride: originalKeyword,
+      confirmedRetry: true
+    }, device.user_id);
+
+    expect(repeated.state.hosted_tasks.filter(
+      (task) => task.task_type === "module_search" && task.module_id === module.module_id
+    )).toEqual([
+      expect.objectContaining({ task_id: completedJob!.id, status: "completed" })
+    ]);
+    expect(repeated.state.completion_report).toEqual(completedState!.completion_report);
+    expect((await localRuntimeRepository.getJob(completedJob!.id))?.status).toBe("completed");
+    expect(await localRuntimeRepository.claimJob(device, 30_000)).toBeNull();
+    const events = await localRuntimeRepository.listEvents(sessionId, 0, device.user_id, 100);
+    expect(events.some((event) => event.event_type === "job.requeued" && event.job_id === completedJob!.id)).toBe(false);
   });
 
   it("pauses after the active module and resumes the same workflow without losing progress", async () => {
@@ -173,10 +652,10 @@ describe("server-managed Agent workflow", () => {
     expect(paused.state.agent_runtime.workflow_message).toContain("不会继续下一个模块");
 
     const firstModuleId = String(firstJob!.payload.module_id);
-    await applyCompletedRuntimeJob(firstJob!.id, device, {
+    await applyCompletedRuntimeJob(firstJob!.id, device, verifiedSearchResult(firstJob!, {
       summary: "暂停前的模块仍正常完成",
       candidates: candidates(firstModuleId, String(firstJob!.payload.module_name))
-    });
+    }));
     const stoppedContinuation = await advanceAgentWorkflow(sessionId, device.user_id, {
       trigger: "job_completed"
     });
@@ -243,10 +722,10 @@ describe("server-managed Agent workflow", () => {
       price: 29,
       shop_name: "官方测试旗舰店"
     };
-    await applyCompletedRuntimeJob(firstJob!.id, device, {
+    await applyCompletedRuntimeJob(firstJob!.id, device, verifiedSearchResult(firstJob!, {
       summary: "首轮只返回一个高质量候选",
       candidates: [firstCandidate]
-    });
+    }));
 
     const retry = await advanceAgentWorkflow(sessionId, device.user_id, {
       trigger: "job_completed"
@@ -265,10 +744,10 @@ describe("server-managed Agent workflow", () => {
       price: 139 + index * 70,
       shop_name: "补搜测试店"
     }));
-    await applyCompletedRuntimeJob(secondJob!.id, device, {
+    await applyCompletedRuntimeJob(secondJob!.id, device, verifiedSearchResult(secondJob!, {
       summary: "第二轮补齐档位候选",
       candidates: secondRound
-    });
+    }));
 
     const restored = await localRuntimeRepository.getSession(sessionId, device.user_id);
     const finalCandidates = restored?.module_candidates[moduleId] ?? [];
@@ -291,10 +770,10 @@ describe("server-managed Agent workflow", () => {
       const nextJob = await localRuntimeRepository.claimJob(device, 30_000);
       const nextModuleId = String(nextJob!.payload.module_id);
       const nextModuleName = String(nextJob!.payload.module_name);
-      await applyCompletedRuntimeJob(nextJob!.id, device, {
+      await applyCompletedRuntimeJob(nextJob!.id, device, verifiedSearchResult(nextJob!, {
         summary: "完成补搜合并测试的剩余模块",
         candidates: candidates(nextModuleId, nextModuleName)
-      });
+      }));
       continuation = await advanceAgentWorkflow(sessionId, device.user_id, {
         trigger: "job_completed"
       });
@@ -318,10 +797,10 @@ describe("server-managed Agent workflow", () => {
     const moduleId = String(firstJob!.payload.module_id);
     const moduleName = String(firstJob!.payload.module_name);
     const preservedCandidate = candidates(moduleId, moduleName)[0];
-    await applyCompletedRuntimeJob(firstJob!.id, device, {
+    await applyCompletedRuntimeJob(firstJob!.id, device, verifiedSearchResult(firstJob!, {
       summary: "首轮形成一个候选",
       candidates: [preservedCandidate]
-    });
+    }));
 
     const retry = await advanceAgentWorkflow(sessionId, device.user_id, {
       trigger: "job_completed"
@@ -402,6 +881,98 @@ describe("server-managed Agent workflow", () => {
     )).toBe(true);
   });
 
+  it("starts a fresh recovery run after a real terminal search failure without deleting task history", async () => {
+    const sessionId = `session-workflow-recover-failed-task-${Date.now()}`;
+    sessionFiles.add(sessionId);
+    const state = createSessionFixture({ session_id: sessionId });
+    await localRuntimeRepository.saveSession(state);
+
+    const started = await advanceAgentWorkflow(sessionId, device.user_id, {
+      start: true,
+      trigger: "user_start"
+    });
+    expect(started.outcome).toBe("queued");
+    const failedJob = await localRuntimeRepository.claimJob(device, 30_000);
+    expect(failedJob).not.toBeNull();
+    const failedModuleId = String(failedJob!.payload.module_id);
+    const originalWorkflowRunId = String(failedJob!.payload.workflow_run_id);
+    expect(originalWorkflowRunId).toBe(started.state.agent_runtime.workflow_run_id);
+
+    await applyFailedRuntimeJob(failedJob!.id, device, "E2E 同类的真实终态搜索失败", { retryable: false });
+    let continuation = await advanceAgentWorkflow(sessionId, device.user_id, {
+      trigger: "job_failed"
+    });
+    while (continuation.outcome === "queued") {
+      const nextJob = await localRuntimeRepository.claimJob(device, 30_000);
+      expect(nextJob).not.toBeNull();
+      const moduleId = String(nextJob!.payload.module_id);
+      expect(moduleId).not.toBe(failedModuleId);
+      await applyCompletedRuntimeJob(nextJob!.id, device, verifiedSearchResult(nextJob!, {
+        summary: "完成失败模块之外的剩余搜索",
+        candidates: candidates(moduleId, String(nextJob!.payload.module_name))
+      }));
+      continuation = await advanceAgentWorkflow(sessionId, device.user_id, {
+        trigger: "job_completed"
+      });
+    }
+
+    expect(continuation.outcome).toBe("completed");
+    const completed = await localRuntimeRepository.getSession(sessionId, device.user_id);
+    const failedTaskBeforeRecovery = completed?.hosted_tasks.find((task) => task.task_id === failedJob!.id);
+    expect(failedTaskBeforeRecovery).toMatchObject({
+      status: "failed",
+      module_id: failedModuleId,
+      payload: { workflow_run_id: originalWorkflowRunId }
+    });
+    expect(completed?.module_search_traces[failedModuleId]).toMatchObject({
+      status: "failed",
+      attempts: [expect.objectContaining({ status: "error" })]
+    });
+    expect(completed?.completion_report?.uncovered_module_ids).toContain(failedModuleId);
+
+    const recovered = await recoverAgentCompletionGaps(sessionId, device.user_id);
+    const recoveredState = await localRuntimeRepository.getSession(sessionId, device.user_id);
+    const recoveryJob = await localRuntimeRepository.claimJob(device, 30_000);
+    const failedModuleTasks = recoveredState?.hosted_tasks.filter(
+      (task) => task.task_type === "module_search" && task.module_id === failedModuleId
+    ) ?? [];
+    const preservedFailedTask = failedModuleTasks.find((task) => task.task_id === failedJob!.id);
+    const newRecoveryTask = failedModuleTasks.find((task) => task.task_id !== failedJob!.id);
+
+    expect(recovered.outcome).toBe("queued");
+    expect(recovered.recovered_module_ids).toEqual([failedModuleId]);
+    expect(recoveryJob).toMatchObject({
+      id: newRecoveryTask?.task_id,
+      payload: { module_id: failedModuleId }
+    });
+    expect(recoveryJob?.id).not.toBe(failedJob!.id);
+    expect(recoveryJob?.payload.workflow_run_id).toBe(recoveredState?.agent_runtime.workflow_run_id);
+    expect(recoveryJob?.payload.workflow_run_id).not.toBe(originalWorkflowRunId);
+    expect(failedModuleTasks).toHaveLength(2);
+    expect(preservedFailedTask).toMatchObject({
+      status: "failed",
+      error_message: "E2E 同类的真实终态搜索失败",
+      payload: {
+        workflow_run_id: originalWorkflowRunId,
+        recovery_superseded_reason: "user_confirmed_gap_recovery"
+      }
+    });
+    expect(newRecoveryTask).toMatchObject({
+      status: "pending",
+      payload: { workflow_run_id: recoveredState?.agent_runtime.workflow_run_id }
+    });
+    expect(recoveredState?.module_search_traces[failedModuleId]).toMatchObject({
+      attempts: [expect.objectContaining({ status: "skipped" })]
+    });
+    expect(recoveredState?.completion_report).toBeUndefined();
+    const recoveryEvent = (await localRuntimeRepository.listEvents(sessionId, 0, device.user_id, 100))
+      .find((event) => event.event_type === "agent.completion.recovery_confirmed");
+    expect(recoveryEvent?.payload).toMatchObject({
+      previous_workflow_run_id: originalWorkflowRunId,
+      superseded_task_ids: [failedJob!.id]
+    });
+  });
+
   it("starts a confirmed incremental search for thin modules without deleting existing candidates", async () => {
     const sessionId = `session-workflow-improve-thin-${Date.now()}`;
     sessionFiles.add(sessionId);
@@ -470,10 +1041,10 @@ describe("server-managed Agent workflow", () => {
       (event) => event.event_type === "agent.completion.quality_improvement_confirmed"
     )).toBe(true);
 
-    await applyCompletedRuntimeJob(queuedJob!.id, device, {
+    await applyCompletedRuntimeJob(queuedJob!.id, device, verifiedSearchResult(queuedJob!, {
       summary: "用户确认后完成增量补搜",
       candidates: candidates(targetModule.module_id, targetModule.module_name)
-    });
+    }));
     const completed = await advanceAgentWorkflow(sessionId, device.user_id, {
       trigger: "job_completed"
     });

@@ -4,7 +4,8 @@ import {
   applyCompletedRuntimeJob,
   applyFailedRuntimeJob,
   authenticateExecutorToken,
-  bearerToken
+  bearerToken,
+  isAcknowledgedAuthenticationFailureForDevice
 } from "@/lib/runtime/jobs";
 import { assertExecutorProtocol, EXECUTOR_PROTOCOL_VERSION } from "@/lib/runtime/executor-protocol";
 import { advanceAgentWorkflow } from "@/lib/agent/workflow-runner";
@@ -36,14 +37,27 @@ export async function POST(
         jobId,
         device,
         typeof body.error === "string" ? body.error : "local executor failed",
-        { retryable: body.retryable !== false }
+        {
+          retryable: body.retryable !== false,
+          authenticationFailureCallback: body.failure_kind === "authentication_required",
+          leaseToken: typeof body.lease_token === "string" ? body.lease_token : undefined
+        }
       );
       const continuation =
         job.job_type === "module_search" && job.status === "failed"
           ? await continueWorkflow(job.session_id, job.user_id, "job_failed")
           : null;
+      const authenticationFailureAcknowledged =
+        body.failure_kind === "authentication_required" &&
+        typeof body.lease_token === "string" &&
+        await isAcknowledgedAuthenticationFailureForDevice(
+          job,
+          device.id,
+          body.lease_token
+        );
       return apiOk({
         job,
+        authentication_failure_acknowledged: authenticationFailureAcknowledged,
         retry_scheduled: job.status === "pending",
         continuation,
         protocol_version: EXECUTOR_PROTOCOL_VERSION

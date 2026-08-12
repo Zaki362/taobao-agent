@@ -2,6 +2,9 @@
   "name": "autoprep-ai",
   "version": "0.1.0",
   "private": true,
+  "engines": {
+    "node": "22.x"
+  },
   "scripts": {
     "dev": "node scripts/dev-auto.mjs",
     "dev:web": "node scripts/dev-server.mjs",
@@ -27,7 +30,9 @@
     "worker:local": "node scripts/local-executor.mjs",
     "worker:recovery": "node scripts/workflow-recovery-worker.mjs",
     "executor:configure": "node scripts/configure-executor.mjs",
-    "executor:doctor": "node scripts/executor-doctor.mjs"
+    "executor:doctor": "node scripts/executor-doctor.mjs",
+    "demo:interview": "node scripts/interview-demo.mjs",
+    "demo:interview:verify": "node scripts/interview-demo.mjs --verify"
   },
   "dependencies": {
     "class-variance-authority": "^0.7.0",

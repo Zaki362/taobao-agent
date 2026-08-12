@@ -988,7 +988,9 @@ function assertArchitectureContracts() {
         localExecutor.includes('taobaoClient.callTool("search_products"') &&
         localExecutor.includes('type: "all"') &&
         localExecutor.includes('taobaoClient.callTool(\n      "add_to_cart"') &&
-        !localExecutor.includes('client.callTool(\n        "get_current_tab"') &&
+        localExecutor.includes('taobaoClient.callTool(\n      "get_current_tab"') &&
+        localExecutor.includes("This probe is deliberately restricted to the authentication-paused state") &&
+        localExecutor.includes('if (authenticationPaused) {\n      await recoverTaobaoAuthentication()') &&
         localExecutor.includes("Keep each user-approved search to one stateful shopping tool call") &&
         localExecutor.includes("const taobaoClient = createTaobaoMcpClient") &&
         localExecutor.includes("await taobaoClient.close()") &&
@@ -1001,7 +1003,7 @@ function assertArchitectureContracts() {
         !localExecutor.includes("qodercli") &&
         !localExecutor.includes("qoderPrintArgs") &&
         !localExecutor.includes("execFile"),
-      message: "本地执行器必须复用单一官方 HTTP MCP 会话，并禁止登录探针、Qoder 或 taobao-native CLI"
+      message: "本地执行器必须复用单一官方 HTTP MCP 会话，仅在认证暂停后探测登录恢复，并禁止 Qoder 或 taobao-native CLI"
     },
     {
       ok:

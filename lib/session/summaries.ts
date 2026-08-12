@@ -64,6 +64,9 @@ function resumeStage(state: SessionState, coveredModuleCount: number): SessionRe
   if (status === "running" || status === "waiting_for_tools" || status === "paused" || status === "error") {
     return "searching";
   }
+  if (status === "idle" && !state.completion_report && state.last_refinement) {
+    return "confirm_plan";
+  }
   if (status === "completed" || state.completion_report || coveredModuleCount > 0) {
     return "review_results";
   }

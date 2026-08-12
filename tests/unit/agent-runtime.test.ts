@@ -127,6 +127,41 @@ describe("Agent Runtime 2.0", () => {
     expect(validation.notes).toContain("该模块已结束首轮搜索，不能重复调用工具");
   });
 
+  it("allows an explicitly new workflow run to search past a prior run's terminal task", () => {
+    const state = createSessionFixture();
+    const module = state.shopping_plan.modules[0];
+    const now = new Date().toISOString();
+    state.agent_runtime.workflow_run_id = "recovery-run";
+    state.hosted_tasks = [{
+      task_id: "prior-run-terminal-search",
+      task_type: "module_search",
+      session_id: state.session_id,
+      status: "failed",
+      title: `搜索${module.module_name}`,
+      description: "上一运行搜索失败",
+      module_id: module.module_id,
+      module_name: module.module_name,
+      created_at: now,
+      updated_at: now,
+      payload: { workflow_run_id: "prior-run" }
+    }];
+
+    expect(decideNextAgentAction(state)).toMatchObject({
+      action: "search_module",
+      module_id: module.module_id
+    });
+    const validation = validateModelProposal(state, {
+      action: "search_module",
+      confidence: "high",
+      module_id: module.module_id,
+      reason: "用户已确认新的缺口恢复运行",
+      evidence: ["新 workflow run"],
+      expected_gain: "补齐未覆盖模块",
+      tool_cost: 1
+    });
+    expect(validation.valid).toBe(true);
+  });
+
   it("rejects model proposals outside the planned module whitelist", () => {
     const state = createSessionFixture();
     const validation = validateModelProposal(state, {

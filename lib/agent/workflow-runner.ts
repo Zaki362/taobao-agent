@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
 import {
   consumeAgentDecision,
+  createAgentDecision,
+  isTaskFromCurrentWorkflowRun,
   pendingAgentDecision,
   recordAgentDecision,
   removeModuleAgentDecisions
@@ -14,12 +16,17 @@ import { withWorkflowSessionLock, withWorkflowSessionTransaction } from "@/lib/r
 import { loadSession, persistSession } from "@/lib/session/repository";
 import { invalidateAgentCompletionArtifacts } from "@/lib/session/bundle-adoption";
 import { appendSessionLlmCalls } from "@/lib/llm/session-evidence";
+import {
+  isExecutorAuthenticationError,
+  releaseAuthenticationFailureHoldForUser
+} from "@/lib/runtime/jobs";
 import type { AgentDecision, SessionState } from "@/lib/session/types";
 
 export type AgentWorkflowTrigger =
   | "user_start"
   | "user_pause"
   | "user_resume"
+  | "user_accept_partial_results"
   | "user_recover_gaps"
   | "user_improve_quality"
   | "job_completed"
@@ -43,10 +50,26 @@ export class AgentCompletionRecoveryError extends Error {
 export class AgentWorkflowControlError extends Error {
   constructor(
     message: string,
-    public readonly code: "workflow_not_running" | "workflow_not_paused"
+    public readonly code:
+      | "workflow_not_running"
+      | "workflow_not_paused"
+      | "authentication_retry_not_available"
   ) {
     super(message);
     this.name = "AgentWorkflowControlError";
+  }
+}
+
+export class AgentPartialResultsAcceptanceError extends Error {
+  constructor(
+    message: string,
+    public readonly code:
+      | "workflow_not_authentication_paused"
+      | "partial_results_unavailable"
+      | "partial_results_search_active"
+  ) {
+    super(message);
+    this.name = "AgentPartialResultsAcceptanceError";
   }
 }
 
@@ -111,6 +134,42 @@ function activeModuleTask(state: SessionState, moduleId?: string) {
       (!moduleId || task.module_id === moduleId) &&
       (task.status === "pending" || task.status === "running")
   );
+}
+
+function currentWorkflowModuleSearchTasks(state: SessionState) {
+  const moduleId = state.agent_runtime.current_module_id;
+  if (!moduleId) return [];
+  const workflowRunId = state.agent_runtime.workflow_run_id;
+  return state.hosted_tasks.filter(
+    (task) => {
+      const taskWorkflowRunId = typeof task.payload.workflow_run_id === "string"
+        ? task.payload.workflow_run_id
+        : undefined;
+      return (
+        task.task_type === "module_search" &&
+        task.module_id === moduleId &&
+        (workflowRunId
+          ? taskWorkflowRunId === workflowRunId
+          : isTaskFromCurrentWorkflowRun(state, task))
+      );
+    }
+  );
+}
+
+function hasCurrentModuleAuthenticationFailure(state: SessionState) {
+  const moduleId = state.agent_runtime.current_module_id;
+  if (!moduleId) return false;
+  if (isExecutorAuthenticationError(state.agent_runtime.workflow_message)) return true;
+  if (currentWorkflowModuleSearchTasks(state).some(
+    (task) => task.status === "failed" && isExecutorAuthenticationError(task.error_message ?? "")
+  )) {
+    return true;
+  }
+  return state.module_search_traces[moduleId]?.attempts.some(
+    (attempt) =>
+      attempt.status === "error" &&
+      isExecutorAuthenticationError(attempt.error_message ?? "")
+  ) === true;
 }
 
 async function executeAdvance(
@@ -341,7 +400,11 @@ export async function pauseAgentWorkflow(sessionId: string, userId: string | und
   });
 }
 
-export async function resumeAgentWorkflow(sessionId: string, userId: string | undefined) {
+export async function resumeAgentWorkflow(
+  sessionId: string,
+  userId: string | undefined,
+  options: { retryAuthenticationFailure?: boolean } = {}
+) {
   const prepared = await withWorkflowSessionTransaction(sessionId, async () => {
     const state = await loadSession(sessionId, userId);
     if (!state) throw new Error("session not found");
@@ -349,7 +412,92 @@ export async function resumeAgentWorkflow(sessionId: string, userId: string | un
       throw new AgentWorkflowControlError("当前 Agent 搜索流程不处于暂停状态。", "workflow_not_paused");
     }
 
-    const activeTask = activeModuleTask(state);
+    let activeTask = activeModuleTask(state);
+    if (options.retryAuthenticationFailure) {
+      const moduleId = state.agent_runtime.current_module_id;
+      const currentTasks = currentWorkflowModuleSearchTasks(state);
+      const alreadyQueuedTask = currentTasks.find(
+        (task) => task.status === "pending" || task.status === "running"
+      );
+      const failedAuthenticationTasks = currentTasks.filter(
+        (task) =>
+          task.status === "failed" &&
+          isExecutorAuthenticationError(task.error_message ?? "")
+      );
+      let failedAuthenticationTask = failedAuthenticationTasks[0];
+      for (const task of failedAuthenticationTasks) {
+        if (
+          task.runtime_job_id &&
+          await getRuntimeRepository().getActiveAuthenticationFailureHold(task.runtime_job_id)
+        ) {
+          failedAuthenticationTask = task;
+          break;
+        }
+      }
+      const completedRetryTask = currentTasks.find((task) => task.status === "completed");
+
+      if (
+        !moduleId ||
+        !hasCurrentModuleAuthenticationFailure(state) ||
+        (!alreadyQueuedTask && !failedAuthenticationTask && !completedRetryTask)
+      ) {
+        throw new AgentWorkflowControlError(
+          "当前暂停流程没有可恢复的淘宝登录失败搜索。请刷新进度后重试。",
+          "authentication_retry_not_available"
+        );
+      }
+
+      if (alreadyQueuedTask) {
+        activeTask = alreadyQueuedTask;
+      } else if (failedAuthenticationTask) {
+        const keyword = typeof failedAuthenticationTask.payload.keyword === "string"
+          ? failedAuthenticationTask.payload.keyword
+          : undefined;
+        if (!keyword) {
+          throw new AgentWorkflowControlError(
+            "淘宝登录失败任务缺少原搜索关键词，无法安全恢复。",
+            "authentication_retry_not_available"
+          );
+        }
+        if (failedAuthenticationTask.runtime_job_id) {
+          const activeHold = await getRuntimeRepository().getActiveAuthenticationFailureHold(
+            failedAuthenticationTask.runtime_job_id
+          );
+          const released = await releaseAuthenticationFailureHoldForUser(
+            failedAuthenticationTask.runtime_job_id,
+            userId,
+            "user_retry"
+          );
+          if (
+            activeHold &&
+            !released &&
+            await getRuntimeRepository().getActiveAuthenticationFailureHold(
+              failedAuthenticationTask.runtime_job_id
+            )
+          ) {
+            throw new AgentWorkflowControlError(
+              "登录失败任务仍在安全暂停中，请刷新后重试。",
+              "authentication_retry_not_available"
+            );
+          }
+        }
+        await runModuleSearch(state, moduleId, {
+          keywordOverride: keyword,
+          confirmedRetry: true
+        });
+        const revivedTask = state.hosted_tasks.find(
+          (task) => task.task_id === failedAuthenticationTask.task_id
+        );
+        activeTask = revivedTask?.status === "pending" || revivedTask?.status === "running"
+          ? revivedTask
+          : undefined;
+      } else {
+        // A retry issued by an older client may have completed while the workflow
+        // was still paused. Resume advancement without enqueueing another search.
+        activeTask = undefined;
+      }
+    }
+
     transition(state, {
       status: activeTask ? "waiting_for_tools" : "running",
       moduleId: activeTask?.module_id ?? state.agent_runtime.current_module_id,
@@ -369,6 +517,194 @@ export async function resumeAgentWorkflow(sessionId: string, userId: string | un
     return { state: prepared.state, outcome: "waiting" as const };
   }
   return advanceAgentWorkflow(sessionId, userId, { trigger: "user_resume" });
+}
+
+export async function acceptPartialAgentResults(
+  sessionId: string,
+  userId: string | undefined
+) {
+  return withWorkflowSessionTransaction(sessionId, async () => {
+    const state = await loadSession(sessionId, userId);
+    if (!state) throw new Error("session not found");
+
+    const moduleId = state.agent_runtime.current_module_id;
+    const currentTasks = currentWorkflowModuleSearchTasks(state);
+    if (
+      state.agent_runtime.workflow_status !== "paused" ||
+      state.agent_runtime.auto_continue ||
+      !moduleId ||
+      !hasCurrentModuleAuthenticationFailure(state) ||
+      currentTasks.length === 0
+    ) {
+      throw new AgentPartialResultsAcceptanceError(
+        "当前流程不是由淘宝登录失效导致的搜索暂停，不能接受部分结果。",
+        "workflow_not_authentication_paused"
+      );
+    }
+
+    const candidateCount = Object.values(state.module_candidates)
+      .reduce((total, candidates) => total + candidates.length, 0);
+    if (candidateCount === 0) {
+      throw new AgentPartialResultsAcceptanceError(
+        "当前还没有已保存候选，无法直接进入选购。",
+        "partial_results_unavailable"
+      );
+    }
+
+    const authenticationFailedTasks = currentTasks.filter(
+      (task) =>
+        task.status === "failed" &&
+        isExecutorAuthenticationError(task.error_message ?? "")
+    );
+    let heldAuthenticationTask = authenticationFailedTasks[0];
+    for (const task of authenticationFailedTasks) {
+      if (
+        task.runtime_job_id &&
+        await getRuntimeRepository().getActiveAuthenticationFailureHold(task.runtime_job_id)
+      ) {
+        heldAuthenticationTask = task;
+        break;
+      }
+    }
+    const failedTask = heldAuthenticationTask ?? currentTasks.find((task) => task.status === "failed");
+    const completedTask = currentTasks.find((task) => task.status === "completed");
+    const activeTask = currentTasks.find(
+      (task) => task.status === "pending" || task.status === "running"
+    );
+    const resolutionTask = failedTask ?? completedTask ?? activeTask;
+    if (!resolutionTask) {
+      throw new AgentPartialResultsAcceptanceError(
+        "没有找到当前登录失败模块的搜索记录，无法安全接受部分结果。",
+        "workflow_not_authentication_paused"
+      );
+    }
+
+    const otherActiveTask = state.hosted_tasks.find(
+      (task) =>
+        task.task_type === "module_search" &&
+        task.task_id !== resolutionTask.task_id &&
+        (task.status === "pending" || task.status === "running")
+    );
+    if (otherActiveTask) {
+      throw new AgentPartialResultsAcceptanceError(
+        "仍有其他真实搜索正在执行，请等待其结束后再接受部分结果。",
+        "partial_results_search_active"
+      );
+    }
+
+    if (activeTask) {
+      if (activeTask.status === "running" || !activeTask.runtime_job_id) {
+        throw new AgentPartialResultsAcceptanceError(
+          "当前真实搜索已被执行器领取，暂时不能切换为部分结果。",
+          "partial_results_search_active"
+        );
+      }
+      const cancelledJob = await getRuntimeRepository().cancelJob(activeTask.runtime_job_id, userId);
+      if (!cancelledJob) {
+        throw new AgentPartialResultsAcceptanceError(
+          "当前真实搜索已开始执行，暂时不能切换为部分结果。",
+          "partial_results_search_active"
+        );
+      }
+      activeTask.status = "cancelled";
+      activeTask.error_message = "用户选择接受已有部分结果，已取消待执行的登录恢复搜索";
+      activeTask.updated_at = new Date().toISOString();
+      await getRuntimeRepository().appendEvent({
+        user_id: state.owner_id,
+        session_id: state.session_id,
+        job_id: cancelledJob.id,
+        event_type: "job.cancelled",
+        payload: {
+          job_type: cancelledJob.job_type,
+          reason: "partial_results_accepted"
+        }
+      });
+    }
+
+    if (resolutionTask.runtime_job_id) {
+      const activeHold = await getRuntimeRepository().getActiveAuthenticationFailureHold(
+        resolutionTask.runtime_job_id
+      );
+      const released = await releaseAuthenticationFailureHoldForUser(
+        resolutionTask.runtime_job_id,
+        userId,
+        "partial_results_accepted"
+      );
+      if (
+        activeHold &&
+        !released &&
+        await getRuntimeRepository().getActiveAuthenticationFailureHold(
+          resolutionTask.runtime_job_id
+        )
+      ) {
+        throw new AgentPartialResultsAcceptanceError(
+          "登录失败任务仍在安全暂停中，请刷新后重试。",
+          "workflow_not_authentication_paused"
+        );
+      }
+    }
+
+    const acceptedAt = new Date().toISOString();
+    resolutionTask.payload = {
+      ...resolutionTask.payload,
+      user_resolution: "user_skipped",
+      partial_results_status: "partial_results_accepted",
+      partial_results_accepted_at: acceptedAt
+    };
+    resolutionTask.updated_at = acceptedAt;
+
+    const module = state.shopping_plan.modules.find((item) => item.module_id === moduleId);
+    const skipDecision = recordAgentDecision(state, createAgentDecision({
+      action: "skip_module",
+      source: "policy_fallback",
+      confidence: "high",
+      module_id: moduleId,
+      module_name: module?.module_name ?? resolutionTask.module_name,
+      reason: `用户已明确选择使用已有部分结果进入选购，不再自动搜索「${module?.module_name ?? resolutionTask.module_name ?? "当前模块"}」。`,
+      evidence: [
+        resolutionTask.error_message ?? state.agent_runtime.workflow_message,
+        `已保留 ${candidateCount} 个登录失效前回填的候选`
+      ],
+      expected_gain: "立即使用已保存候选进入选购，避免登录恢复成为强制前置条件",
+      tool_cost: 0,
+      guardrail_notes: ["user_skipped", "partial_results_accepted"],
+      consumed_at: acceptedAt
+    }));
+
+    invalidateAgentCompletionArtifacts(state);
+    state.completion_report = buildAgentCompletionReport(state, skipDecision);
+    transition(state, {
+      status: "completed",
+      message: "已按你的选择使用已有部分结果进入选购；未完成模块不会自动重新搜索。",
+      autoContinue: false
+    });
+    await persistSession(state);
+    await getRuntimeRepository().appendEvent({
+      user_id: state.owner_id,
+      session_id: state.session_id,
+      job_id: resolutionTask.runtime_job_id,
+      event_type: "agent.partial_results.accepted",
+      payload: {
+        module_id: moduleId,
+        module_name: module?.module_name ?? resolutionTask.module_name,
+        task_id: resolutionTask.task_id,
+        workflow_run_id: state.agent_runtime.workflow_run_id,
+        user_resolution: "user_skipped",
+        status: "partial_results_accepted",
+        preserved_candidate_count: candidateCount,
+        covered_module_count: state.completion_report.covered_module_ids.length,
+        total_module_count: state.shopping_plan.modules.length,
+        completion_status: state.completion_report.status
+      }
+    });
+    await emitWorkflowEvent(state, "user_accept_partial_results", "completed", skipDecision);
+    return {
+      state,
+      skippedModuleId: moduleId,
+      taskId: resolutionTask.task_id,
+      preservedCandidateCount: candidateCount
+    };
+  });
 }
 
 export async function recoverAgentCompletionGaps(
@@ -404,7 +740,32 @@ export async function recoverAgentCompletionGaps(
       throw new AgentCompletionRecoveryError("当前规划没有未覆盖模块，无需重新启动搜索。");
     }
 
+    const recoveryConfirmedAt = new Date().toISOString();
+    const completedWorkflowRunId =
+      report.workflow_run_id ||
+      state.agent_runtime.workflow_run_id ||
+      `legacy:${report.generated_at}`;
+    const supersededTaskIds: string[] = [];
     for (const moduleId of moduleIds) {
+      for (const task of state.hosted_tasks) {
+        if (
+          task.task_type !== "module_search" ||
+          task.module_id !== moduleId ||
+          (task.status !== "completed" && task.status !== "failed" && task.status !== "cancelled")
+        ) {
+          continue;
+        }
+        task.payload = {
+          ...task.payload,
+          workflow_run_id: typeof task.payload.workflow_run_id === "string"
+            ? task.payload.workflow_run_id
+            : completedWorkflowRunId,
+          recovery_superseded_at: recoveryConfirmedAt,
+          recovery_superseded_reason: "user_confirmed_gap_recovery"
+        };
+        task.updated_at = recoveryConfirmedAt;
+        supersededTaskIds.push(task.task_id);
+      }
       removeModuleAgentDecisions(state, moduleId);
       delete state.module_candidates[moduleId];
       delete state.module_reviews[moduleId];
@@ -423,7 +784,9 @@ export async function recoverAgentCompletionGaps(
       event_type: "agent.completion.recovery_confirmed",
       payload: {
         module_ids: moduleIds,
-        preserved_module_count: state.shopping_plan.modules.length - moduleIds.length
+        preserved_module_count: state.shopping_plan.modules.length - moduleIds.length,
+        previous_workflow_run_id: completedWorkflowRunId,
+        superseded_task_ids: supersededTaskIds
       }
     });
     return { moduleIds };

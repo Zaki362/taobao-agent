@@ -83,17 +83,12 @@ export function ConfirmScenePage({
   };
 
   return (
-    <div className="mx-auto w-full max-w-5xl space-y-4">
+    <div className="workflow-content space-y-4">
       <AgentBrief
         compact
         eyebrow="我对需求的理解"
         title={`${scene.vehicle_type} · ${scene.user_stage}，预算 ${formatCurrency(scene.budget)}`}
         description={`${statusMessage} 我会以「${scene.priority_style}」作为取舍标准，${excludedSummary}。`}
-        highlights={[
-          `预算 ${formatCurrency(scene.budget)}`,
-          scene.priority_style,
-          scene.already_have.length > 0 ? `已有 ${scene.already_have.length} 类物品` : "从基础清单开始"
-        ]}
       />
       <Card className="section-card w-full">
         <CardHeader className="px-6 pt-7 md:px-8 md:pt-8">
@@ -182,17 +177,12 @@ export function ConfirmPlanPage({
   }
 
   return (
-    <div className="mx-auto w-full max-w-6xl space-y-4">
+    <div className="workflow-content space-y-4">
       <AgentBrief
         compact
         eyebrow="我给出的购买路线"
         title={topModules.length > 0 ? `先解决「${topModules.join("、")}」` : "先解决最影响使用的需求"}
         description={session.shopping_plan.personalization_summary || session.shopping_plan.overall_rationale}
-        highlights={[
-          `${modules.length} 个购买模块`,
-          `总预算 ${formatCurrency(totalAllocated)}`,
-          `${modules.filter((module) => module.priority <= 2).length} 项优先处理`
-        ]}
       />
       <Card className="section-card w-full">
       <CardHeader className="px-6 pt-7 md:px-8 md:pt-8">

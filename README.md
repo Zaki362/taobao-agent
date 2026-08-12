@@ -1,6 +1,6 @@
 # SceneCart AI
 
-SceneCart AI 是一个正在按正式产品架构推进的“场景化购物 Agent”。当前稳定场景聚焦 **新车选购 / 新车用品首购**：用户先输入真实场景目标，系统再逐步完成需求理解、购物规划、模块化搜索、推荐展示和下单前清单确认。
+SceneCart AI 是一个正在按正式产品架构推进的“场景化购物 Agent”。首页当前开放 **新车选购、露营准备、房间装饰、宿舍入学、搬家置办** 五个配置驱动场景；它们共享需求理解、规划、搜索、推荐与购买确认工作流。真实设备验收和面试演示仍以 **新车选购 / 新车用品首购** 为基准场景。
 
 这个项目不是普通商品搜索页，也不是纯聊天机器人。它的重点是把用户原本需要自己完成的“买什么、先买什么、预算怎么分、每类商品怎么选”这套决策过程产品化。
 
@@ -42,9 +42,9 @@ SceneCart AI 是一个正在按正式产品架构推进的“场景化购物 Age
 - 发布就绪检查：`/api/runtime/readiness` 将开发态与正式可发布状态分开，逐项检查 PostgreSQL、认证、HTTPS Origin、安全 Cookie、DeepSeek、本地执行器和旧 Mock 配置
 - Agent 质量门槛：`npm run eval:agent` 离线检查多组新车需求的预算守恒、模块覆盖、优先级层次、搜索词差异化和安全边界；`npm run eval:agent:live` 通过专用启动器读取本地 Key 并显式调用 DeepSeek，缺少 Key 或全部降级时会直接失败，避免产生“在线评测实际未调用模型”的假阳性
 - 生产安全基线：异步 scrypt 密码哈希、认证限流、同源写请求校验、HttpOnly Cookie 和安全响应头
-- 淘宝 skill / MCP 工具层：正式路径为 `local_executor`；原有 Qoder 直连、Codex hosted 和 experimental bridge 仅保留为开发兼容路径
+- 淘宝桌面版 MCP 工具层：正式路径为 `local_executor -> 淘宝桌面版官方 HTTP MCP`；原有 Qoder 直连、Codex hosted 和 experimental bridge 仅保留为开发兼容路径，不属于正式演示链路
 - 商品搜索链路：当前主流程可串行搜索规划中的各个模块，并生成推荐商品卡片
-- 加购结果分级：高风险动作必须显式确认，服务端和 MCP executor 会双重校验；开发预览模式可选择回退到产品内演示购物车，正式产品模式强制关闭回退并明确返回真实失败
+- 加购结果分级：高风险动作必须显式确认，服务端和 MCP executor 会双重校验；demo cart 只覆盖 development 中同步兼容 provider 的失败，正式 `local_executor` 任务失败会明确保留为可重试失败
 - 预算组合采纳：用户可把 Agent 的预算安全购买组合采纳为产品内待处理清单，再逐件显式确认真实加购；采纳不等于淘宝加购，也不会触发批量交易
 - 购物车来源隔离：确认页允许用户移除明确标记的产品内演示项，并同步预算组合进度；真实淘宝项只提供淘宝购物车管理入口，服务端拒绝伪装删除或改动来源不明的历史条目
 - 后端执行台：可查看当前 session、执行进度、工具日志、规划和购物清单
@@ -60,6 +60,32 @@ SceneCart AI 是一个正在按正式产品架构推进的“场景化购物 Age
 - Framer Motion
 - DeepSeek API
 - 淘宝桌面版官方本地 HTTP MCP adapter
+
+## 面试演示：从网页触发真实淘宝全流程
+
+面试主路径是在 SceneCart 网页上逐步输入需求、确认 Scene Brief、确认规划并开始搜索。网页把任务写入持久 Job Queue，本机 `local_executor` 领取任务后直连淘宝桌面版官方 HTTP MCP，再把真实候选回填到同一个 Session：`Browser -> Agent workflow -> durable Job Queue -> local executor -> 淘宝桌面版官方 HTTP MCP`。面试前先运行 `npm run executor:doctor`，再用 `npm run dev` 启动网页和正式 Worker；不要切换到 Qoder、Codex hosted、experimental bridge 或 mock provider。
+
+真实调用发现淘宝掉登录时，网站会显示“搜索已暂停，已有结果不会丢失”。此时可在淘宝桌面版重新登录，等 Worker 检测恢复后点击“重新登录后继续搜索”；这次用户确认才会重试失败模块，已完成模块不会重跑。也可点击“用已有部分结果进入选购”，直接查看登录失效前已经保存的真实候选，未完成模块继续明确标注；恢复登录前不会创建新的搜索或加购任务。
+
+### 次级可选：隔离演示模式
+
+只有现场 MCP 无法恢复、且已经明确结束真实链路讲解时，才可运行隔离模式：
+
+```bash
+npm run demo:interview
+```
+
+该命令会启动隔离的 SceneCart 服务和专用演示 Worker，自动走完产品 UI 流程，并让浏览器停在最终“购买确认清单”；按 `Ctrl+C` 关闭。它不要求淘宝登录，也不会连接淘宝 MCP。已覆盖的新车模块使用 **2026-08-08** 采集的淘宝历史搜索快照；快照未覆盖模块使用醒目标注的固定演示候选。它只能作为明确披露的数据演示，不能作为面试主路径，也不能证明网页当前触发了真实淘宝搜索。
+
+演示模式中的淘宝 `search`、`add`、`order`、`payment` 调用均为 **0**。用户确认“加入购物车”后，商品只进入 SceneCart 产品内的“演示购物车”，不会进入真实淘宝购物车，更不会下单或支付。它也显式关闭通用 `ALLOW_DEMO_CART_FALLBACK`，只接受专用演示 Worker 的隔离结果。
+
+如需维护这条次级隔离模式，可用无界面命令验收：
+
+```bash
+npm run demo:interview:verify
+```
+
+验收成功会退出码为 0，并在被 Git 忽略的 `.data/interview-demo/` 写入最终页面截图和结构化报告。这个结果只证明隔离演示可重复，不属于真实淘宝验收；真实能力仍以 Doctor、正式 Worker、当前 Job 和官方 MCP 回填为准。
 
 ## 快速开始
 
@@ -121,6 +147,8 @@ TAOBAO_NATIVE_MCP_URL=http://127.0.0.1:3654/mcp
 TAOBAO_SOURCE_APP=SceneCartAI
 EXECUTOR_TAOBAO_SEARCH_TIMEOUT_MS=60000
 EXECUTOR_TAOBAO_CART_TIMEOUT_MS=60000
+EXECUTOR_TAOBAO_AUTH_RECOVERY_POLL_MS=10000
+EXECUTOR_TAOBAO_AUTH_PROBE_TIMEOUT_MS=10000
 SCENECART_ENABLE_MCP_DEBUG=false
 RUNTIME_STORE=postgres
 DATABASE_URL=postgresql://...
@@ -136,7 +164,7 @@ SCENECART_CRON_SECRET=
 
 - `DEEPSEEK_API_KEY`：填写后会尝试启用真实 DeepSeek 能力；只有实际调用成功才标记为 connected。无 key、超时、非 JSON 或接口失败都会走 mock fallback。
 - `SCENECART_PRODUCT_MODE`：本地开发使用 `development`；正式部署必须设为 `production`，此时系统强制禁止演示加购伪成功。
-- `ALLOW_DEMO_CART_FALLBACK`：只对开发预览模式生效。设为 `false` 可在本地提前验证正式加购失败行为。
+- `ALLOW_DEMO_CART_FALLBACK`：只可能在开发预览的同步兼容 provider 加购异常时生效；正式 `local_executor` 异步失败不会自动写入 demo item。设为 `false` 可在本地保持与正式失败语义一致。
 - `DEEPSEEK_DISABLED=true`：仅用于自动化测试或离线诊断，显式禁止读取 `.env.local` 中的真实 Key，保证测试不会产生模型调用和费用。
 - `DEEPSEEK_*_TIMEOUT_MS`：可按解析、规划、调整、方案复核、候选复核、Agent 决策、购买组合和推荐解释分别设置完整响应超时；计时覆盖响应头和正文读取，失败后使用经过校验的确定性方案继续流程。`DEEPSEEK_AGENT_CHAT_TIMEOUT_MS` 与 `DEEPSEEK_AGENT_REASONER_TIMEOUT_MS` 分别约束常规调度和复杂恢复决策，`DEEPSEEK_BUNDLE_TIMEOUT_MS` 约束最终预算组合提案，`DEEPSEEK_REQUEST_TIMEOUT_MS` 可作为其他未单独配置任务的统一覆盖值。
 - `TAOBAO_EXECUTION_BACKEND`：正式路径使用 `local_executor`。`qoder_cli`、`codex_hosted`、`experimental_local` 只用于迁移和本地调试。
@@ -159,7 +187,9 @@ SCENECART_CRON_SECRET=
 - `TAOBAO_NATIVE_MCP_URL`：淘宝桌面版官方 Streamable HTTP MCP 地址，默认 `http://127.0.0.1:3654/mcp`。
 - `TAOBAO_SOURCE_APP`：写入 MCP 工具参数的真实调用来源标识，默认 `SceneCartAI`。
 - `EXECUTOR_TAOBAO_SEARCH_TIMEOUT_MS`：单次本地淘宝搜索上限，默认 60000ms，最低 15000ms。
-- `EXECUTOR_TAOBAO_CART_TIMEOUT_MS`：单次真实加购上限，默认 60000ms。执行器不会用页面导航工具预探测登录态，避免探针本身改变淘宝页面。
+- `EXECUTOR_TAOBAO_CART_TIMEOUT_MS`：单次真实加购上限，默认 60000ms。执行器不会在搜索或加购前后用页面导航工具预探测登录态，避免探针本身改变淘宝页面。
+- `EXECUTOR_TAOBAO_AUTH_RECOVERY_POLL_MS`：只有真实调用已报告登录失败后，Worker 才会按此间隔检查淘宝登录是否恢复，默认 10000ms、最低 5000ms。
+- `EXECUTOR_TAOBAO_AUTH_PROBE_TIMEOUT_MS`：鉴权恢复检查的单次超时，默认 10000ms、最低 5000ms。检测恢复后只恢复领取能力，不会自动重放失败任务。
 - `TAOBAO_MCP_BASE_URL`：experimental local bridge 使用的淘宝 MCP bridge 地址。
 
 不要提交 `.env.local`。项目 `.gitignore` 已默认忽略本地密钥、缓存、搜索结果 JSON、`.data`、`.next` 和 `node_modules`。
@@ -225,7 +255,7 @@ scripts/
   executor-doctor.mjs              本地执行器无副作用连接诊断
 
 lib/scenarios/
-  当前保留多场景配置雏形，稳定产品入口暂以新车选购为主
+  五个场景的文案、字段、模板模块与快捷动作配置；面试验收基线为新车选购
 ```
 
 ## 核心 API
@@ -290,7 +320,7 @@ npm run start
 SCENECART_RELEASE_VERIFY_URL=https://你的正式域名 npm run release:verify
 ```
 
-用户登录后打开 `/settings/executor` 注册本机设备，再在运行淘宝桌面版与淘宝 Skill 的机器启动：
+用户登录后打开 `/settings/executor` 注册本机设备，再在运行淘宝桌面版且已开启官方 HTTP MCP 的机器启动：
 
 先将设置页只展示一次的配置写入被 Git 忽略的 `.env.local`：
 
@@ -313,12 +343,12 @@ npm run worker:local
 
 ## 当前实现边界
 
-- 当前稳定主场景是“新车选购”。`lib/scenarios` 中已有多场景配置雏形，但前端入口暂未完全开放。
+- 首页已开放新车选购、露营准备、房间装饰、宿舍入学和搬家置办五个场景，场景文案、字段、规划模板、搜索策略与快捷调整均由 `ScenarioConfig` 驱动；当前真实淘宝设备的回归与面试演示基线仍是“新车选购”，这不等于其他四个入口尚未开放。
 - 淘宝搜索能力相对稳定；商品详情页和真实加购受淘宝客户端、授权和登录态影响较大。
 - 淘宝搜索依赖用户本机淘宝桌面版官方 HTTP MCP 和登录态；不消耗 Qoder 额度，但桌面客户端与账号策略仍是外部依赖。
-- 加购具备显式确认、后台执行、重试与结果账本，但淘宝客户端权限或账号策略仍可能拒绝动作；系统不会自动下单或支付。
+- 加购具备显式确认、后台执行、重试与结果账本，但淘宝客户端权限或账号策略仍可能拒绝动作。SceneCart 的交易边界止于购买确认页和淘宝购物车：不会自动下单、提交订单或支付。
 - 自动搜索支持“完成当前模块后暂停”和从原进度继续，不会通过强杀外部工具制造未知执行状态。
-- 正式产品模式不会把真实加购失败写成成功；产品内演示购物车仅用于明确标注的开发预览。
+- 正式产品模式不会把真实加购失败写成成功。产品内演示购物车只在 `SCENECART_PRODUCT_MODE=development`、`ALLOW_DEMO_CART_FALLBACK=true` 且使用同步开发兼容 provider 时，才会承接该次真实加购异常；正式 `local_executor` 异步任务失败会保留为可重试失败，不会自动生成演示项。
 - 产品不会伪装具备淘宝购物车删除能力。演示项可在产品内移除；真实淘宝项必须在淘宝购物车中管理，避免误删账号内其他商品。
 - `RUNTIME_STORE=local` 会把开发状态持久化到被 Git 忽略的本地快照，并在单个 Next.js 进程内序列化同一 Session 的任务回填、暂停/继续与加购写入；它仍不支持多实例事务一致性，不能替代 PostgreSQL 正式运行时。
 
@@ -326,20 +356,17 @@ npm run worker:local
 
 - [产品创作复盘](./product_creation_recap.md)
 - [产品架构与技术方案](./architecture_and_technical_design.md)
-- [Qoder CLI Provider 说明](./docs/qoder-cli-provider.md)
-- [淘宝 MCP Bridge 说明](./docs/taobao-mcp-bridge.md)
-- [Codex Hosted Worker 说明](./docs/codex-hosted-worker.md)
+- [Qoder CLI Provider（旧开发兼容）](./docs/qoder-cli-provider.md)
+- [淘宝官方 MCP 与旧 Bridge 说明](./docs/taobao-mcp-bridge.md)
+- [Codex Hosted Worker（旧开发兼容）](./docs/codex-hosted-worker.md)
 - [生产运行时与本地执行器](./docs/production-runtime.md)
 - [正式部署指南](./docs/deployment.md)
+- [面试演示 Runbook](./docs/interview-demo.md)
 
 ## 推荐演示路径
 
-1. 打开首页，进入“新车选购”。
-2. 使用默认示例需求或输入自己的预算和偏好。
-3. 确认 Scene Brief，可手动调整车型、预算、阶段、偏好、已有物品和排除项。
-4. 查看购物规划，重点观察 AI 规划模式、Agent 方案自检、差异化搜索意图、AI 取舍、预算说明和模块优先级；也可以选择保守 / 平衡 / 探索执行档位。
-5. 确认规划后开始搜索，系统会串行搜索各模块。
-6. 在推荐页查看模块化商品结果，右侧会展示预算内 Agent 建议购买组合、当前模块的 AI 推荐逻辑、搜索决策轨迹、候选池复盘、风险提醒和下一步建议；如果候选偏少，可以按 Agent 建议补搜。
-7. 使用快捷调整回到规划页重新确认。
-8. 点击加入购物车；若真实加购失败，会进入演示购物车。
-9. 进入下单购买页查看已选商品清单和总价。
+面试前必须至少完成一次真实淘宝搜索并保留该 Session。现场使用固定输入：
+
+> 刚提新能源 SUV，预算 3000，经常带 3 岁孩子长途出行，已有行车记录仪。
+
+从 Scene Brief、规划自检、持久队列、真实候选、预算组合一路演示到逐件显式加购和购买确认页。若淘宝掉登录，先在当前网页展示暂停状态：重新登录后由用户确认继续同一模块，或直接用已保存的部分真实结果进入选购；不要把 mock、历史快照或演示购物车切换成这条主链路的结果。完整步骤见 [面试演示 Runbook](./docs/interview-demo.md)。
