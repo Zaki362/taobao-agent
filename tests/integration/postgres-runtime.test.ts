@@ -274,7 +274,10 @@ describeWithDatabase("PostgreSQL production runtime contract", () => {
     expect(retried.id).toBe(terminalJobId);
     expect(retried.status).toBe("pending");
     expect(retried.attempts).toBe(0);
-    expect((await postgresRuntimeRepository.claimJob(device, 30_000))?.id).toBe(terminalJobId);
+    const reclaimed = await postgresRuntimeRepository.claimJob(device, 30_000);
+    expect(reclaimed?.id).toBe(terminalJobId);
+    await expect(postgresRuntimeRepository.completeJob(terminalJobId, deviceId, { results: [] }))
+      .resolves.toMatchObject({ alreadyCompleted: false });
   });
 
   it("allows only one process to advance a workflow session at a time", async () => {
@@ -307,6 +310,8 @@ describeWithDatabase("PostgreSQL production runtime contract", () => {
   it("rolls back a broken transition and persists a terminal workflow error afterward", async () => {
     const failingSessionId = `session-pg-workflow-failure-${randomUUID()}`;
     const state = createSessionFixture({ session_id: failingSessionId, owner_id: userId });
+    state.agent_runtime.auto_continue = true;
+    state.agent_runtime.workflow_status = "running";
     state.agent_decisions = [createAgentDecision({
       action: "search_module",
       source: "plan_strategy",
@@ -317,8 +322,7 @@ describeWithDatabase("PostgreSQL production runtime contract", () => {
     await postgresRuntimeRepository.saveSession(state);
 
     await expect(advanceAgentWorkflow(failingSessionId, userId, {
-      start: true,
-      trigger: "user_start"
+      trigger: "recovery"
     })).rejects.toThrow("Agent 搜索决策缺少 module_id");
 
     const restored = await postgresRuntimeRepository.getSession(failingSessionId, userId);
@@ -443,17 +447,21 @@ describeWithDatabase("PostgreSQL production runtime contract", () => {
       addToCart(cartSessionId, "pg-cart-product-b", userId)
     ]);
 
-    const restored = await postgresRuntimeRepository.getSession(cartSessionId, userId);
-    const cartTasks = restored?.hosted_tasks.filter((task) => task.task_type === "add_to_cart") ?? [];
-    expect(new Set(cartTasks.map((task) => task.product_id))).toEqual(
-      new Set(["pg-cart-product-a", "pg-cart-product-b"])
-    );
-    expect(cartTasks.every((task) => task.status === "pending" && Boolean(task.runtime_job_id))).toBe(true);
-
     const jobs = await postgresRuntimeRepository.listJobs(cartSessionId, userId);
-    expect(new Set(jobs.filter((job) => job.job_type === "add_to_cart").map((job) => job.payload.product_id))).toEqual(
-      new Set(["pg-cart-product-a", "pg-cart-product-b"])
-    );
+    try {
+      const restored = await postgresRuntimeRepository.getSession(cartSessionId, userId);
+      const cartTasks = restored?.hosted_tasks.filter((task) => task.task_type === "add_to_cart") ?? [];
+      expect(new Set(cartTasks.map((task) => task.product_id))).toEqual(
+        new Set(["pg-cart-product-a", "pg-cart-product-b"])
+      );
+      expect(cartTasks.every((task) => task.status === "pending" && Boolean(task.runtime_job_id))).toBe(true);
+
+      expect(new Set(jobs.filter((job) => job.job_type === "add_to_cart").map((job) => job.payload.product_id))).toEqual(
+        new Set(["pg-cart-product-a", "pg-cart-product-b"])
+      );
+    } finally {
+      await Promise.all(jobs.map((job) => postgresRuntimeRepository.cancelJob(job.id, userId)));
+    }
   });
 
   it("recovers an orphaned completed job without re-executing the external tool", async () => {
