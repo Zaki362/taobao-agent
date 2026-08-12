@@ -64,7 +64,7 @@ export interface MCPToolDefinition {
 }
 
 export interface MCPAdapter {
-  mode: "codex_hosted" | "experimental_local" | "qoder_cli";
+  mode: "codex_hosted" | "experimental_local" | "qoder_cli" | "local_executor";
   detect(): Promise<{
     available: boolean;
     message: string;

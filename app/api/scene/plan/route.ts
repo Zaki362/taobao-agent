@@ -1,10 +1,33 @@
-import { NextRequest, NextResponse } from "next/server";
-import { createSessionFromScene, initializeSession, parseOnly } from "@/lib/agent/orchestrator";
-import { ScenarioId, SceneBrief } from "@/lib/session/types";
+import { NextRequest } from "next/server";
+import { createSessionFromScene, initializeSession } from "@/lib/agent/orchestrator";
+import { apiOk, apiRouteError } from "@/lib/api/responses";
+import { SceneBrief } from "@/lib/session/types";
 import { mockParseScene } from "@/lib/llm/mock";
+import { normalizeSceneBriefOptions } from "@/lib/scenarios/normalize";
+import { isScenarioId } from "@/lib/scenarios";
+import { getRequestIdentity } from "@/lib/auth/request";
 
-function normalizeSceneBriefInput(value: SceneBrief | undefined, fallback: SceneBrief): SceneBrief {
-  if (!value) {
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function asStringArray(value: unknown, fallback: string[]) {
+  if (!Array.isArray(value)) {
+    return fallback;
+  }
+
+  return value
+    .filter((item): item is string => typeof item === "string")
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function asDeepSeekMode(value: unknown): "connected" | "mock" {
+  return value === "connected" ? "connected" : "mock";
+}
+
+function normalizeSceneBriefInput(value: unknown, fallback: SceneBrief): SceneBrief {
+  if (!isRecord(value)) {
     return fallback;
   }
 
@@ -21,66 +44,66 @@ function normalizeSceneBriefInput(value: SceneBrief | undefined, fallback: Scene
       ? value.priority_style
       : fallback.priority_style;
 
-  return {
+  return normalizeSceneBriefOptions({
     scenario_id:
-      value.scenario_id === "new-car" ||
-      value.scenario_id === "camping" ||
-      value.scenario_id === "room-decor" ||
-      value.scenario_id === "dorm-move-in" ||
-      value.scenario_id === "moving-setup"
+      isScenarioId(value.scenario_id)
         ? value.scenario_id
         : fallback.scenario_id,
-    scene_type: typeof value.scene_type === "string" && value.scene_type ? value.scene_type : fallback.scene_type,
-    vehicle_type: typeof value.vehicle_type === "string" && value.vehicle_type ? value.vehicle_type : fallback.vehicle_type,
-    user_stage: typeof value.user_stage === "string" && value.user_stage ? value.user_stage : fallback.user_stage,
+    scene_type: typeof value.scene_type === "string" && value.scene_type.trim() ? value.scene_type.trim() : fallback.scene_type,
+    vehicle_type: typeof value.vehicle_type === "string" && value.vehicle_type.trim() ? value.vehicle_type.trim() : fallback.vehicle_type,
+    user_stage: typeof value.user_stage === "string" && value.user_stage.trim() ? value.user_stage.trim() : fallback.user_stage,
     budget,
     priority_style: priorityStyle,
-    already_have: Array.isArray(value.already_have) ? value.already_have.filter((item): item is string => typeof item === "string") : fallback.already_have,
-    avoid_items: Array.isArray(value.avoid_items) ? value.avoid_items.filter((item): item is string => typeof item === "string") : fallback.avoid_items,
+    already_have: asStringArray(value.already_have, fallback.already_have),
+    avoid_items: asStringArray(value.avoid_items, fallback.avoid_items),
     optional_notes:
-      typeof value.optional_notes === "string" && value.optional_notes
-        ? value.optional_notes
+      typeof value.optional_notes === "string" && value.optional_notes.trim()
+        ? value.optional_notes.trim()
         : fallback.optional_notes
-  };
+  }, fallback);
 }
 
 export async function POST(request: NextRequest) {
   try {
-    const body = await request.json();
-    const sceneBrief = body.scene_brief as SceneBrief | undefined;
-    const scenarioId = typeof body.scenario_id === "string" ? (body.scenario_id as ScenarioId) : sceneBrief?.scenario_id ?? "new-car";
+    const identity = await getRequestIdentity();
+    const body = await request.json().catch(() => ({}));
+    const sceneBriefInput = isRecord(body.scene_brief) ? body.scene_brief : undefined;
+    const scenarioId = isScenarioId(body.scenario_id)
+      ? body.scenario_id
+      : isScenarioId(sceneBriefInput?.scenario_id)
+        ? sceneBriefInput.scenario_id
+        : "new-car";
     const rawInput =
-      (body.raw_input as string | undefined) ??
-      (body.scene_brief
-        ? `${body.scene_brief.vehicle_type ?? ""} ${body.scene_brief.user_stage ?? ""} 预算 ${body.scene_brief.budget ?? ""} ${body.scene_brief.priority_style ?? ""} ${body.scene_brief.optional_notes ?? ""}`
+      (typeof body.raw_input === "string" ? body.raw_input : undefined) ??
+      (sceneBriefInput
+        ? `${sceneBriefInput.vehicle_type ?? ""} ${sceneBriefInput.user_stage ?? ""} 预算 ${sceneBriefInput.budget ?? ""} ${sceneBriefInput.priority_style ?? ""} ${sceneBriefInput.optional_notes ?? ""}`
         : undefined);
 
-    const fallbackScene = sceneBrief ?? mockParseScene(rawInput ?? "", scenarioId);
-    const normalizedSceneBrief = sceneBrief
-      ? normalizeSceneBriefInput(sceneBrief, fallbackScene)
-      : normalizeSceneBriefInput(undefined, (await parseOnly(rawInput ?? "", scenarioId)).data);
+    const parseDeepSeekMode = asDeepSeekMode(body.parse_deepseek_mode);
 
-    const state = sceneBrief
-      ? await createSessionFromScene(rawInput ?? "", normalizedSceneBrief, body.deepseek_mode === "connected" ? "connected" : "mock")
-      : await initializeSession(rawInput, scenarioId);
+    const state = sceneBriefInput
+      ? await createSessionFromScene(
+          rawInput ?? "",
+          normalizeSceneBriefInput(sceneBriefInput, mockParseScene(rawInput ?? "", scenarioId)),
+          parseDeepSeekMode,
+          identity.userId
+        )
+      : await initializeSession(rawInput, scenarioId, identity.userId);
 
-    return NextResponse.json({
+    return apiOk({
       session_id: state.session_id,
       scene_brief: state.scene_brief,
       base_template: state.base_template,
       shopping_plan: state.shopping_plan,
+      plan_review: state.plan_review,
       module_candidates: state.module_candidates,
+      module_reviews: state.module_reviews,
       tool_logs: state.tool_logs,
       execution_mode: state.execution_mode,
       deepseek_status: state.deepseek_status,
       mcp_status: state.mcp_status
     });
   } catch (error) {
-    return NextResponse.json(
-      {
-        error: error instanceof Error ? error.message : "planning failed"
-      },
-      { status: 500 }
-    );
+    return apiRouteError(error, "planning failed");
   }
 }

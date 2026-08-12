@@ -3,6 +3,10 @@ node_modules
 
 # build outputs
 .next
+.next-verify
+.next-e2e
+.next-interview-demo
+.vercel
 out
 dist
 coverage
@@ -45,3 +49,4 @@ storage*.json
 # optional local screenshots / browser dumps
 playwright-report
 test-results
+.env*

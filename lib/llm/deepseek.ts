@@ -1,35 +1,115 @@
 import {
+  AgentDecisionProposal,
+  AgentPurchaseBundle,
+  CandidateFitExplanation,
   PlanningModule,
+  ModuleCandidateReview,
+  PlanQualityReview,
+  ProductCandidate,
+  PurchaseBundleProposal,
   QuickAction,
   RecommendationType,
   ScenarioId,
   SceneBrief,
-  ShoppingPlan
+  SessionLlmCall,
+  SessionState,
+  ShoppingPlan,
+  ShoppingPlanModule
 } from "@/lib/session/types";
 import {
   explainProductFitPrompt,
   parseScenePrompt,
   personalizeTemplatePrompt,
-  refinePlanPrompt
+  reviewCandidatePoolPrompt,
+  reviewShoppingPlanPrompt,
+  refinePlanPrompt,
+  decideNextActionPrompt,
+  composePurchaseBundlePrompt
 } from "@/lib/llm/prompts";
 import {
   mockExplainProductFit,
   mockParseScene,
   mockPersonalizeTemplate,
+  mockReviewShoppingPlan,
   mockRefineScene
 } from "@/lib/llm/mock";
+import { normalizeSceneBriefOptions } from "@/lib/scenarios/normalize";
+import { getScenarioConfig, isScenarioId } from "@/lib/scenarios";
+import {
+  validateProductFitOutput,
+  validateCandidateReviewOutput,
+  validatePlanQualityReviewOutput,
+  validateSceneBriefOutput,
+  validateShoppingPlanOutput,
+  validateAgentDecisionOutput,
+  validatePurchaseBundleProposalOutput
+} from "@/lib/llm/validation";
+import { downgradeLastLlmCall, recordLlmCall, type LlmTaskName } from "@/lib/llm/telemetry";
+import { materializePurchaseBundleProposal } from "@/lib/agent/purchase-bundle";
 
 const DEEPSEEK_BASE_URL = "https://api.deepseek.com/chat/completions";
-const REQUEST_TIMEOUT_MS = 20_000;
+const DEFAULT_TIMEOUT_MS: Record<LlmTaskName, number> = {
+  parse_scene: 15_000,
+  personalize_template: 26_000,
+  refine_plan: 18_000,
+  review_candidates: 8_000,
+  review_plan: 10_000,
+  decide_next_action: 8_000,
+  compose_purchase_bundle: 12_000,
+  explain_product_fit: 6_000
+};
+const DEFAULT_MAX_OUTPUT_TOKENS: Record<LlmTaskName, number> = {
+  parse_scene: 700,
+  personalize_template: 3_200,
+  refine_plan: 700,
+  review_candidates: 900,
+  review_plan: 900,
+  decide_next_action: 900,
+  compose_purchase_bundle: 1_400,
+  explain_product_fit: 180
+};
+const TIMEOUT_ENV_KEYS: Record<LlmTaskName, string> = {
+  parse_scene: "DEEPSEEK_PARSE_TIMEOUT_MS",
+  personalize_template: "DEEPSEEK_PLAN_TIMEOUT_MS",
+  refine_plan: "DEEPSEEK_REFINE_TIMEOUT_MS",
+  review_candidates: "DEEPSEEK_CANDIDATE_REVIEW_TIMEOUT_MS",
+  review_plan: "DEEPSEEK_PLAN_REVIEW_TIMEOUT_MS",
+  decide_next_action: "DEEPSEEK_AGENT_DECISION_TIMEOUT_MS",
+  compose_purchase_bundle: "DEEPSEEK_BUNDLE_TIMEOUT_MS",
+  explain_product_fit: "DEEPSEEK_EXPLAIN_TIMEOUT_MS"
+};
+const MIN_TIMEOUT_MS = 250;
+const MAX_TIMEOUT_MS = 60_000;
 
-type StructuredTask = "parse_scene" | "personalize_template" | "refine_plan";
+type StructuredTask = Exclude<LlmTaskName, "explain_product_fit">;
+type LlmMode = "connected" | "mock";
+type StructuredModelTier = "chat" | "reasoner";
 
-function hasDeepSeekConfig() {
-  return Boolean(process.env.DEEPSEEK_API_KEY);
+export interface StructuredLlmResult<T> {
+  data: T;
+  mode: LlmMode;
+  call: SessionLlmCall;
 }
 
-function getStructuredModel(task: StructuredTask) {
-  if (task === "parse_scene" || task === "personalize_template") {
+function fallbackCall(call: SessionLlmCall, reason: string): SessionLlmCall {
+  return {
+    ...call,
+    mode: "fallback",
+    reason
+  };
+}
+
+function getStructuredModel(task: StructuredTask, tier?: StructuredModelTier) {
+  if (tier === "reasoner") {
+    return process.env.DEEPSEEK_REASONER_MODEL ?? "deepseek-reasoner";
+  }
+  if (tier === "chat") {
+    return process.env.DEEPSEEK_CHAT_MODEL ?? "deepseek-chat";
+  }
+  if (task === "decide_next_action") {
+    return process.env.DEEPSEEK_CHAT_MODEL ?? "deepseek-chat";
+  }
+  if (task === "parse_scene" || task === "personalize_template" || task === "review_candidates" || task === "review_plan") {
     return process.env.DEEPSEEK_CHAT_MODEL ?? "deepseek-chat";
   }
   return process.env.DEEPSEEK_REASONER_MODEL ?? "deepseek-reasoner";
@@ -37,6 +117,52 @@ function getStructuredModel(task: StructuredTask) {
 
 function getTextModel() {
   return process.env.DEEPSEEK_CHAT_MODEL ?? "deepseek-chat";
+}
+
+export function getDeepSeekTimeoutMs(task: LlmTaskName) {
+  const configured = process.env[TIMEOUT_ENV_KEYS[task]] ?? process.env.DEEPSEEK_REQUEST_TIMEOUT_MS;
+  const parsed = Number(configured);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return DEFAULT_TIMEOUT_MS[task];
+  }
+  return Math.max(MIN_TIMEOUT_MS, Math.min(Math.round(parsed), MAX_TIMEOUT_MS));
+}
+
+function boundedTimeout(value: string | undefined, fallback: number) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
+  return Math.max(MIN_TIMEOUT_MS, Math.min(Math.round(parsed), MAX_TIMEOUT_MS));
+}
+
+export function selectAgentDecisionModelTier(
+  state: SessionState,
+  fallback: AgentDecisionProposal
+): StructuredModelTier {
+  const hasComplexMarketPressure =
+    state.market_feedback.pressure_modules.length > 0 ||
+    state.market_feedback.reallocation_suggestions.length > 0;
+  const hasRecoveryEvidence = Object.values(state.module_search_traces).some(
+    (trace) => trace.status === "failed" || trace.status === "thin" || trace.status === "recovered"
+  );
+  const complexAction = fallback.action === "retry_module" || fallback.action === "skip_module";
+
+  return complexAction || hasComplexMarketPressure || hasRecoveryEvidence ? "reasoner" : "chat";
+}
+
+export function selectPurchaseBundleModelTier(
+  state: SessionState,
+  fallback: AgentPurchaseBundle
+): StructuredModelTier {
+  const hasCriticalGap = fallback.critical_selected_module_ids.length < fallback.critical_module_ids.length;
+  const hasBudgetPressure = state.market_feedback.pressure_modules.length > 0;
+  return hasCriticalGap || hasBudgetPressure ? "reasoner" : "chat";
+}
+
+function agentDecisionTimeoutMs(tier: StructuredModelTier) {
+  if (tier === "reasoner") {
+    return boundedTimeout(process.env.DEEPSEEK_AGENT_REASONER_TIMEOUT_MS, 15_000);
+  }
+  return boundedTimeout(process.env.DEEPSEEK_AGENT_CHAT_TIMEOUT_MS, getDeepSeekTimeoutMs("decide_next_action"));
 }
 
 function sanitizeScene(scene: SceneBrief): SceneBrief {
@@ -94,8 +220,17 @@ function asNumber(value: unknown, fallback: number) {
   return fallback;
 }
 
+function asBudgetRatio(value: unknown, fallback: number) {
+  const ratio = asNumber(value, fallback);
+  return ratio > 1 && ratio <= 100 ? ratio / 100 : ratio;
+}
+
 function asString(value: unknown, fallback: string) {
   return typeof value === "string" && value.trim() ? value.trim() : fallback;
+}
+
+function uniqueStringArray(values: string[], maxItems = 5) {
+  return Array.from(new Set(values.map((item) => item.trim()).filter(Boolean))).slice(0, maxItems);
 }
 
 function normalizePriorityStyle(value: unknown): SceneBrief["priority_style"] {
@@ -105,10 +240,203 @@ function normalizePriorityStyle(value: unknown): SceneBrief["priority_style"] {
   return "实用优先";
 }
 
-function normalizeSceneBrief(value: unknown, fallback: SceneBrief): SceneBrief {
+function normalizeSearchStrategy(value: unknown, fallback: ShoppingPlan["modules"][number]["search_strategy"]) {
   const source = value && typeof value === "object" ? (value as Record<string, unknown>) : {};
+  if (!fallback && !asString(source.primary_keyword, "")) {
+    return undefined;
+  }
+
   return {
-    scenario_id: (typeof source.scenario_id === "string" ? source.scenario_id : fallback.scenario_id) as ScenarioId,
+    primary_keyword: asString(source.primary_keyword, fallback?.primary_keyword ?? ""),
+    alternate_keywords: uniqueStringArray(
+      asStringArray(source.alternate_keywords).length
+        ? asStringArray(source.alternate_keywords)
+        : fallback?.alternate_keywords ?? [],
+      3
+    ),
+    include_terms: asStringArray(source.include_terms).length
+      ? uniqueStringArray(asStringArray(source.include_terms))
+      : fallback?.include_terms ?? [],
+    exclude_terms: asStringArray(source.exclude_terms).length
+      ? uniqueStringArray(asStringArray(source.exclude_terms))
+      : fallback?.exclude_terms ?? [],
+    ranking_focus: asStringArray(source.ranking_focus).length
+      ? uniqueStringArray(asStringArray(source.ranking_focus))
+      : fallback?.ranking_focus ?? [],
+    must_have_signals: asStringArray(source.must_have_signals).length
+      ? uniqueStringArray(asStringArray(source.must_have_signals), 4)
+      : fallback?.must_have_signals ?? [],
+    reject_signals: asStringArray(source.reject_signals).length
+      ? uniqueStringArray(asStringArray(source.reject_signals), 4)
+      : fallback?.reject_signals ?? [],
+    quality_checks: asStringArray(source.quality_checks).length
+      ? uniqueStringArray(asStringArray(source.quality_checks), 4)
+      : fallback?.quality_checks ?? [],
+    price_band: asString(source.price_band, fallback?.price_band ?? ""),
+    reasoning: asString(source.reasoning, fallback?.reasoning ?? ""),
+    failure_recovery: asString(source.failure_recovery, fallback?.failure_recovery ?? "")
+  };
+}
+
+function normalizeExecutionStrategy(
+  value: unknown,
+  fallback: ShoppingPlan["execution_strategy"],
+  allowedModuleIds: string[]
+): ShoppingPlan["execution_strategy"] {
+  const source = value && typeof value === "object" ? (value as Record<string, unknown>) : {};
+  const allowed = new Set(allowedModuleIds);
+  const moduleSequence = asStringArray(source.module_sequence).filter((moduleId) => allowed.has(moduleId));
+
+  return {
+    module_sequence: moduleSequence.length ? moduleSequence : fallback.module_sequence,
+    budget_guardrails: asStringArray(source.budget_guardrails).length
+      ? asStringArray(source.budget_guardrails)
+      : fallback.budget_guardrails,
+    tradeoffs: asStringArray(source.tradeoffs).length
+      ? asStringArray(source.tradeoffs)
+      : fallback.tradeoffs,
+    search_notes: asStringArray(source.search_notes).length
+      ? asStringArray(source.search_notes)
+      : fallback.search_notes,
+    stop_rules: asStringArray(source.stop_rules).length
+      ? asStringArray(source.stop_rules)
+      : fallback.stop_rules
+  };
+}
+
+export function normalizeAgentDirectives(
+  value: unknown,
+  fallback: ShoppingPlan["agent_directives"]
+): ShoppingPlan["agent_directives"] {
+  const source = value && typeof value === "object" ? (value as Record<string, unknown>) : {};
+  const autonomyLevel =
+    source.autonomy_level === "保守执行" ||
+    source.autonomy_level === "平衡执行" ||
+    source.autonomy_level === "探索执行"
+      ? source.autonomy_level
+      : fallback.autonomy_level;
+  const searchDepth =
+    source.search_depth === "轻量搜索" ||
+    source.search_depth === "标准搜索" ||
+    source.search_depth === "深度搜索"
+      ? source.search_depth
+      : fallback.search_depth;
+
+  return {
+    autonomy_level: autonomyLevel,
+    search_depth: searchDepth,
+    detail_policy: asString(source.detail_policy, fallback.detail_policy),
+    recovery_policy: asString(source.recovery_policy, fallback.recovery_policy),
+    rerank_rules: asStringArray(source.rerank_rules).length
+      ? uniqueStringArray(asStringArray(source.rerank_rules), 4)
+      : fallback.rerank_rules,
+    user_confirmation_points: uniqueStringArray([
+      ...fallback.user_confirmation_points,
+      ...asStringArray(source.user_confirmation_points)
+    ], 5),
+    safety_boundaries: uniqueStringArray([
+      ...fallback.safety_boundaries,
+      ...asStringArray(source.safety_boundaries)
+    ], 6)
+  };
+}
+
+function normalizeCandidateReview(
+  value: Partial<ModuleCandidateReview>,
+  fallback: ModuleCandidateReview
+): ModuleCandidateReview {
+  return {
+    module_id: asString(value.module_id, fallback.module_id),
+    status:
+      value.status === "ready" ||
+      value.status === "needs_detail_check" ||
+      value.status === "thin" ||
+      value.status === "needs_refine"
+        ? value.status
+        : fallback.status,
+    source: "deepseek",
+    summary: asString(value.summary, fallback.summary),
+    strengths: uniqueStringArray(asStringArray(value.strengths), 4).length
+      ? uniqueStringArray(asStringArray(value.strengths), 4)
+      : fallback.strengths,
+    caveats: uniqueStringArray(asStringArray(value.caveats), 4).length
+      ? uniqueStringArray(asStringArray(value.caveats), 4)
+      : fallback.caveats,
+    next_action: asString(value.next_action, fallback.next_action),
+    suggested_keyword: asString(value.suggested_keyword, fallback.suggested_keyword ?? "") || undefined,
+    generated_at: new Date().toISOString()
+  };
+}
+
+function candidateFitReasonMap(
+  explanations: CandidateFitExplanation[],
+  candidates: ProductCandidate[]
+) {
+  const allowedIds = new Set(candidates.map((candidate) => candidate.product_id));
+  const normalized: Record<string, string> = {};
+  for (const explanation of explanations) {
+    const productId = explanation.product_id.trim();
+    const fitReason = explanation.fit_reason.replace(/\s+/g, " ").trim();
+    if (!allowedIds.has(productId) || normalized[productId] || fitReason.length < 6 || fitReason.length > 140) {
+      continue;
+    }
+    normalized[productId] = fitReason;
+  }
+  return normalized;
+}
+
+function fallbackCandidateFitReasons(candidates: ProductCandidate[]) {
+  return Object.fromEntries(
+    candidates.map((candidate) => [candidate.product_id, candidate.fit_reason])
+  );
+}
+
+function normalizePlanQualityReview(
+  value: Partial<PlanQualityReview>,
+  fallback: PlanQualityReview
+): PlanQualityReview {
+  return {
+    status:
+      value.status === "ready" || value.status === "needs_attention" || value.status === "risky"
+        ? value.status
+        : fallback.status,
+    source: "deepseek",
+    summary: asString(value.summary, fallback.summary),
+    strengths: uniqueStringArray(asStringArray(value.strengths), 4).length
+      ? uniqueStringArray(asStringArray(value.strengths), 4)
+      : fallback.strengths,
+    risks: uniqueStringArray(asStringArray(value.risks), 4).length
+      ? uniqueStringArray(asStringArray(value.risks), 4)
+      : fallback.risks,
+    improvement_suggestions: uniqueStringArray(asStringArray(value.improvement_suggestions), 4).length
+      ? uniqueStringArray(asStringArray(value.improvement_suggestions), 4)
+      : fallback.improvement_suggestions,
+    budget_comment: asString(value.budget_comment, fallback.budget_comment),
+    keyword_comment: asString(value.keyword_comment, fallback.keyword_comment),
+    module_comment: asString(value.module_comment, fallback.module_comment),
+    generated_at: new Date().toISOString()
+  };
+}
+
+function normalizeOptionalNotes(value: unknown, fallback: string) {
+  const originalNotes = fallback.trim();
+  const modelNotes = asString(value, "").trim();
+  if (!modelNotes || /^(无|无额外说明|暂无|none)$/i.test(modelNotes)) {
+    return originalNotes;
+  }
+  if (!originalNotes || modelNotes.includes(originalNotes)) {
+    return modelNotes;
+  }
+  if (originalNotes.includes(modelNotes)) {
+    return originalNotes;
+  }
+  return `${originalNotes}\n模型补充：${modelNotes}`;
+}
+
+export function normalizeSceneBrief(value: unknown, fallback: SceneBrief): SceneBrief {
+  const source = value && typeof value === "object" ? (value as Record<string, unknown>) : {};
+  return normalizeSceneBriefOptions({
+    scenario_id: isScenarioId(source.scenario_id) ? source.scenario_id : fallback.scenario_id,
     scene_type: asString(source.scene_type, fallback.scene_type),
     vehicle_type: asString(source.vehicle_type, fallback.vehicle_type),
     user_stage: asString(source.user_stage, fallback.user_stage),
@@ -116,76 +444,223 @@ function normalizeSceneBrief(value: unknown, fallback: SceneBrief): SceneBrief {
     priority_style: normalizePriorityStyle(source.priority_style),
     already_have: asStringArray(source.already_have),
     avoid_items: asStringArray(source.avoid_items),
-    optional_notes: asString(source.optional_notes, fallback.optional_notes)
-  };
+    optional_notes: normalizeOptionalNotes(source.optional_notes, fallback.optional_notes)
+  }, fallback);
 }
 
-function normalizeShoppingPlan(value: unknown, fallback: ShoppingPlan): ShoppingPlan {
+export function normalizeShoppingPlan(
+  value: unknown,
+  fallback: ShoppingPlan,
+  template: PlanningModule[] = fallback.modules
+): ShoppingPlan {
   const source = value && typeof value === "object" ? (value as Record<string, unknown>) : {};
   const rawModules = Array.isArray(source.modules) ? source.modules : [];
+  const fallbackById = new Map(fallback.modules.map((module) => [module.module_id, module]));
+  const templateById = new Map(template.map((module) => [module.module_id, module]));
+  const normalizedModules: ShoppingPlanModule[] = rawModules.length > 0
+    ? rawModules.map((item) => {
+        const raw = item && typeof item === "object" ? (item as Record<string, unknown>) : {};
+        const rawModuleId = asString(raw.module_id, "");
+        const personalizedBase = fallbackById.get(rawModuleId);
+        const templateDefinition = templateById.get(rawModuleId);
+        const itemTypes = uniqueStringArray(asStringArray(raw.typical_item_types), 6);
+        const adaptivePrimaryKeyword = asString(
+          raw.search_keyword,
+          asString(
+            raw.search_strategy && typeof raw.search_strategy === "object"
+              ? (raw.search_strategy as Record<string, unknown>).primary_keyword
+              : undefined,
+            `${asString(raw.module_name, "专项需求")} ${itemTypes.slice(0, 3).join(" ")}`.trim()
+          )
+        );
+        const adaptiveBase: ShoppingPlanModule = {
+          module_id: rawModuleId,
+          module_name: asString(raw.module_name, "专项需求"),
+          description: asString(raw.description, "根据用户特殊使用场景补充的可选模块。"),
+          default_priority: Math.max(1, Math.min(asNumber(raw.default_priority, 50), 120)),
+          default_budget_ratio: Math.max(0.03, Math.min(asBudgetRatio(raw.default_budget_ratio, 0.1), 0.3)),
+          typical_item_types: itemTypes,
+          optional: true,
+          origin: "ai_adaptive",
+          priority: asNumber(raw.priority, 50),
+          budget_allocation: Math.max(0, asNumber(raw.budget_allocation, 0)),
+          rationale: asString(raw.rationale, "用户描述中存在基础模板未覆盖的专项需求。"),
+          recommendation_strategy: asString(raw.recommendation_strategy, "优先选择需求匹配明确、规格清楚且预算可控的商品。"),
+          search_keyword: adaptivePrimaryKeyword,
+          search_strategy: {
+            primary_keyword: adaptivePrimaryKeyword,
+            alternate_keywords: [],
+            include_terms: itemTypes.slice(0, 3),
+            exclude_terms: [],
+            ranking_focus: ["专项需求匹配", "规格明确", "预算可控"],
+            must_have_signals: itemTypes.slice(0, 4),
+            reject_signals: [],
+            quality_checks: ["商品图片完整", "详情链接可打开", "店铺信息明确", "规格描述清楚"],
+            price_band: "按模块预算控制",
+            reasoning: "围绕用户明确提出的专项使用场景搜索。",
+            failure_recovery: "首轮候选不足时，改用更明确的用品类型补搜一次。"
+          },
+          status: "ready"
+        };
+        const templateBase = templateDefinition
+          ? {
+              ...adaptiveBase,
+              ...templateDefinition,
+              module_id: templateDefinition.module_id,
+              module_name: templateDefinition.module_name,
+              description: templateDefinition.description,
+              typical_item_types: templateDefinition.typical_item_types,
+              optional: templateDefinition.optional,
+              origin: "base_template" as const
+            }
+          : undefined;
+        const isTemplateModule = Boolean(templateDefinition);
+        const base = personalizedBase ?? templateBase ?? adaptiveBase;
+        const moduleId = isTemplateModule ? templateDefinition!.module_id : rawModuleId;
+        return {
+          ...base,
+          module_id: moduleId,
+          module_name: asString(raw.module_name, base.module_name),
+          description: asString(raw.description, base.description),
+          default_priority: asNumber(raw.default_priority, base.default_priority),
+          default_budget_ratio: isTemplateModule
+            ? Math.max(0.01, Math.min(asBudgetRatio(raw.default_budget_ratio, base.default_budget_ratio), 1))
+            : Math.max(0.03, Math.min(asBudgetRatio(raw.default_budget_ratio, base.default_budget_ratio), 0.3)),
+          typical_item_types: itemTypes.length ? itemTypes : base.typical_item_types,
+          optional: isTemplateModule
+            ? (typeof raw.optional === "boolean" ? raw.optional : base.optional)
+            : true,
+          origin: isTemplateModule ? "base_template" : "ai_adaptive",
+          priority: asNumber(raw.priority, base.priority),
+          budget_allocation: asNumber(raw.budget_allocation, base.budget_allocation),
+          rationale: asString(raw.rationale, base.rationale),
+          recommendation_strategy: asString(raw.recommendation_strategy, base.recommendation_strategy),
+          search_keyword: asString(raw.search_keyword, base.search_keyword ?? ""),
+          search_strategy: normalizeSearchStrategy(raw.search_strategy, base.search_strategy),
+          status:
+            raw.status === "pending" || raw.status === "ready" || raw.status === "refined"
+              ? raw.status
+              : base.status
+        };
+      })
+    : fallback.modules.map((module) => ({ ...module, origin: module.origin ?? "base_template" }));
+  const hasModelAdaptiveModule = normalizedModules.some((module) => module.origin === "ai_adaptive");
+  const adaptiveBackfill = hasModelAdaptiveModule
+    ? []
+    : fallback.modules.filter(
+        (module) =>
+          module.origin === "ai_adaptive" &&
+          !normalizedModules.some((item) => item.module_id === module.module_id)
+      );
+  const modules = [...normalizedModules, ...adaptiveBackfill];
+  const executionStrategy = normalizeExecutionStrategy(
+    source.execution_strategy,
+    fallback.execution_strategy,
+    modules.map((module) => module.module_id)
+  );
+  const moduleSequence = [
+    ...executionStrategy.module_sequence,
+    ...modules
+      .map((module) => module.module_id)
+      .filter((moduleId) => !executionStrategy.module_sequence.includes(moduleId))
+  ];
 
   return {
     overall_rationale: asString(source.overall_rationale, fallback.overall_rationale),
     personalization_summary: asString(source.personalization_summary, fallback.personalization_summary),
-    modules:
-      rawModules.length > 0
-        ? rawModules.map((item, index) => {
-            const raw = item && typeof item === "object" ? (item as Record<string, unknown>) : {};
-            const base = fallback.modules[index] ?? fallback.modules[0];
-            return {
-              ...base,
-              module_id: asString(raw.module_id, base.module_id),
-              module_name: asString(raw.module_name, base.module_name),
-              description: asString(raw.description, base.description),
-              default_priority: asNumber(raw.default_priority, base.default_priority),
-              default_budget_ratio: asNumber(raw.default_budget_ratio, base.default_budget_ratio),
-              typical_item_types: asStringArray(raw.typical_item_types).length
-                ? asStringArray(raw.typical_item_types)
-                : base.typical_item_types,
-              optional: typeof raw.optional === "boolean" ? raw.optional : base.optional,
-              priority: asNumber(raw.priority, base.priority),
-              budget_allocation: asNumber(raw.budget_allocation, base.budget_allocation),
-              rationale: asString(raw.rationale, base.rationale),
-              recommendation_strategy: asString(raw.recommendation_strategy, base.recommendation_strategy),
-              status:
-                raw.status === "pending" || raw.status === "ready" || raw.status === "refined"
-                  ? raw.status
-                  : base.status
-            };
-          })
-        : fallback.modules
+    execution_strategy: {
+      ...executionStrategy,
+      module_sequence: moduleSequence
+    },
+    agent_directives: normalizeAgentDirectives(source.agent_directives, fallback.agent_directives),
+    modules
   };
 }
 
-async function fetchWithTimeout(url: string, init: RequestInit) {
+class DeepSeekTimeoutError extends Error {
+  constructor(timeoutMs: number) {
+    super(`DeepSeek request exceeded ${timeoutMs}ms`);
+    this.name = "DeepSeekTimeoutError";
+  }
+}
+
+async function fetchTextWithTimeout(url: string, init: RequestInit, timeoutMs: number) {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  let timedOut = false;
+  const timer = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, timeoutMs);
   try {
-    return await fetch(url, {
+    const response = await fetch(url, {
       ...init,
       signal: controller.signal
     });
+    const text = await response.text();
+    return { response, text };
+  } catch (error) {
+    if (timedOut) {
+      throw new DeepSeekTimeoutError(timeoutMs);
+    }
+    throw error;
   } finally {
     clearTimeout(timer);
   }
 }
 
-async function deepseekJson<T>(task: StructuredTask, prompt: string, fallback: T): Promise<T> {
+async function deepseekJson<T>(
+  task: StructuredTask,
+  prompt: string,
+  fallback: T,
+  options: {
+    timeoutMs?: number;
+    modelTier?: StructuredModelTier;
+    maxOutputTokens?: number;
+  } = {}
+): Promise<StructuredLlmResult<T>> {
   const apiKey = process.env.DEEPSEEK_API_KEY;
+  const startedAt = Date.now();
+  const model = getStructuredModel(task, options.modelTier);
+  const timeoutMs = options.timeoutMs ?? getDeepSeekTimeoutMs(task);
+  const maxOutputTokens = options.maxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS[task];
+  const finish = (data: T, mode: LlmMode, reason?: string): StructuredLlmResult<T> => {
+    const durationMs = Date.now() - startedAt;
+    const createdAt = new Date().toISOString();
+    recordLlmCall({ task, model, mode, durationMs, reason });
+    return {
+      data,
+      mode,
+      call: {
+        id: `llm-${task}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        task,
+        model,
+        mode: mode === "connected" ? "connected" : "fallback",
+        duration_ms: Math.max(0, durationMs),
+        reason,
+        created_at: createdAt
+      }
+    };
+  };
+  if (process.env.DEEPSEEK_DISABLED === "true") {
+    return finish(fallback, "mock", "explicitly_disabled");
+  }
   if (!apiKey) {
-    return fallback;
+    return finish(fallback, "mock", "api_key_missing");
   }
 
   try {
-    const response = await fetchWithTimeout(DEEPSEEK_BASE_URL, {
+    const { response, text } = await fetchTextWithTimeout(DEEPSEEK_BASE_URL, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         Authorization: `Bearer ${apiKey}`
       },
       body: JSON.stringify({
-        model: getStructuredModel(task),
-        temperature: task === "parse_scene" ? 0.2 : 0.3,
+        model,
+        ...(model.includes("reasoner")
+          ? {}
+          : { temperature: task === "parse_scene" || task === "review_candidates" ? 0.2 : 0.3 }),
+        max_tokens: maxOutputTokens,
         messages: [
           {
             role: "system",
@@ -201,81 +676,157 @@ async function deepseekJson<T>(task: StructuredTask, prompt: string, fallback: T
         }
       }),
       cache: "no-store"
-    });
+    }, timeoutMs);
 
     if (!response.ok) {
-      return fallback;
+      return finish(fallback, "mock", `http_${response.status}`);
     }
 
-    const payload = await response.json();
+    const payload = JSON.parse(text);
     const content = payload.choices?.[0]?.message?.content;
     if (!content) {
-      return fallback;
+      return finish(fallback, "mock", "empty_content");
     }
-    return JSON.parse(content) as T;
-  } catch {
-    return fallback;
+    return finish(JSON.parse(content) as T, "connected");
+  } catch (error) {
+    const reason = error instanceof DeepSeekTimeoutError
+      ? "timeout"
+      : error instanceof SyntaxError
+        ? "invalid_json"
+        : "request_failed";
+    return finish(fallback, "mock", reason);
   }
 }
 
-export async function parseScene(input: string, scenarioId: ScenarioId): Promise<{ data: SceneBrief; mode: "connected" | "mock" }> {
+export async function parseScene(input: string, scenarioId: ScenarioId): Promise<StructuredLlmResult<SceneBrief>> {
   const fallback = mockParseScene(input, scenarioId);
-  const rawData = await deepseekJson<SceneBrief>("parse_scene", parseScenePrompt(input, scenarioId), fallback);
-  const data = normalizeSceneBrief(rawData, fallback);
+  const result = await deepseekJson<SceneBrief>("parse_scene", parseScenePrompt(input, scenarioId), fallback);
+  const validation = result.mode === "connected" ? validateSceneBriefOutput(result.data) : { valid: true };
+  if (result.mode === "connected" && !validation.valid) {
+    downgradeLastLlmCall("parse_scene", `schema_validation_failed:${validation.reason ?? "unknown"}`);
+  }
+  const data = validation.valid ? normalizeSceneBrief(result.data, fallback) : fallback;
   return {
     data,
-    mode: hasDeepSeekConfig() ? "connected" : "mock"
+    mode: validation.valid ? result.mode : "mock",
+    call: validation.valid
+      ? result.call
+      : fallbackCall(result.call, `schema_validation_failed:${validation.reason ?? "unknown"}`)
   };
 }
 
 export async function personalizeTemplate(
   scene: SceneBrief,
   template: PlanningModule[]
-): Promise<{ data: ShoppingPlan; mode: "connected" | "mock" }> {
+): Promise<StructuredLlmResult<ShoppingPlan>> {
   const safeScene = sanitizeScene(scene);
   const safeTemplate = sanitizeTemplate(template);
   const fallback = mockPersonalizeTemplate(safeScene, template);
-  const rawData = await deepseekJson<ShoppingPlan>(
+  const adaptivePolicy = getScenarioConfig(scene.scenario_id).adaptive_module_policy;
+  const result = await deepseekJson<ShoppingPlan>(
     "personalize_template",
     personalizeTemplatePrompt(safeScene, safeTemplate),
     fallback
   );
-  const data = normalizeShoppingPlan(rawData, fallback);
+  const normalizedCandidate = result.mode === "connected"
+    ? normalizeShoppingPlan(result.data, fallback, template)
+    : fallback;
+  const validation = result.mode === "connected"
+    ? validateShoppingPlanOutput(normalizedCandidate, template, {
+        maxAdaptiveModules: adaptivePolicy?.max_modules ?? 0,
+        adaptiveIdPrefix: adaptivePolicy?.id_prefix,
+        prohibitedTerms: adaptivePolicy?.prohibited_terms
+      })
+    : { valid: true };
+  if (result.mode === "connected" && !validation.valid) {
+    downgradeLastLlmCall("personalize_template", `schema_validation_failed:${validation.reason ?? "unknown"}`);
+  }
+  const data = validation.valid ? normalizedCandidate : fallback;
   return {
     data,
-    mode: hasDeepSeekConfig() ? "connected" : "mock"
+    mode: validation.valid ? result.mode : "mock",
+    call: validation.valid
+      ? result.call
+      : fallbackCall(result.call, `schema_validation_failed:${validation.reason ?? "unknown"}`)
   };
 }
 
 export async function refinePlan(
   scene: SceneBrief,
   action: QuickAction
-): Promise<{ data: SceneBrief; mode: "connected" | "mock" }> {
+): Promise<StructuredLlmResult<SceneBrief>> {
   const safeScene = sanitizeScene(scene);
   const fallback = mockRefineScene(safeScene, action);
-  const rawData = await deepseekJson<SceneBrief>("refine_plan", refinePlanPrompt(safeScene, action), fallback);
-  const data = normalizeSceneBrief(rawData, fallback);
+  const result = await deepseekJson<SceneBrief>("refine_plan", refinePlanPrompt(safeScene, action), fallback);
+  const validation = result.mode === "connected" ? validateSceneBriefOutput(result.data) : { valid: true };
+  if (result.mode === "connected" && !validation.valid) {
+    downgradeLastLlmCall("refine_plan", `schema_validation_failed:${validation.reason ?? "unknown"}`);
+  }
+  const data = validation.valid ? normalizeSceneBrief(result.data, fallback) : fallback;
   return {
     data,
-    mode: hasDeepSeekConfig() ? "connected" : "mock"
+    mode: validation.valid ? result.mode : "mock",
+    call: validation.valid
+      ? result.call
+      : fallbackCall(result.call, `schema_validation_failed:${validation.reason ?? "unknown"}`)
+  };
+}
+
+export async function reviewShoppingPlan(
+  scene: SceneBrief,
+  plan: ShoppingPlan
+): Promise<StructuredLlmResult<PlanQualityReview>> {
+  const safeScene = sanitizeScene(scene);
+  const fallback = mockReviewShoppingPlan(safeScene, plan);
+  const result = await deepseekJson<Partial<PlanQualityReview>>(
+    "review_plan",
+    reviewShoppingPlanPrompt(safeScene, plan),
+    fallback
+  );
+  const validation = result.mode === "connected" ? validatePlanQualityReviewOutput(result.data) : true;
+  if (result.mode === "connected" && !validation) {
+    downgradeLastLlmCall("review_plan", "schema_validation_failed:plan_review_invalid");
+  }
+  return {
+    data: validation ? normalizePlanQualityReview(result.data, fallback) : fallback,
+    mode: validation ? result.mode : "mock",
+    call: validation
+      ? result.call
+      : fallbackCall(result.call, "schema_validation_failed:plan_review_invalid")
   };
 }
 
 export async function explainProductFit(moduleName: string, title: string, recommendationType: RecommendationType) {
   const apiKey = process.env.DEEPSEEK_API_KEY;
+  const fallback = mockExplainProductFit(moduleName, { title, recommendation_type: recommendationType });
+  const startedAt = Date.now();
+  const model = getTextModel();
+  const finish = (value: string, mode: LlmMode, reason?: string) => {
+    recordLlmCall({
+      task: "explain_product_fit",
+      model,
+      mode,
+      durationMs: Date.now() - startedAt,
+      reason
+    });
+    return value;
+  };
+  if (process.env.DEEPSEEK_DISABLED === "true") {
+    return finish(fallback, "mock", "explicitly_disabled");
+  }
   if (!apiKey) {
-    return mockExplainProductFit(moduleName, { title, recommendation_type: recommendationType });
+    return finish(fallback, "mock", "api_key_missing");
   }
 
   try {
-    const response = await fetchWithTimeout(DEEPSEEK_BASE_URL, {
+    const { response, text } = await fetchTextWithTimeout(DEEPSEEK_BASE_URL, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         Authorization: `Bearer ${apiKey}`
       },
       body: JSON.stringify({
-        model: getTextModel(),
+        model,
         temperature: 0.5,
         messages: [
           {
@@ -289,13 +840,185 @@ export async function explainProductFit(moduleName: string, title: string, recom
         ]
       }),
       cache: "no-store"
-    });
+    }, getDeepSeekTimeoutMs("explain_product_fit"));
     if (!response.ok) {
-      throw new Error("deepseek explain failed");
+      return finish(fallback, "mock", `http_${response.status}`);
     }
-    const payload = await response.json();
-    return payload.choices?.[0]?.message?.content ?? mockExplainProductFit(moduleName, { title, recommendation_type: recommendationType });
-  } catch {
-    return mockExplainProductFit(moduleName, { title, recommendation_type: recommendationType });
+    const payload = JSON.parse(text);
+    const content = payload.choices?.[0]?.message?.content;
+    if (!validateProductFitOutput(content)) {
+      return finish(fallback, "mock", content ? "schema_validation_failed" : "empty_content");
+    }
+    return finish(content.trim(), "connected");
+  } catch (error) {
+    const reason = error instanceof DeepSeekTimeoutError
+      ? "timeout"
+      : error instanceof SyntaxError
+        ? "invalid_json"
+        : "request_failed";
+    return finish(fallback, "mock", reason);
   }
+}
+
+export async function reviewCandidatePool({
+  scene,
+  module,
+  candidates,
+  fallbackReview
+}: {
+  scene: SceneBrief;
+  module: ShoppingPlan["modules"][number];
+  candidates: ProductCandidate[];
+  fallbackReview: ModuleCandidateReview;
+}): Promise<{
+  data: ModuleCandidateReview;
+  fitReasons: Record<string, string>;
+  mode: LlmMode;
+  call: SessionLlmCall;
+}> {
+  type CandidateReviewModelOutput = Partial<ModuleCandidateReview> & {
+    fit_reasons?: CandidateFitExplanation[];
+  };
+  const fallbackFitReasons = fallbackCandidateFitReasons(candidates);
+  const fallbackOutput: CandidateReviewModelOutput = {
+    ...fallbackReview,
+    fit_reasons: candidates.map((candidate) => ({
+      product_id: candidate.product_id,
+      fit_reason: candidate.fit_reason
+    }))
+  };
+
+  const result = await deepseekJson<CandidateReviewModelOutput>(
+    "review_candidates",
+    reviewCandidatePoolPrompt({
+      scene: sanitizeScene(scene),
+      module,
+      candidates,
+      fallbackReview
+    }),
+    fallbackOutput
+  );
+  const candidateIds = candidates.map((candidate) => candidate.product_id);
+  const validation = result.mode === "connected"
+    ? validateCandidateReviewOutput(result.data, candidateIds) && result.data.module_id === module.module_id
+    : true;
+  if (result.mode === "connected" && !validation) {
+    downgradeLastLlmCall("review_candidates", "schema_validation_failed:candidate_review_invalid");
+  }
+
+  if (result.mode !== "connected" || !validation) {
+    return {
+      data: fallbackReview,
+      fitReasons: fallbackFitReasons,
+      mode: "mock",
+      call: result.mode === "connected" && !validation
+        ? fallbackCall(result.call, "schema_validation_failed:candidate_review_invalid")
+        : result.call
+    };
+  }
+
+  return {
+    data: normalizeCandidateReview(result.data, fallbackReview),
+    fitReasons: candidateFitReasonMap(result.data.fit_reasons ?? [], candidates),
+    mode: result.mode,
+    call: result.call
+  };
+}
+
+export async function decideAgentNextAction(
+  state: SessionState,
+  fallback: AgentDecisionProposal
+): Promise<StructuredLlmResult<AgentDecisionProposal>> {
+  const modelTier = selectAgentDecisionModelTier(state, fallback);
+  const result = await deepseekJson<AgentDecisionProposal>(
+    "decide_next_action",
+    decideNextActionPrompt(state, fallback),
+    fallback,
+    {
+      modelTier,
+      timeoutMs: agentDecisionTimeoutMs(modelTier),
+      maxOutputTokens: modelTier === "reasoner" ? 2_200 : DEFAULT_MAX_OUTPUT_TOKENS.decide_next_action
+    }
+  );
+  if (result.mode !== "connected" || !validateAgentDecisionOutput(result.data)) {
+    if (result.mode === "connected") {
+      downgradeLastLlmCall("decide_next_action", "schema_validation_failed:agent_decision_invalid");
+    }
+    return {
+      data: fallback,
+      mode: "mock",
+      call: result.mode === "connected"
+        ? fallbackCall(result.call, "schema_validation_failed:agent_decision_invalid")
+        : result.call
+    };
+  }
+  return {
+    data: {
+      action: result.data.action,
+      confidence: result.data.confidence,
+      module_id: typeof result.data.module_id === "string" ? result.data.module_id.trim() : undefined,
+      keyword_override: typeof result.data.keyword_override === "string"
+        ? result.data.keyword_override.replace(/\s+/g, " ").trim().slice(0, 80)
+        : undefined,
+      reason: result.data.reason.trim().slice(0, 300),
+      evidence: result.data.evidence.map((item) => item.trim()).filter(Boolean).slice(0, 4),
+      expected_gain: result.data.expected_gain.trim().slice(0, 220),
+      tool_cost: Math.max(0, Math.min(Math.round(result.data.tool_cost), 1))
+    },
+    mode: "connected",
+    call: result.call
+  };
+}
+
+export async function composePurchaseBundle(
+  state: SessionState,
+  fallback: AgentPurchaseBundle
+): Promise<StructuredLlmResult<AgentPurchaseBundle>> {
+  const allowedRefinements = getScenarioConfig(state.scene_brief.scenario_id).quick_actions
+    .filter((action) => !action.startsWith("我已有"));
+  const fallbackProposal: PurchaseBundleProposal = {
+    selected_product_ids: fallback.items.map((item) => item.product_id),
+    summary: fallback.summary,
+    tradeoffs: fallback.caveats,
+    reasons: fallback.items.map((item) => ({ product_id: item.product_id, fit_reason: item.reason })),
+    suggested_refinements: fallback.refinement_suggestions ?? []
+  };
+  const modelTier = selectPurchaseBundleModelTier(state, fallback);
+  const result = await deepseekJson<PurchaseBundleProposal>(
+    "compose_purchase_bundle",
+    composePurchaseBundlePrompt(state, fallback),
+    fallbackProposal,
+    { modelTier }
+  );
+  if (result.mode !== "connected") return { data: fallback, mode: "mock", call: result.call };
+
+  const candidateIds = state.shopping_plan.modules.flatMap((module) =>
+    (state.module_candidates[module.module_id] ?? []).map((candidate) => candidate.product_id)
+  );
+  const valid = validatePurchaseBundleProposalOutput(
+    result.data,
+    candidateIds,
+    state.shopping_plan.modules.length,
+    allowedRefinements,
+    state.shopping_plan.modules.map((module) => module.module_id)
+  );
+  if (!valid) {
+    downgradeLastLlmCall("compose_purchase_bundle", "schema_validation_failed:purchase_bundle_invalid");
+    return {
+      data: fallback,
+      mode: "mock",
+      call: fallbackCall(result.call, "schema_validation_failed:purchase_bundle_invalid")
+    };
+  }
+
+  const bundle = materializePurchaseBundleProposal(state, result.data, fallback);
+  if (!bundle) {
+    downgradeLastLlmCall("compose_purchase_bundle", "guardrail_rejected:purchase_bundle_unsafe");
+    return {
+      data: fallback,
+      mode: "mock",
+      call: fallbackCall(result.call, "guardrail_rejected:purchase_bundle_unsafe")
+    };
+  }
+  return { data: bundle, mode: "connected", call: result.call };
 }

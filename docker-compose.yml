@@ -1,0 +1,61 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: scenecart
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-scenecart-local-only}
+      POSTGRES_DB: scenecart
+    volumes:
+      - scenecart_postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U scenecart -d scenecart"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  app:
+    build: .
+    image: scenecart-ai:local
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "${PORT:-3000}:3000"
+    environment:
+      SCENECART_PRODUCT_MODE: production
+      ALLOW_DEMO_CART_FALLBACK: "false"
+      RUNTIME_STORE: postgres
+      DATABASE_URL: postgresql://scenecart:${POSTGRES_PASSWORD:-scenecart-local-only}@postgres:5432/scenecart
+      DATABASE_SSL: "false"
+      AUTH_REQUIRED: "true"
+      AUTH_COOKIE_SECURE: ${AUTH_COOKIE_SECURE:-false}
+      APP_ORIGIN: ${APP_ORIGIN:-http://127.0.0.1:3000}
+      TAOBAO_EXECUTION_BACKEND: local_executor
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+      DEEPSEEK_CHAT_MODEL: ${DEEPSEEK_CHAT_MODEL:-deepseek-chat}
+      DEEPSEEK_REASONER_MODEL: ${DEEPSEEK_REASONER_MODEL:-deepseek-reasoner}
+      SCENECART_CRON_SECRET: ${SCENECART_CRON_SECRET:?SCENECART_CRON_SECRET is required}
+      SCENECART_RECOVERY_STALE_MS: ${SCENECART_RECOVERY_STALE_MS:-180000}
+    command: ["sh", "-c", "node scripts/db-migrate.mjs && node scripts/db-check.mjs && node server.js"]
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/api/runtime/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  recovery:
+    image: scenecart-ai:local
+    restart: unless-stopped
+    depends_on:
+      app:
+        condition: service_healthy
+    environment:
+      SCENECART_API_URL: http://app:3000
+      SCENECART_CRON_SECRET: ${SCENECART_CRON_SECRET:?SCENECART_CRON_SECRET is required}
+      SCENECART_RECOVERY_INTERVAL_MS: ${SCENECART_RECOVERY_INTERVAL_MS:-30000}
+    command: ["node", "scripts/workflow-recovery-worker.mjs"]
+
+volumes:
+  scenecart_postgres:

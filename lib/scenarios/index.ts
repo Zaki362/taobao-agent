@@ -16,9 +16,13 @@ export const SCENARIO_CONFIGS: Record<ScenarioId, ScenarioConfig> = {
 
 export const SCENARIO_LIST = Object.values(SCENARIO_CONFIGS);
 
+export function isScenarioId(value: unknown): value is ScenarioId {
+  return typeof value === "string" && value in SCENARIO_CONFIGS;
+}
+
 export function getScenarioConfig(scenarioId: ScenarioId | string | undefined): ScenarioConfig {
-  if (scenarioId && scenarioId in SCENARIO_CONFIGS) {
-    return SCENARIO_CONFIGS[scenarioId as ScenarioId];
+  if (isScenarioId(scenarioId)) {
+    return SCENARIO_CONFIGS[scenarioId];
   }
   return SCENARIO_CONFIGS["new-car"];
 }

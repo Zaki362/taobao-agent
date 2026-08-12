@@ -1,67 +1,54 @@
-# Qoder CLI Execution Provider
+# Qoder CLI Execution Provider（旧开发兼容）
 
-当前项目已经支持把 `qodercli` 作为执行 provider。
+`qoder_cli` 仍保留在代码中，供迁移和开发调试使用，但它不是正式产品、真实设备验收或面试演示的执行路径。
 
-## 适用场景
+当前主链路是：
 
-当你希望由本地后端直接调用一个“外部 AI 宿主”去执行淘宝能力，而不是走 Codex 宿主代理队列时，可以切到 `qoder_cli` 模式。
+```text
+Browser -> Agent workflow -> durable Job Queue
+        -> local_executor -> 淘宝桌面版官方 HTTP MCP
+```
 
-目标链路：
+它使用 SceneCart 设备令牌、持久任务租约、结果账本和幂等回填。淘宝掉登录时，网页会暂停当前搜索，用户可重新登录后显式确认继续，也可使用已经保存的部分真实结果进入选购。这套恢复机制不依赖 Qoder。
 
-`Next.js 后端 / worker -> qodercli -> Qoder 内已安装的淘宝 skill / 工具能力`
+## 旧 provider 做什么
 
-## 当前前提
+显式启用 `qoder_cli` 后，旧链路为：
 
-在真正可用之前，至少要满足这 3 个条件：
+```text
+Next.js 兼容 provider -> qodercli -> Qoder 中安装的淘宝 skill / 工具
+```
 
-1. 已安装 `qodercli`
-2. 已完成登录
-3. Qoder 内已经具备淘宝相关 skill / 工具能力
+它通过 `qodercli -p ...` 非交互执行 prompt，要求严格 JSON，再映射为 SceneCart 需要的商品结构。使用者需要自行安装并登录 Qoder，且保证 Qoder 中存在相应淘宝 skill。
 
-## 当前已知状态
+仅在本地开发、确实需要调试旧适配器时配置：
 
-如果出现以下任意一种情况，`/api/mcp/status` 可能返回不可用：
-
-- `Qoder CLI 尚未登录`
-- `Qoder CLI 不可用`
-
-## 启用方式
-
-在 `.env.local` 中设置：
-
-```bash
+```dotenv
+SCENECART_PRODUCT_MODE=development
 TAOBAO_EXECUTION_BACKEND=qoder_cli
-QODERCLI_PATH=/Users/guohuaz/.local/bin/qodercli
+QODERCLI_PATH=/absolute/path/to/qodercli
+SCENECART_ENABLE_MCP_DEBUG=true
 ```
 
-然后重启应用：
+然后重启开发服务。安装 `qodercli` 或设置 `QODERCLI_PATH` 本身不会让应用自动切换 provider；必须显式设置 `TAOBAO_EXECUTION_BACKEND=qoder_cli`。
 
-```bash
-npm run dev
+## 不能用于正式演示的原因
+
+- 它绕过当前正式的设备令牌、持久 Job Queue 与 `local_executor` 运行契约，不能证明网页触发了当前生产架构。
+- Qoder 登录、Credits、已安装 skill 和输出格式是另一组外部依赖，与淘宝桌面版官方 HTTP MCP 的真实状态不同。
+- 旧 provider 的历史验证不等于当前淘宝登录态或当前商品结果可用。
+- 不得用演示购物车 fallback 掩盖 Qoder 或淘宝调用失败，也不得把这条兼容链路说成正式 `local_executor` 结果。
+
+`SCENECART_PRODUCT_MODE=production` 会阻断 `qoder_cli` 并把有效执行后端安全收敛为 `local_executor`；readiness 会继续报告原始误配置，直到环境变量被修正。
+
+## 当前建议
+
+面试和真实设备验收不要配置 `QODERCLI_PATH`，也不要切换到 `qoder_cli`。使用：
+
+```dotenv
+TAOBAO_EXECUTION_BACKEND=local_executor
+TAOBAO_NATIVE_MCP_URL=http://127.0.0.1:3654/mcp
+ALLOW_DEMO_CART_FALLBACK=false
 ```
 
-## 当前实现方式
-
-项目内的 `qoder_cli` provider 会：
-
-- 通过 `qodercli -p ...` 非交互执行 prompt
-- 要求 Qoder 调用其当前已安装的淘宝 skill / 工具能力
-- 强制返回严格 JSON
-- 将结果映射为当前产品所需的标准结构
-
-## 当前限制
-
-当前 provider 已经接好工程结构，但还没有在你的真实 Qoder 淘宝 skill 环境下跑通端到端联调。
-
-也就是说：
-
-- 代码层已支持 `qoder_cli`
-- 但要真正执行成功，仍需你先完成：
-  - `qodercli /login`
-  - 确认 Qoder 当前会话或非交互模式下也能调用淘宝 skill
-
-## 建议的下一步
-
-1. 完成 `qodercli` 登录
-2. 确认 `qodercli -p ...` 非交互模式也能使用这项淘宝能力
-3. 再切换 `TAOBAO_EXECUTION_BACKEND=qoder_cli` 做联调
+再依次运行 `npm run executor:configure`、`npm run executor:doctor` 和正式网页流程。若淘宝登录失效，留在同一 Session 按页面提示处理，不要临时切换 provider。

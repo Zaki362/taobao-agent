@@ -1,23 +1,41 @@
-import fs from "node:fs";
-import { liveMcpAdapter } from "@/lib/mcp/live";
-import { qoderMcpAdapter } from "@/lib/mcp/qoder";
+import { localExecutorMcpAdapter } from "@/lib/mcp/local-executor";
+import { isFormalProductMode } from "@/lib/runtime/product-mode";
 
-export type ExecutorBackend = "codex_hosted" | "experimental_local" | "qoder_cli";
+export type ExecutorBackend = "codex_hosted" | "experimental_local" | "qoder_cli" | "local_executor";
+
+export function getConfiguredExecutionBackend(): ExecutorBackend {
+  const configured = process.env.TAOBAO_EXECUTION_BACKEND;
+  if (
+    configured === "codex_hosted" ||
+    configured === "experimental_local" ||
+    configured === "qoder_cli" ||
+    configured === "local_executor"
+  ) {
+    return configured;
+  }
+
+  // Installing Qoder must not silently change the web application's execution
+  // architecture. Compatibility providers are development-only opt-ins.
+  return "local_executor";
+}
 
 export function getExecutionBackend(): ExecutorBackend {
-  if (process.env.TAOBAO_EXECUTION_BACKEND === "qoder_cli") {
-    return "qoder_cli";
+  const configured = getConfiguredExecutionBackend();
+  if (isFormalProductMode() && configured !== "local_executor") {
+    return "local_executor";
   }
-  if (process.env.QODERCLI_PATH || fs.existsSync("/Users/guohuaz/.local/bin/qodercli")) {
-    return "qoder_cli";
-  }
-  return process.env.TAOBAO_EXECUTION_BACKEND === "experimental_local"
-    ? "experimental_local"
-    : "codex_hosted";
+  return configured;
 }
 
 export async function getMcpClient() {
   const backend = getExecutionBackend();
+
+  if (backend === "local_executor") {
+    return {
+      client: localExecutorMcpAdapter,
+      status: await localExecutorMcpAdapter.detect()
+    };
+  }
 
   if (backend === "codex_hosted") {
     return {
@@ -33,6 +51,7 @@ export async function getMcpClient() {
   }
 
   if (backend === "qoder_cli") {
+    const { qoderMcpAdapter } = await import("@/lib/mcp/qoder");
     const qoderStatus = await qoderMcpAdapter.detect();
     return {
       client: qoderMcpAdapter,
@@ -40,6 +59,7 @@ export async function getMcpClient() {
     };
   }
 
+  const { liveMcpAdapter } = await import("@/lib/mcp/live");
   const liveStatus = await liveMcpAdapter.detect();
   return {
     client: liveMcpAdapter,

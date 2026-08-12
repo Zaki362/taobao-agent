@@ -1,0 +1,13 @@
+.git
+.github
+.next
+.data
+node_modules
+test-results
+playwright-report
+.env*
+*.log
+*.tsbuildinfo
+*_result.json
+search_*.json
+product_detail*.json

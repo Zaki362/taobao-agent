@@ -1,7 +1,23 @@
 import { getExecutionBackend } from "@/lib/mcp/client";
 import { executeMcpTool } from "@/lib/mcp/executor";
 import { queueAddToCartTask } from "@/lib/mcp/hosted";
+import { summarizeLogText, summarizeLogValue } from "@/lib/mcp/logging";
 import { ProductCandidate, SelectedItem, SessionState } from "@/lib/session/types";
+import { enqueueAddToCartJob } from "@/lib/runtime/jobs";
+import { allowDemoCartFallback } from "@/lib/runtime/product-mode";
+import { refreshBundleAdoptionProgress } from "@/lib/session/bundle-adoption";
+
+export type CartItemRemovalErrorCode = "cart_item_not_found" | "taobao_cart_managed_externally";
+
+export class CartItemRemovalError extends Error {
+  constructor(
+    message: string,
+    public readonly code: CartItemRemovalErrorCode
+  ) {
+    super(message);
+    this.name = "CartItemRemovalError";
+  }
+}
 
 function normalizeProductDetailUrl(productId: string, rawUrl?: string) {
   const sourceUrl = rawUrl ?? "";
@@ -38,6 +54,26 @@ function buildSelectedItem(
   };
 }
 
+export function removeDemoCartItem(state: SessionState, productId: string) {
+  const selectedItem = state.selected_items.find((item) => item.product_id === productId);
+  if (!selectedItem) {
+    throw new CartItemRemovalError("当前购买清单中没有这件商品。", "cart_item_not_found");
+  }
+
+  // Missing source is treated as a historical real-cart record. Only explicitly
+  // labeled demo entries may be mutated without touching the user's Taobao cart.
+  if (selectedItem.cart_source !== "demo") {
+    throw new CartItemRemovalError(
+      "真实淘宝购物车商品需要在淘宝购物车中管理，本产品不会伪装删除或影响其他商品。",
+      "taobao_cart_managed_externally"
+    );
+  }
+
+  state.selected_items = state.selected_items.filter((item) => item.product_id !== productId);
+  refreshBundleAdoptionProgress(state);
+  return selectedItem;
+}
+
 export async function runCartExecutor(state: SessionState, productId: string) {
   const product = Object.values(state.module_candidates)
     .flat()
@@ -47,14 +83,34 @@ export async function runCartExecutor(state: SessionState, productId: string) {
     throw new Error("product not found");
   }
 
-  if (getExecutionBackend() === "codex_hosted") {
-    return queueAddToCartTask(state, {
+  const backend = getExecutionBackend();
+  if (backend === "local_executor") {
+    const moduleName = state.shopping_plan.modules.find((module) => module.module_id === product.module_id)?.module_name;
+    const job = await enqueueAddToCartJob(state, {
+      productId: product.product_id,
+      moduleId: product.module_id,
+      moduleName,
+      title: product.title
+    });
+    refreshBundleAdoptionProgress(state);
+    return {
+      success: true,
+      message: "已提交本地执行器后台加购",
+      product_id: product.product_id,
+      task_id: job.id
+    };
+  }
+
+  if (backend === "codex_hosted") {
+    const task = queueAddToCartTask(state, {
       product_id: product.product_id,
       module_id: product.module_id,
       module_name: state.shopping_plan.modules.find((module) => module.module_id === product.module_id)?.module_name,
       product_title: product.title,
       detail_url: normalizeProductDetailUrl(product.product_id, product.detail_url)
     });
+    refreshBundleAdoptionProgress(state);
+    return task;
   }
 
   const result = await executeMcpTool(state, "add_to_cart", {
@@ -67,20 +123,26 @@ export async function runCartExecutor(state: SessionState, productId: string) {
     module_id: product.module_id,
     module_name: state.shopping_plan.modules.find((module) => module.module_id === product.module_id)?.module_name
   }).catch((error) => {
+    if (!allowDemoCartFallback()) {
+      throw error;
+    }
     const fallbackItem = buildSelectedItem(state, product, {
       selectedSpec: "演示购物车默认规格",
       cartSource: "demo",
-      cartNote: error instanceof Error ? error.message : "真实加购失败，已回退到演示购物车"
+      cartNote: error instanceof Error ? summarizeLogText(error.message, 220) : "真实加购失败，已回退到演示购物车"
     });
     state.selected_items = [...state.selected_items.filter((item) => item.product_id !== productId), fallbackItem];
+    refreshBundleAdoptionProgress(state);
     state.tool_logs.unshift({
       id: `demo-cart-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       timestamp: new Date().toISOString(),
       tool_name: "demo_cart_fallback",
       module_id: product.module_id,
       module_name: state.shopping_plan.modules.find((module) => module.module_id === product.module_id)?.module_name,
-      input_summary: JSON.stringify({ product_id: product.product_id, title: product.title }).slice(0, 180),
-      output_summary: error instanceof Error ? `真实加购失败，已回退到演示购物车：${error.message}` : "真实加购失败，已回退到演示购物车",
+      input_summary: summarizeLogValue({ product_id: product.product_id, title: product.title }, 180),
+      output_summary: error instanceof Error
+        ? summarizeLogText(`真实加购失败，已回退到演示购物车：${error.message}`, 220)
+        : "真实加购失败，已回退到演示购物车",
       status: "blocked",
       duration_ms: 0,
       mode: state.execution_mode
@@ -101,6 +163,7 @@ export async function runCartExecutor(state: SessionState, productId: string) {
       cartSource: "taobao"
     });
     state.selected_items = [...state.selected_items.filter((item) => item.product_id !== productId), selected];
+    refreshBundleAdoptionProgress(state);
   }
 
   return result;

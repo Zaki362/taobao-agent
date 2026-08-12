@@ -1,4 +1,9 @@
-import { ProductCandidate, SelectedItem, SessionState } from "@/lib/session/types";
+import { HostedExecutionTask, ModuleCandidateReview, ProductCandidate, SelectedItem, SessionState } from "@/lib/session/types";
+import { reviewModuleCandidates } from "@/lib/agent/candidate-reviewer";
+import { mergeAndRankModuleCandidates } from "@/lib/agent/candidate-ranker";
+import { refreshMarketFeedback } from "@/lib/agent/market-feedback";
+import { summarizeLogText } from "@/lib/mcp/logging";
+import { refreshBundleAdoptionProgress } from "@/lib/session/bundle-adoption";
 
 let hostedTaskSequence = 0;
 
@@ -13,20 +18,32 @@ function createTaskLog(
   outputSummary: string,
   moduleId?: string,
   moduleName?: string,
-  mode: SessionState["execution_mode"] = "codex_hosted"
+  mode: SessionState["execution_mode"] = "codex_hosted",
+  status: "success" | "error" | "blocked" = "blocked"
 ) {
+  const toolName = mode === "local_executor"
+    ? "local_executor"
+    : mode === "qoder_cli"
+      ? "qoder_async_executor"
+      : "codex_hosted_executor";
   state.tool_logs.unshift({
     id: `hosted-log-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
     timestamp: new Date().toISOString(),
-    tool_name: mode === "qoder_cli" ? "qoder_async_executor" : "codex_hosted_executor",
+    tool_name: toolName,
     module_id: moduleId,
     module_name: moduleName,
-    input_summary: title,
-    output_summary: outputSummary,
-    status: "blocked",
+    input_summary: summarizeLogText(title, 180),
+    output_summary: summarizeLogText(outputSummary, 220),
+    status,
     duration_ms: 0,
     mode
   });
+}
+
+function executionModeForTask(task: { executor?: HostedExecutionTask["executor"] }): SessionState["execution_mode"] {
+  if (task.executor === "local_executor") return "local_executor";
+  if (task.executor === "qoder") return "qoder_cli";
+  return "codex_hosted";
 }
 
 export function queueModuleSearchTask(
@@ -65,6 +82,7 @@ export function queueModuleSearchTask(
       module_id: input.module_id,
       module_name: input.module_name,
       search_intent: input.search_intent,
+      workflow_run_id: state.agent_runtime.workflow_run_id ?? "manual",
       recommendation_goal: ["稳妥推荐", "性价比推荐", "升级推荐"]
     }
   };
@@ -159,6 +177,7 @@ export function resolveHostedModuleSearchTask(
     task_id: string;
     status: "completed" | "failed";
     candidates?: ProductCandidate[];
+    review?: ModuleCandidateReview;
     result_summary?: string;
     error_message?: string;
   }
@@ -167,20 +186,46 @@ export function resolveHostedModuleSearchTask(
   if (!task || task.task_type !== "module_search") {
     throw new Error("hosted module search task not found");
   }
+  const resultSummary = input.result_summary ? summarizeLogText(input.result_summary, 220) : undefined;
+  const errorMessage = input.error_message ? summarizeLogText(input.error_message, 220) : undefined;
 
   task.status = input.status;
   task.updated_at = new Date().toISOString();
-  task.result_summary = input.result_summary;
-  task.error_message = input.error_message;
+  task.result_summary = resultSummary;
+  task.error_message = errorMessage;
 
   if (input.status === "completed") {
-    state.module_candidates[task.module_id ?? ""] = input.candidates ?? [];
+    const moduleId = task.module_id ?? "";
+    const incomingCandidates = (input.candidates ?? []).map((candidate) => ({
+      ...candidate,
+      module_id: moduleId || candidate.module_id
+    }));
+    const module = state.shopping_plan.modules.find((item) => item.module_id === task.module_id);
+    const candidates = module
+      ? mergeAndRankModuleCandidates(
+          state.scene_brief,
+          module,
+          state.module_candidates[moduleId] ?? [],
+          incomingCandidates,
+          {
+            rerank_rules: state.shopping_plan.agent_directives.rerank_rules,
+            budget_guardrails: state.shopping_plan.execution_strategy.budget_guardrails
+          }
+        ).candidates
+      : incomingCandidates;
+    state.module_candidates[moduleId] = candidates;
+    if (module) {
+      state.module_reviews[module.module_id] = input.review ?? reviewModuleCandidates(state, module, candidates);
+    }
+    refreshMarketFeedback(state);
     createTaskLog(
       state,
       task.title,
-      input.result_summary ?? `Codex 宿主已完成搜索，返回 ${(input.candidates ?? []).length} 个候选商品。`,
+      resultSummary ?? `Codex 宿主已完成搜索，返回 ${candidates.length} 个候选商品。`,
       task.module_id,
-      task.module_name
+      task.module_name,
+      executionModeForTask(task),
+      "success"
     );
     return task;
   }
@@ -188,9 +233,11 @@ export function resolveHostedModuleSearchTask(
   createTaskLog(
     state,
     task.title,
-    input.error_message ?? "Codex 宿主执行失败。",
+    errorMessage ?? "Codex 宿主执行失败。",
     task.module_id,
-    task.module_name
+    task.module_name,
+    executionModeForTask(task),
+    "error"
   );
   return task;
 }
@@ -202,17 +249,22 @@ export function resolveHostedAddToCartTask(
     status: "completed" | "failed";
     result_summary?: string;
     error_message?: string;
+    selected_spec?: string;
+    cart_source?: "taobao" | "demo";
+    cart_note?: string;
   }
 ) {
   const task = state.hosted_tasks.find((entry) => entry.task_id === input.task_id);
   if (!task || task.task_type !== "add_to_cart") {
     throw new Error("hosted add-to-cart task not found");
   }
+  const resultSummary = input.result_summary ? summarizeLogText(input.result_summary, 220) : undefined;
+  const errorMessage = input.error_message ? summarizeLogText(input.error_message, 220) : undefined;
 
   task.status = input.status;
   task.updated_at = new Date().toISOString();
-  task.result_summary = input.result_summary;
-  task.error_message = input.error_message;
+  task.result_summary = resultSummary;
+  task.error_message = errorMessage;
 
   if (input.status === "completed") {
     const product = Object.values(state.module_candidates)
@@ -228,17 +280,22 @@ export function resolveHostedAddToCartTask(
         detail_url: product.detail_url,
         shop_name: product.shop_name,
         module_name: task.module_name,
-        selected_spec: "默认可选规格（以淘宝购物车页为准）",
+        selected_spec: input.selected_spec || "默认可选规格（以淘宝购物车页为准）",
+        cart_source: input.cart_source ?? "taobao",
+        cart_note: input.cart_note,
         added_at: new Date().toISOString()
       };
       state.selected_items = [...state.selected_items.filter((item) => item.product_id !== product.product_id), selected];
     }
+    refreshBundleAdoptionProgress(state);
     createTaskLog(
       state,
       task.title,
-      input.result_summary ?? "Codex 宿主已完成加购。",
+      resultSummary ?? "Codex 宿主已完成加购。",
       task.module_id,
-      task.module_name
+      task.module_name,
+      executionModeForTask(task),
+      "success"
     );
     return task;
   }
@@ -246,9 +303,12 @@ export function resolveHostedAddToCartTask(
   createTaskLog(
     state,
     task.title,
-    input.error_message ?? "Codex 宿主加购失败。",
+    errorMessage ?? "Codex 宿主加购失败。",
     task.module_id,
-    task.module_name
+    task.module_name,
+    executionModeForTask(task),
+    "error"
   );
+  refreshBundleAdoptionProgress(state);
   return task;
 }

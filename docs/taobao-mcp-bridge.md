@@ -1,257 +1,84 @@
 # 淘宝 MCP 接入说明
 
-当前项目已经具备 `live-first` 的淘宝 MCP adapter。
+> 本页同时记录当前正式接法和旧 experimental bridge，避免把历史兼容路径误当成面试主链路。
 
-也就是说：
+## 当前正式链路
 
-1. 项目会优先尝试连接你的真实淘宝 MCP
-2. 如果不可达，才自动回退到 mock
-3. UI 会明确显示当前是 `已连接淘宝 MCP` 还是 `演示模式（Mock）`
+网页中的真实搜索与显式确认后的真实加购统一走：
 
-## 项目内已提供 bridge 骨架
+```text
+Browser -> Next.js Agent workflow -> durable Job Queue
+        -> local_executor -> 淘宝桌面版官方 Streamable HTTP MCP
+        -> idempotent result callback -> Session -> Browser
+```
 
-当前仓库已经新增一个本地 bridge：
+浏览器不直接调用淘宝，Next.js 请求也不等待淘宝长任务。用户在网页确认规划后，服务端持久化 `module_search` Job；本机 `worker:local` 用设备令牌领取任务，再直连淘宝桌面版官方 HTTP MCP。正式链路不经过 Qoder、Codex hosted、旧 bridge 或 mock adapter。
+
+默认 MCP 地址为：
+
+```text
+http://127.0.0.1:3654/mcp
+```
+
+`.env.local` 至少使用：
+
+```dotenv
+TAOBAO_EXECUTION_BACKEND=local_executor
+TAOBAO_NATIVE_MCP_URL=http://127.0.0.1:3654/mcp
+TAOBAO_SOURCE_APP=SceneCartAI
+ALLOW_DEMO_CART_FALLBACK=false
+```
+
+首次使用时：
+
+1. 启动并登录淘宝桌面版，开启官方本地 MCP / AI 应用授权。
+2. 启动 `npm run dev`，在 `/settings/executor` 注册本机设备并复制一次性令牌。
+3. 运行 `npm run executor:configure`，按提示保存页面地址和设备令牌。
+4. 运行 `npm run executor:doctor`。Doctor 只检查 MCP 工具列表、SceneCart 服务和设备令牌，不执行商品搜索。
+5. 保持 `npm run dev` 运行；默认启动器会在发现令牌后接入 `worker:local`。需要单独管理 Worker 时运行 `npm run worker:local`。
+6. 在网页中逐步填写需求、确认 Scene Brief 和购物规划，再点击开始搜索。第一条真实搜索才会验证淘宝当前登录态。
+
+正式 Worker 使用官方工具 `search_products` 获取候选；具备真实加购能力的设备还会使用 `get_product_skus` 和 `add_to_cart`。`get_current_tab` 只在真实调用已经明确报告登录失效后，用于低频检测登录是否恢复，不作为每次任务的预探针。
+
+## 淘宝掉登录时
+
+真实搜索报告登录失效后，系统不会自动回退到 mock，也不会伪造成功：
+
+1. Worker 停止领取新的淘宝任务，并把设备标记为等待重新登录。
+2. 当前工作流暂停；已经回填的真实候选仍保存在原 Session。
+3. 网页显示“搜索已暂停，已有结果不会丢失”，并提供两个显式选择：
+   - 在淘宝桌面版重新登录后，点击“重新登录后继续搜索”。Worker 检测到登录恢复后会恢复领取能力，用户这次确认才会重试失败模块；系统不会自动重放任务，也不会重跑已完成模块。
+   - 点击“用已有部分结果进入选购”，直接查看登录失效前保存的真实候选。未完成模块会继续标明缺口；恢复登录前不会创建新的真实搜索或加购任务。
+
+完成淘宝登录后不需要重启 Worker。若页面仍显示暂停，保持淘宝主界面和 SceneCart 打开，等待下一次恢复检查后再由用户确认继续。
+
+## 安全与结果边界
+
+- 搜索结果必须来自当前 `local_executor` Job 的官方 MCP 回填；模型 fallback 只可补需求理解和规划，不能伪造淘宝候选。
+- 加购是高风险动作，网页和服务端都要求用户逐件显式确认；SceneCart 不会自动下单、提交订单或支付。
+- `local_executor` 失败会保留为可重试失败。`ALLOW_DEMO_CART_FALLBACK` 不会把正式异步任务改写成演示成功。
+- `/api/mcp/status` 展示当前账号可用的本地执行器能力；`/hosted` 是运行与任务控制台，不代表使用 Codex hosted 执行。
+
+## 旧 experimental bridge（仅开发兼容）
+
+仓库仍保留：
 
 - `scripts/taobao-native-bridge.mjs`
-
-启动方式：
-
-```bash
-npm run bridge:taobao
-```
-
-默认监听：
-
-```bash
-http://127.0.0.1:8787
-```
-
-然后在 `.env.local` 中配置：
-
-```bash
-TAOBAO_MCP_BASE_URL=http://127.0.0.1:8787
-```
-
-再重启 `npm run dev`。
-
-这样当前产品就会优先尝试连接你本地 bridge，对接 `taobao-native`。
-
-## 你需要提供什么
-
-你已经说明“当前可以调用淘宝 MCP 工具”。
-
-要让这个 Next.js 产品也能调用它，最稳妥的方式不是把 Codex 内部工具直接塞进前端，而是加一个轻量 bridge，把你的淘宝 MCP 暴露成一个本地 HTTP 服务。
-
-项目当前默认约定这个 bridge 提供 2 个接口：
-
-### 1. 健康检查
-
-`GET /health`
-
-返回示例：
-
-```json
-{
-  "message": "taobao mcp ready",
-  "permissions_scope": [
-    "搜索商品",
-    "浏览商品详情",
-    "提取商品信息",
-    "加入购物车需显式确认"
-  ]
-}
-```
-
-### 2. 工具调用
-
-`POST /run`
-
-请求体：
-
-```json
-{
-  "tool": "search_taobao_products",
-  "input": {
-    "keyword": "新能源车 行车记录仪",
-    "module_id": "safety-essential"
-  }
-}
-```
-
-返回体：
-
-```json
-{
-  "output": {
-    "results": [
-      {
-        "product_id": "abc123",
-        "title": "4K 超清行车记录仪",
-        "price": 369,
-        "shop_name": "某某旗舰店",
-        "image_url": "https://...",
-        "detail_url": "https://...",
-        "shop_badges": ["旗舰店", "精选"],
-        "highlights": ["夜视增强", "停车监控"]
-      }
-    ]
-  }
-}
-```
-
-## 当前项目支持的工具名
-
-桥接层需要支持以下 4 个工具：
-
-- `search_taobao_products`
-- `open_product_detail`
-- `extract_product_info`
-- `add_to_cart`
-
-## 每个工具的输入输出约定
-
-### `search_taobao_products`
-
-输入：
-
-```json
-{
-  "keyword": "车载手机支架 快充",
-  "module_id": "practical-interior"
-}
-```
-
-输出：
-
-```json
-{
-  "results": [
-    {
-      "product_id": "p1",
-      "title": "重力联动手机支架 + 快充套装",
-      "price": 128,
-      "shop_name": "乐行车品",
-      "image_url": "https://...",
-      "detail_url": "https://...",
-      "shop_badges": ["精选"],
-      "highlights": ["稳固不晃", "新能源适用"]
-    }
-  ]
-}
-```
-
-### `open_product_detail`
-
-输入：
-
-```json
-{
-  "product_id": "p1"
-}
-```
-
-输出：
-
-```json
-{
-  "opened": true,
-  "product_id": "p1"
-}
-```
-
-### `extract_product_info`
-
-输入：
-
-```json
-{
-  "product_id": "p1",
-  "title": "重力联动手机支架 + 快充套装"
-}
-```
-
-输出：
-
-```json
-{
-  "product_id": "p1",
-  "title": "重力联动手机支架 + 快充套装",
-  "price": 128,
-  "shop_name": "乐行车品",
-  "image_url": "https://...",
-  "detail_url": "https://...",
-  "shop_badges": ["精选"],
-  "highlights": ["稳固不晃", "新能源适用"],
-  "risk_notes": ["需确认车型兼容性"]
-}
-```
-
-### `add_to_cart`
-
-输入：
-
-```json
-{
-  "product_id": "p1",
-  "quantity": 1,
-  "confirmed": true
-}
-```
-
-输出：
-
-```json
-{
-  "success": true,
-  "message": "已加入购物车",
-  "product_id": "p1"
-}
-```
-
-## 项目中的配置方式
-
-在 `.env.local` 里加入：
-
-```bash
-TAOBAO_MCP_BASE_URL=http://127.0.0.1:8787
-```
-
-如果你直接使用仓库内的 bridge，还可以按需加这几个变量：
-
-```bash
-TAOBAO_MCP_BRIDGE_PORT=8787
-TAOBAO_MCP_BRIDGE_HOST=127.0.0.1
-TAOBAO_SOURCE_APP=SceneCartAI
-TAOBAO_NATIVE_BIN=taobao-native
-```
-
-然后分别启动：
-
-```bash
-npm run bridge:taobao
-npm run dev
-```
-
-当前 live adapter 文件：
-
 - `lib/mcp/live.ts`
+- `npm run bridge:taobao`
+- `TAOBAO_MCP_BASE_URL=http://127.0.0.1:8787`
 
-当前状态检测接口：
+它对应旧的 `experimental_local` provider：Next.js 通过 bridge 的 `GET /health` 和 `POST /run` 适配 `search_taobao_products`、`open_product_detail`、`extract_product_info`、`add_to_cart`。这套协议只用于迁移、适配器开发或隔离调试，不是正式产品或面试主链路。
 
-- `GET /api/mcp/status`
+使用它必须同时满足：
 
-## 为什么不用直接在 Next.js 里调用 Codex 的淘宝工具
+```dotenv
+SCENECART_PRODUCT_MODE=development
+TAOBAO_EXECUTION_BACKEND=experimental_local
+SCENECART_ENABLE_MCP_DEBUG=true
+TAOBAO_MCP_BASE_URL=http://127.0.0.1:8787
+```
 
-原因很简单：
+正式产品模式会阻断 `experimental_local` 并安全收敛到 `local_executor`，readiness 同时报告误配置。旧 bridge 不提供“真实 MCP 不可达就自动回退 mock”的正式语义；若开发者另外启用 mock，必须在界面和讲解中明确披露，不能把结果说成实时淘宝搜索。
 
-- Codex 里的淘宝能力属于当前 agent 运行时工具
-- 它不是浏览器端可以直接 import 的 JS SDK
-- 也不是 Next.js server 默认能直接获得的 npm 包
-
-所以工程化接法应该是：
-
-1. 你的淘宝 MCP 继续由本地 agent / 桌面运行时调用
-2. 额外起一个本地 bridge
-3. 这个产品通过 `TAOBAO_MCP_BASE_URL` 调 bridge
-
-这样产品代码和真实工具执行就解耦了，也最适合后续接入不同用户的淘宝 MCP 实现。
+面试、真实设备验收和生产部署请始终使用 `TAOBAO_NATIVE_MCP_URL`，不要启动 `bridge:taobao`，也不要设置 `TAOBAO_EXECUTION_BACKEND=experimental_local`。

@@ -1,0 +1,132 @@
+{
+  "schema_version": 1,
+  "kind": "historical_taobao_snapshot",
+  "captured_at": "2026-08-08T14:33:55+08:00",
+  "captured_via": "Taobao Desktop taobao-native search_products through the SceneCart local executor",
+  "disclosure": "面试演示专用历史快照。价格、库存、规格与链接状态均未做实时校验，不代表当前淘宝结果。",
+  "safety_boundary": "演示执行器不会调用淘宝搜索、加购、下单或支付能力；确认加购只会写入 SceneCart 产品内演示清单。",
+  "source_snapshots": {
+    "safety-essential": ".data/local-executor/results/8fc86a9a-fb0a-41bc-b85f-eb1aac6b8cbf.json",
+    "cleaning-care": ".data/local-executor/results/2bec1c1c-671c-4f33-b7a3-390b02f94725.json",
+    "practical-interior": ".data/local-executor/results/ab68b9f0-4b33-4eac-9162-4a2f44b6f194.json",
+    "storage-organization": ".data/local-executor/results/7391ab0b-9fff-465f-b810-e8319cbc2a65.json",
+    "comfort-upgrade": ".data/local-executor/results/755acbeb-3e4a-443a-a117-55c21446f84d.json"
+  },
+  "modules": {
+    "safety-essential": [
+      {
+        "product_id": "749277654435",
+        "title": "纽曼汽车应急启动电源搭电宝充气泵一体机强启动电瓶专用打火神器",
+        "price": 117,
+        "shop_name": "纽曼汽车用品旗舰店",
+        "image_url": "https://img.alicdn.com/img/O1CN01XTh5n82NZ4HCRlw8O_!!4611686018427380200-0-item_pic.jpg_460x460q90.jpg_.webp"
+      },
+      {
+        "product_id": "738680579525",
+        "title": "汽车应急启动电源车载充气泵一体机电瓶搭电宝紧急强启动打火神器",
+        "price": 128,
+        "shop_name": "HELLOLEIBOO徕本方格专卖店",
+        "image_url": "https://g-search3.alicdn.com/img/bao/uploaded/i4/i2/3372630811/O1CN01fzRM0ni3ojH1chua_!!4611686018427380507-0-item_pic.jpg_460x460q90.jpg_.webp"
+      },
+      {
+        "product_id": "851223413849",
+        "title": "绿联汽车应急启动电源强启动器打火摩托车接电瓶专用充电器搭电宝",
+        "price": 244,
+        "shop_name": "绿联数码旗舰店",
+        "image_url": "https://g-search3.alicdn.com/img/bao/uploaded/i4/i3/713464357/O1CN01yuQUYw1i3YlcEexa1_!!4611686018427386405-0-item_pic.jpg_460x460q90.jpg_.webp"
+      }
+    ],
+    "cleaning-care": [
+      {
+        "product_id": "1058209193158",
+        "title": "汽车专用洗车拖把2026新款车载清洁工具车用软毛刷家用擦车神器",
+        "price": 101,
+        "shop_name": "KVS迅昊专卖店",
+        "image_url": "https://img.alicdn.com/img/O1CN01MbYFnF2D2sIh89Jfa_!!4611686018427381720-0-item_pic.jpg_580x580q90.jpg"
+      },
+      {
+        "product_id": "607098668392",
+        "title": "CICIDO夕多擦车毛巾洗车专用汽车内饰吸水不留水印抹布不掉毛",
+        "price": 23.86,
+        "shop_name": "CICIDO夕多旗舰店",
+        "image_url": "https://g-search1.alicdn.com/img/bao/uploaded/i4/i3/1644977734/O1CN01pSAE6d270EIeJyn3t_!!4611686018427387462-0-item_pic.jpg_580x580q90.jpg"
+      },
+      {
+        "product_id": "679355278936",
+        "title": "徕本洗车毛巾擦车布专用吸水汽车内饰车内麂皮抹布不掉毛双面加厚",
+        "price": 16.8,
+        "shop_name": "helloleiboo徕本旗舰店",
+        "image_url": "https://g-search3.alicdn.com/img/bao/uploaded/i4/i3/2200734520446/O1CN01NUbvDJ1FAJTazoEgF_!!0-item_pic.jpg_580x580q90.jpg"
+      }
+    ],
+    "practical-interior": [
+      {
+        "product_id": "862356165606",
+        "title": "thetree真空吸附磁吸车载手机支架2026新款吸盘车内导航手机架",
+        "price": 80,
+        "shop_name": "thetree旗舰店",
+        "image_url": "https://img.alicdn.com/img/O1CN01GpQgRX2EonEFO2FZz_!!4611686018427384472-0-item_pic.jpg_580x580q90.jpg"
+      },
+      {
+        "product_id": "966069280059",
+        "title": "车载手机合金屏幕支架2026年新能源汽车仪表导航特斯拉比亚迪专用",
+        "price": 58,
+        "shop_name": "LCARS车品旗舰店",
+        "image_url": "https://g-search3.alicdn.com/img/bao/uploaded/i4/i4/2216726836804/O1CN01lC0gy6208HvbfgC2n_!!4611686018427385412-0-item_pic.jpg_580x580q90.jpg"
+      },
+      {
+        "product_id": "1052793694245",
+        "title": "新能源2026年新款适用于磁吸车载三角手机支架高效稳固通用型大屏",
+        "price": 36.56,
+        "shop_name": "沃图旗舰店",
+        "image_url": "https://g-search3.alicdn.com/img/bao/uploaded/i4/i3/2222503397667/O1CN017fclTY26VXmLE1iOD_!!4611686018427382051-0-item_pic.jpg_580x580q90.jpg"
+      }
+    ],
+    "storage-organization": [
+      {
+        "product_id": "716549824114",
+        "title": "汽车后备箱收纳箱车载必备用品收纳盒储物箱车辆尾箱车内收纳神器",
+        "price": 48,
+        "shop_name": "玉翀汽车用品旗舰店",
+        "image_url": "https://img.alicdn.com/img/O1CN01n8wiO71CjB3KP1GB0_!!4611686018427386516-0-item_pic.jpg_580x580q90.jpg"
+      },
+      {
+        "product_id": "666840628848",
+        "title": "适用于奔驰后备箱储物盒ACE级GLB GLC GLE尾箱收纳置物盒车内用品",
+        "price": 58.8,
+        "shop_name": "HONGYL旗舰店",
+        "image_url": "https://g-search1.alicdn.com/img/bao/uploaded/i4/i4/2212063331994/O1CN01bDEQxw1QbIfdtcV0k_!!0-item_pic.jpg_580x580q90.jpg"
+      },
+      {
+        "product_id": "728640874682",
+        "title": "汽车后备箱收纳箱车上车载必备用品放置盒车辆尾箱储物收纳盒神器",
+        "price": 43.2,
+        "shop_name": "玉翀汽车用品旗舰店",
+        "image_url": "https://g-search3.alicdn.com/img/bao/uploaded/i4/i3/2096020116/O1CN01Q9dggG1CjB1b7OXTP_!!4611686018427386516-0-item_pic.jpg_580x580q90.jpg"
+      }
+    ],
+    "comfort-upgrade": [
+      {
+        "product_id": "1018299959506",
+        "title": "适用于26款小米SU7磁吸头枕护颈枕腰靠SU7/YU7官方同款云丝棉枕头",
+        "price": 36.1,
+        "shop_name": "锁爱旗舰店",
+        "image_url": "https://img.alicdn.com/img/O1CN01kuZGwC1tnmWbFjQXX_!!4611686018427386059-0-item_pic.jpg_580x580q90.jpg"
+      },
+      {
+        "product_id": "782650370792",
+        "title": "汽车腰靠垫靠背司机久坐座椅腰托主驾驶开车护腰神器车载靠垫腰枕",
+        "price": 29,
+        "shop_name": "尼拉旗舰店",
+        "image_url": "https://g-search1.alicdn.com/img/bao/uploaded/i4/i1/1714114190/O1CN01E1wrpP1gp4SlNCLMk_!!0-item_pic.jpg_580x580q90.jpg"
+      },
+      {
+        "product_id": "693669236978",
+        "title": "汽车腰靠车载靠垫靠背护腰神器腰托车用靠枕开车腰部支撑腰枕头枕",
+        "price": 29.8,
+        "shop_name": "尼拉旗舰店",
+        "image_url": "https://g-search2.alicdn.com/img/bao/uploaded/i4/i1/1714114190/O1CN0136RY0g1gp4JujlfR4_!!0-item_pic.jpg_580x580q90.jpg"
+      }
+    ]
+  }
+}

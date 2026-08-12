@@ -1,9 +1,14 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { NextResponse } from "next/server";
+import { apiOk } from "@/lib/api/responses";
+import { summarizeLogText } from "@/lib/mcp/logging";
 
 const STATUS_FILE = path.join(process.cwd(), ".data", "hosted-worker", "worker-status.json");
 const ONLINE_TTL_MS = 15_000;
+
+function optionalStatusText(value: unknown) {
+  return typeof value === "string" && value.trim() ? summarizeLogText(value, 220) : null;
+}
 
 export async function GET() {
   try {
@@ -12,7 +17,7 @@ export async function GET() {
     const updatedAt = typeof payload.updated_at === "string" ? Date.parse(payload.updated_at) : NaN;
     const online = Number.isFinite(updatedAt) ? Date.now() - updatedAt < ONLINE_TTL_MS : false;
 
-    return NextResponse.json({
+    return apiOk({
       online,
       updated_at: payload.updated_at ?? null,
       started_at: payload.started_at ?? null,
@@ -23,11 +28,11 @@ export async function GET() {
       api_base_url: payload.api_base_url ?? null,
       last_task_id: payload.last_task_id ?? null,
       last_task_type: payload.last_task_type ?? null,
-      last_result: payload.last_result ?? null,
-      last_error: payload.last_error ?? null
+      last_result: optionalStatusText(payload.last_result),
+      last_error: optionalStatusText(payload.last_error)
     });
   } catch {
-    return NextResponse.json({
+    return apiOk({
       online: false,
       updated_at: null,
       started_at: null,
