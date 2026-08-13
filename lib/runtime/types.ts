@@ -126,7 +126,7 @@ export interface RuntimeRepository {
     deviceId: string,
     status?: Extract<ExecutorDeviceStatus, "online" | "offline" | "mcp_unavailable" | "authentication_required">
   ): Promise<ExecutorDevice | null>;
-  listDevices(userId: string): Promise<ExecutorDevice[]>;
+  listDevices(userId?: string): Promise<ExecutorDevice[]>;
   updateDeviceCapabilities(
     deviceId: string,
     userId: string,

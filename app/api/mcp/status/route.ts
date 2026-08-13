@@ -9,9 +9,12 @@ export async function GET() {
   try {
     if (getExecutionBackend() === "local_executor") {
       const identity = await getRequestIdentity();
-      const devices = identity.userId
-        ? await getRuntimeRepository().listDevices(identity.userId)
-        : [];
+      // Anonymous development sessions are intentionally claimable by this
+      // machine's registered executor. Their status view must use the same
+      // visibility rule; otherwise real jobs run while the page reports that
+      // no local executor is connected. Formal mode never reaches this branch
+      // anonymously because getRequestIdentity() requires authentication.
+      const devices = await getRuntimeRepository().listDevices(identity.userId);
       const executorDevices = summarizeExecutorDevices(devices);
       const searchAvailable = executorDevices.capabilities.module_search.available;
       const cartAvailable = executorDevices.capabilities.add_to_cart.available;

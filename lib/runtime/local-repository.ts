@@ -368,7 +368,7 @@ export const localRuntimeRepository: RuntimeRepository = {
 
   async listDevices(userId) {
     return [...runtimeState().devices.values()]
-      .filter((device) => device.user_id === userId)
+      .filter((device) => userId === undefined || device.user_id === userId)
       .map(copy);
   },
 

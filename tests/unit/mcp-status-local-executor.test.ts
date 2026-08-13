@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { executorSummary } = vi.hoisted(() => ({
+const { executorSummary, requestIdentity, listDevices } = vi.hoisted(() => ({
+  requestIdentity: { userId: "user-local-status-test" as string | undefined },
+  listDevices: vi.fn().mockResolvedValue([]),
   executorSummary: {
     registered: 1,
     online: 0,
@@ -20,11 +22,11 @@ vi.mock("@/lib/mcp/client", () => ({
 }));
 
 vi.mock("@/lib/auth/request", () => ({
-  getRequestIdentity: async () => ({ userId: "user-local-status-test" })
+  getRequestIdentity: async () => requestIdentity
 }));
 
 vi.mock("@/lib/runtime", () => ({
-  getRuntimeRepository: () => ({ listDevices: vi.fn().mockResolvedValue([]) })
+  getRuntimeRepository: () => ({ listDevices })
 }));
 
 vi.mock("@/lib/runtime/product-mode", () => ({
@@ -39,6 +41,8 @@ vi.mock("@/lib/runtime/executor-status", () => ({
 import { GET } from "@/app/api/mcp/status/route";
 
 beforeEach(() => {
+  requestIdentity.userId = "user-local-status-test";
+  listDevices.mockClear();
   executorSummary.online = 0;
   executorSummary.mcp_unavailable = 1;
   executorSummary.authentication_required = 0;
@@ -49,6 +53,21 @@ beforeEach(() => {
 });
 
 describe("GET /api/mcp/status with the local executor", () => {
+  it("uses all local devices for an intentionally anonymous development session", async () => {
+    requestIdentity.userId = undefined;
+
+    const response = await GET();
+
+    expect(response.status).toBe(200);
+    expect(listDevices).toHaveBeenCalledWith(undefined);
+  });
+
+  it("keeps authenticated device status scoped to the signed-in account", async () => {
+    await GET();
+
+    expect(listDevices).toHaveBeenCalledWith("user-local-status-test");
+  });
+
   it("keeps search unavailable while a responsive Worker reconnects to Taobao MCP", async () => {
     const response = await GET();
     const payload = await response.json();

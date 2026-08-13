@@ -344,10 +344,12 @@ export const postgresRuntimeRepository: RuntimeRepository = {
   },
 
   async listDevices(userId) {
-    const result = await query(
-      "SELECT * FROM executor_devices WHERE user_id = $1 ORDER BY created_at DESC",
-      [userId]
-    );
+    const result = userId === undefined
+      ? await query("SELECT * FROM executor_devices ORDER BY created_at DESC")
+      : await query(
+        "SELECT * FROM executor_devices WHERE user_id = $1 ORDER BY created_at DESC",
+        [userId]
+      );
     return result.rows.map(normalizeDevice);
   },
 
