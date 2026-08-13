@@ -31,6 +31,7 @@ SceneCart AI 是一个正在按正式产品架构推进的“场景化购物 Age
 - 快捷调整影响说明：用户点击快捷调整后，系统会生成 `last_refinement`，说明哪些模块需要重搜、哪些候选可复用、哪些模块被移除以及原因
 - 生产运行时：支持 PostgreSQL 持久化、邮箱登录、HttpOnly 会话、按用户隔离的购物 Session、持久 Job Queue 和执行事件
 - 本地执行器：商品搜索与显式确认后的真实加购由独立 Worker 直连淘宝桌面版官方 HTTP MCP，不再经过 Qoder、CLI 子进程或 Next.js 长请求；设备通过一次性令牌注册，使用心跳、任务租约、自动恢复、结果账本和幂等回填完成本机真实执行
+- 本地链路自愈：`npm run dev` 会监督唯一的正式 Worker，异常退出时按上限 30 秒的指数退避自动重启；淘宝 MCP 暂不可达或工具层未加载时，Worker 保持 `mcp_unavailable` 心跳、停止领取任务并持续探测，网页会显示“正在等待淘宝桌面版工具恢复”。连接恢复后，未领取的搜索 Job 从持久队列自动继续，不需要重复点击开始搜索
 - 实时回填：搜索、重试、Agent 状态转换和加购事件通过 SSE 推送到当前会话，并以短轮询作为断线恢复兜底；页面不占用淘宝执行长请求
 - 可恢复事件流：SSE 使用事件游标与 `Last-Event-ID` 续传，浏览器短暂断线后不会重复丢失执行进度
 - 运行时可观测性：执行台展示队列积压、在线设备、失败/取消任务、最久等待时间与模型 guardrail fallback；发布就绪页会进一步区分 DeepSeek“已配置”与“本进程最近真实调用成功”。每个购物 Session 还会持久化隐私安全的 `llm_calls`，只记录任务、模型、真实/降级模式、耗时、原因和时间，不保存 Prompt、用户原文或模型原始输出；结构化模型提案若在后续业务 Guardrail 被拒绝，对应凭证也会被精确改写为 fallback，避免把“模型有返回”误报成“模型结果已采用”
@@ -65,7 +66,7 @@ SceneCart AI 是一个正在按正式产品架构推进的“场景化购物 Age
 
 面试主路径是在 SceneCart 网页上逐步输入需求、确认 Scene Brief、确认规划并开始搜索。网页把任务写入持久 Job Queue，本机 `local_executor` 领取任务后直连淘宝桌面版官方 HTTP MCP，再把真实候选回填到同一个 Session：`Browser -> Agent workflow -> durable Job Queue -> local executor -> 淘宝桌面版官方 HTTP MCP`。面试前先运行 `npm run executor:doctor`，再用 `npm run dev` 启动网页和正式 Worker；不要切换到 Qoder、Codex hosted、experimental bridge 或 mock provider。
 
-真实调用发现淘宝掉登录时，网站会显示“搜索已暂停，已有结果不会丢失”。此时可在淘宝桌面版重新登录，等 Worker 检测恢复后点击“重新登录后继续搜索”；这次用户确认才会重试失败模块，已完成模块不会重跑。也可点击“用已有部分结果进入选购”，直接查看登录失效前已经保存的真实候选，未完成模块继续明确标注；恢复登录前不会创建新的搜索或加购任务。
+淘宝 MCP 暂不可达和淘宝掉登录是两种不同状态。前者会显示工具恢复提示，Worker 不领取新任务并自动退避探测；连接恢复后，尚未执行的搜索队列会自动继续。真实调用明确发现淘宝掉登录时，网站则显示“搜索已暂停，已有结果不会丢失”：此时必须先在淘宝桌面版重新登录，再由用户点击“重新登录后继续搜索”才会重试失败模块，登录恢复本身不会自动重放；也可点击“用已有部分结果进入选购”。已完成模块不会重跑，真实加购也不会因 MCP 或登录恢复而自动重放。
 
 ### 次级可选：隔离演示模式
 
@@ -96,7 +97,7 @@ npm run dev
 
 启动器会同时检查 IPv4 loopback 和 Next.js 的 IPv6 默认监听地址。若 3000 被其他应用占用，会自动选择下一个真正可用的端口，并在终端打印准确的首页与执行器设置地址；不要继续使用旧的固定书签。需要固定端口时设置 `SCENECART_DEV_PORT`，或运行 `npm run dev -- --port 3001`。
 
-`npm run dev` 现在是一命令开发入口：它先启动网页；如果 `.env.local` 已配置 `SCENECART_DEVICE_TOKEN`，会在网页健康后自动启动正式 `worker:local`。首次使用时可以保持该命令运行，完成设备注册和 `executor:configure` 后，启动器会热发现新令牌并自动接入 Worker，不需要重启网页或再开第二个终端。`npm run dev:web` 只启动 Next.js，供 E2E、纯 UI 调试或需要手动管理 Worker 时使用；`dev:auto` 保留为 `dev` 的兼容别名。若 `3000` 已被其他应用占用，启动器会选择下一个可用端口并在终端打印准确地址；配置脚本和 Doctor 会自动识别该 SceneCart 实例。
+`npm run dev` 现在是一命令开发入口：它先启动网页；如果 `.env.local` 已配置 `SCENECART_DEVICE_TOKEN`，会在网页健康后自动启动正式 `worker:local`。首次使用时可以保持该命令运行，完成设备注册和 `executor:configure` 后，启动器会热发现新令牌并自动接入 Worker，不需要重启网页或再开第二个终端。Worker 异常退出时，启动器会按 1 秒起、最多 30 秒的指数退避自动重启；同一时间只保留一个 Worker，令牌更新时会安全切换。淘宝 MCP 尚未就绪不会让搜索被错误领取：Worker 会保持运行并持续探测，网页显示恢复状态，MCP 恢复后自动消费原有搜索队列。`npm run dev:web` 只启动 Next.js，供 E2E、纯 UI 调试或需要手动管理 Worker 时使用；`dev:auto` 保留为 `dev` 的兼容别名。若 `3000` 已被其他应用占用，启动器会选择下一个可用端口并在终端打印准确地址；配置脚本和 Doctor 会自动识别该 SceneCart 实例。
 
 首次连接本地执行器时，在 `/settings/executor` 注册设备并复制一次性令牌。设备始终需要绑定 SceneCart 账号；即使主购物流程处于本地匿名开发模式，设置页也会先引导登录/注册，并在成功后自动返回。然后在项目目录运行：
 
@@ -149,6 +150,9 @@ EXECUTOR_TAOBAO_SEARCH_TIMEOUT_MS=60000
 EXECUTOR_TAOBAO_CART_TIMEOUT_MS=60000
 EXECUTOR_TAOBAO_AUTH_RECOVERY_POLL_MS=10000
 EXECUTOR_TAOBAO_AUTH_PROBE_TIMEOUT_MS=10000
+EXECUTOR_TAOBAO_READINESS_PROBE_TIMEOUT_MS=10000
+EXECUTOR_TAOBAO_READINESS_BACKOFF_BASE_MS=2000
+EXECUTOR_TAOBAO_READINESS_BACKOFF_MAX_MS=30000
 SCENECART_ENABLE_MCP_DEBUG=false
 RUNTIME_STORE=postgres
 DATABASE_URL=postgresql://...
@@ -189,6 +193,8 @@ SCENECART_CRON_SECRET=
 - `EXECUTOR_TAOBAO_SEARCH_TIMEOUT_MS`：单次本地淘宝搜索上限，默认 60000ms，最低 15000ms。
 - `EXECUTOR_TAOBAO_CART_TIMEOUT_MS`：单次真实加购上限，默认 60000ms。执行器不会在搜索或加购前后用页面导航工具预探测登录态，避免探针本身改变淘宝页面。
 - `EXECUTOR_TAOBAO_AUTH_RECOVERY_POLL_MS`：只有真实调用已报告登录失败后，Worker 才会按此间隔检查淘宝登录是否恢复，默认 10000ms、最低 5000ms。
+- `EXECUTOR_TAOBAO_READINESS_PROBE_TIMEOUT_MS`：每次无副作用 `tools/list` 就绪探测的超时，默认 10000ms、最低 3000ms。
+- `EXECUTOR_TAOBAO_READINESS_BACKOFF_BASE_MS` / `EXECUTOR_TAOBAO_READINESS_BACKOFF_MAX_MS`：MCP 不可用时的指数退避起点与上限，默认 2000ms / 30000ms；探测成功后重置。
 - `EXECUTOR_TAOBAO_AUTH_PROBE_TIMEOUT_MS`：鉴权恢复检查的单次超时，默认 10000ms、最低 5000ms。检测恢复后只恢复领取能力，不会自动重放失败任务。
 - `TAOBAO_MCP_BASE_URL`：experimental local bridge 使用的淘宝 MCP bridge 地址。
 
@@ -314,6 +320,8 @@ npm run build
 npm run start
 ```
 
+当前执行器协议为 **v3**。部署 v3 服务端前必须对目标数据库执行包含 `db/migrations/007_executor_mcp_availability_state.sql` 的 `npm run db:migrate`，再运行 `npm run db:check`；服务端与本机项目随后都要更新到同一版本并重启 Worker。migration 007 为设备状态增加 `mcp_unavailable`，缺失它会导致新 Worker 的就绪心跳无法写入 PostgreSQL。
+
 实例启动并收到恢复 Worker 心跳后，用一条命令完成静态配置、数据库、health 与只读 readiness 验证：
 
 ```bash
@@ -339,7 +347,7 @@ npm run executor:doctor
 npm run worker:local
 ```
 
-推荐先用 `executor:configure` 在交互式终端中粘贴设置页签发的令牌；它不会回显令牌或覆盖 DeepSeek 等无关环境变量。`worker:local` 会先校验淘宝桌面版官方 MCP、服务端健康、设备令牌及其能力，再发送鉴权心跳并开始领取任务。Doctor 会显示令牌当前拥有的商品搜索 / 真实加购能力，避免“进程在线但任务无法匹配”的误导状态。
+推荐先用 `executor:configure` 在交互式终端中粘贴设置页签发的令牌；它不会回显令牌或覆盖 DeepSeek 等无关环境变量。`worker:local` 会先校验服务端健康、设备令牌及其能力，再以 `mcp_unavailable` 状态等待淘宝桌面版官方 MCP 通过无副作用的工具检查；只有就绪后才切换在线并领取任务。Doctor 会显示令牌当前拥有的商品搜索 / 真实加购能力，避免“进程在线但任务无法匹配”的误导状态。
 
 ## 当前实现边界
 

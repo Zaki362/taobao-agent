@@ -293,7 +293,9 @@ test("authenticated new-car workflow reaches recommendations through the durable
       return state.agent_runtime.workflow_status;
     }, { timeout: 30_000 }).toBe("waiting_for_tools");
     page.off("request", trackWorkflowRequest);
-    expect(workflowRequestCounts).toEqual({ mcpStatus: 1, agentRun: 1, legacyModuleSearch: 0 });
+    expect(workflowRequestCounts.mcpStatus).toBeGreaterThanOrEqual(1);
+    expect(workflowRequestCounts.agentRun).toBe(1);
+    expect(workflowRequestCounts.legacyModuleSearch).toBe(0);
     const waitingStateResponse = await page.request.get(`/api/session/state?session_id=${persistedSessionId}`);
     const waitingState = await waitingStateResponse.json() as {
       hosted_tasks: Array<{ task_type: string; status: string }>;
@@ -301,6 +303,32 @@ test("authenticated new-car workflow reaches recommendations through the durable
     expect(waitingState.hosted_tasks.filter((task) =>
       task.task_type === "module_search" && (task.status === "pending" || task.status === "running")
     )).toHaveLength(1);
+
+    const mcpUnavailableHeartbeat = await page.request.post("/api/executor/heartbeat", {
+      headers: executorHeaders(deviceToken),
+      data: { executor_state: "mcp_unavailable" }
+    });
+    expect(mcpUnavailableHeartbeat.ok()).toBeTruthy();
+    await expect(page.getByText("淘宝工具暂不可用，系统正在自动重连"))
+      .toBeVisible({ timeout: 12_000 });
+    const queuedDuringMcpOutage = await page.request.get(
+      `/api/runtime/jobs?session_id=${persistedSessionId}`
+    );
+    const queuedJobs = await queuedDuringMcpOutage.json() as {
+      jobs: Array<{ job_type: string; status: string; attempts: number }>;
+    };
+    expect(queuedJobs.jobs.find((job) => job.job_type === "module_search")).toMatchObject({
+      status: "pending",
+      attempts: 0
+    });
+
+    const mcpRecoveredHeartbeat = await page.request.post("/api/executor/heartbeat", {
+      headers: executorHeaders(deviceToken),
+      data: { executor_state: "online" }
+    });
+    expect(mcpRecoveredHeartbeat.ok()).toBeTruthy();
+    await expect(page.getByText("淘宝工具暂不可用，系统正在自动重连"))
+      .toBeHidden({ timeout: 12_000 });
 
     page.once("dialog", (dialog) => dialog.accept());
     await page.getByRole("button", { name: "完成当前项后暂停" }).click();
@@ -544,7 +572,7 @@ test("authenticated new-car workflow reaches recommendations through the durable
     await expect(page.getByText("1 台设备在线")).toBeVisible();
     await expect(page.getByText("仍有正式配置未完成")).toBeVisible();
     await expect(page.getByText("开发预览模式").first()).toBeVisible();
-    await expect(page.getByText("允许演示加购回退")).toBeVisible();
+    await expect(page.getByText("仅接受真实加购结果")).toBeVisible();
 
     await page.goto("/hosted");
     await expect(page.getByText("Agent Runtime 2.0")).toBeVisible();

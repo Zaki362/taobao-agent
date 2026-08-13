@@ -313,7 +313,7 @@ describe("local executor evidence boundary", () => {
     );
     const verifyStart = source.indexOf("async function verifyStartup()");
     const callbackFlush = source.indexOf("await flushPendingAuthenticationFailure()", verifyStart);
-    const taobaoToolDiscovery = source.indexOf("await taobaoClient.listTools()", verifyStart);
+    const taobaoToolDiscovery = source.indexOf("await taobaoClient.listTools(", verifyStart);
     expect(verifyStart).toBeGreaterThanOrEqual(0);
     expect(callbackFlush).toBeGreaterThan(verifyStart);
     expect(taobaoToolDiscovery).toBeGreaterThan(callbackFlush);

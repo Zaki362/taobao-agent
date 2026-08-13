@@ -6,8 +6,71 @@ import { pathToFileURL } from "node:url";
 import nextEnv from "@next/env";
 import { resolveDevServer } from "./dev-server.mjs";
 import { readEnvValue, validateExecutorDeviceToken } from "./executor-config-utils.mjs";
+import { createWorkerSupervisor } from "./dev-auto-supervisor.mjs";
+
+export {
+  WORKER_RESTART_BASE_MS,
+  WORKER_RESTART_MAX_MS,
+  WORKER_STABLE_WINDOW_MS,
+  workerRestartDelay
+} from "./dev-auto-supervisor.mjs";
 
 const TOKEN_DISCOVERY_INTERVAL_MS = 1_500;
+const NODE_22_REEXEC_FLAG = "SCENECART_NODE22_REEXEC";
+const NODE_22_CANDIDATES = [
+  "/opt/homebrew/opt/node@22/bin/node",
+  "/usr/local/opt/node@22/bin/node"
+];
+
+export function resolvePreferredNode22(options = {}) {
+  const nodeMajor = options.nodeMajor ?? Number(process.versions.node.split(".")[0]);
+  if (nodeMajor === 22) return "";
+
+  const environment = options.environment ?? process.env;
+  const exists = options.exists ?? fs.existsSync;
+  const configured = environment.SCENECART_NODE22_PATH?.trim();
+  const candidates = configured ? [configured, ...NODE_22_CANDIDATES] : NODE_22_CANDIDATES;
+  return candidates.find((candidate) => exists(candidate)) ?? "";
+}
+
+async function relaunchWithNode22IfAvailable() {
+  if (process.env[NODE_22_REEXEC_FLAG] === "true") return false;
+  const node22 = resolvePreferredNode22();
+  if (!node22) {
+    const currentMajor = Number(process.versions.node.split(".")[0]);
+    if (currentMajor !== 22) {
+      console.warn(`[dev] 当前 Node ${process.versions.node}，建议安装 Node 22（项目要求 22.x）。`);
+    }
+    return false;
+  }
+
+  const nodeBin = path.dirname(node22);
+  const child = spawn(node22, [process.argv[1], ...process.argv.slice(2)], {
+    stdio: "inherit",
+    env: {
+      ...process.env,
+      [NODE_22_REEXEC_FLAG]: "true",
+      PATH: `${nodeBin}${path.delimiter}${process.env.PATH ?? ""}`
+    }
+  });
+  const forwardSignal = (signal) => {
+    if (!child.killed) child.kill(signal);
+  };
+  const forwardSigint = () => forwardSignal("SIGINT");
+  const forwardSigterm = () => forwardSignal("SIGTERM");
+  process.once("SIGINT", forwardSigint);
+  process.once("SIGTERM", forwardSigterm);
+  await new Promise((resolve, reject) => {
+    child.once("error", reject);
+    child.once("exit", (code, signal) => {
+      process.exitCode = typeof code === "number" ? code : signal ? 1 : 0;
+      resolve();
+    });
+  });
+  process.removeListener("SIGINT", forwardSigint);
+  process.removeListener("SIGTERM", forwardSigterm);
+  return true;
+}
 
 function readLocalEnv(root = process.cwd()) {
   try {
@@ -41,9 +104,6 @@ export async function startDevelopmentStack(args = process.argv.slice(2)) {
   const processes = new Set();
   let stopping = false;
   let discoveryTimer;
-  let workerProcess = null;
-  let workerStarting = false;
-  let lastAttemptedToken = "";
   let lastConfigError = "";
 
   function spawnCommand(command, commandArgs, name) {
@@ -65,6 +125,7 @@ export async function startDevelopmentStack(args = process.argv.slice(2)) {
     if (stopping) return;
     stopping = true;
     if (discoveryTimer) clearInterval(discoveryTimer);
+    workerSupervisor.shutdown();
     for (const child of processes) {
       if (!child.killed) child.kill("SIGTERM");
     }
@@ -91,14 +152,14 @@ export async function startDevelopmentStack(args = process.argv.slice(2)) {
   }
 
   async function discoverAndStartWorker() {
-    if (stopping || workerStarting || workerProcess) return;
+    if (stopping) return;
     const discovered = resolveExecutorEnvironment(
       readLocalEnv(),
       explicitEnvironment,
       apiBaseUrl
     );
     const token = discovered.SCENECART_DEVICE_TOKEN.trim();
-    if (!token || token === lastAttemptedToken) return;
+    if (!token) return;
 
     try {
       validateExecutorDeviceToken(token);
@@ -112,26 +173,39 @@ export async function startDevelopmentStack(args = process.argv.slice(2)) {
       return;
     }
 
-    workerStarting = true;
-    lastAttemptedToken = token;
-    Object.assign(runtimeEnv, discovered);
-    try {
+    workerSupervisor.reconcile({
+      token,
+      env: { ...runtimeEnv, ...discovered }
+    });
+  }
+
+  const workerSupervisor = createWorkerSupervisor({
+    async spawnWorker(config) {
       if (!(await waitForApi())) {
-        console.error(`[dev] ${apiBaseUrl} 未在限定时间内就绪，本地执行器未启动。`);
-        return;
+        throw new Error(`${apiBaseUrl} 未在限定时间内就绪`);
       }
       console.log("[dev] 已检测到设备令牌，正在启动淘宝桌面版 HTTP MCP 执行器...");
-      workerProcess = spawnCommand("npm", ["run", "worker:local"], "local-executor");
-      workerProcess.once("exit", (code) => {
-        workerProcess = null;
-        if (!stopping && code && code !== 0) {
-          console.error("[dev] 本地执行器启动失败。请运行 npm run executor:doctor；修复后可单独运行 npm run worker:local，或重新注册设备令牌。");
-        }
+      return spawn("npm", ["run", "worker:local"], {
+        stdio: "inherit",
+        env: config.env
       });
-    } finally {
-      workerStarting = false;
+    },
+    onChildSpawn(child) {
+      processes.add(child);
+    },
+    onChildExit(child) {
+      processes.delete(child);
+    },
+    onRestartScheduled({ attempt, delay }) {
+      console.error(`[dev] 本地执行器暂未就绪，${Math.ceil(delay / 1000)} 秒后自动重试（第 ${attempt} 次）。`);
+    },
+    onWorkerExit({ code }) {
+      if (code && code !== 0) console.error(`[local-executor] exited with code ${code}`);
+    },
+    onSpawnError(error) {
+      console.error(`[dev] 执行器启动失败：${error instanceof Error ? error.message : String(error)}`);
     }
-  }
+  });
 
   console.log("[dev] 正在启动 SceneCart AI 网页与本地执行器管理器...");
   console.log(`[dev] 页面地址：${apiBaseUrl}`);
@@ -159,8 +233,10 @@ export async function startDevelopmentStack(args = process.argv.slice(2)) {
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  startDevelopmentStack().catch((error) => {
-    console.error(`[dev] ${error instanceof Error ? error.message : String(error)}`);
-    process.exitCode = 1;
-  });
+  relaunchWithNode22IfAvailable()
+    .then((relaunched) => relaunched ? undefined : startDevelopmentStack())
+    .catch((error) => {
+      console.error(`[dev] ${error instanceof Error ? error.message : String(error)}`);
+      process.exitCode = 1;
+    });
 }

@@ -269,8 +269,10 @@ export async function inspectRuntimeReadiness(userId?: string) {
         ? `${executorCapabilities.online} 台本地执行器在线`
         : executorCapabilities.authentication_required > 0
           ? `${executorCapabilities.authentication_required} 台本地执行器正在等待淘宝重新登录`
+          : executorCapabilities.mcp_unavailable > 0
+            ? `${executorCapabilities.mcp_unavailable} 台本地执行器正在等待淘宝桌面版工具恢复`
           : "当前账号没有在线执行器",
-      "在淘宝与 Qoder 所在电脑运行 npm run executor:doctor 和 npm run worker:local"
+      "保持淘宝桌面版主界面打开；npm run dev 会自动重连，也可运行 npm run executor:doctor 定位原因"
     ));
     checks.push(check(
       "executor_search_capability",

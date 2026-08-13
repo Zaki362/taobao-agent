@@ -10,12 +10,15 @@ export type MpcStatus = {
   configured_mode?: "codex_hosted" | "experimental_local" | "qoder_cli" | "local_executor";
   product_mode?: "development" | "production";
   demo_cart_fallback?: boolean;
+  search_available: boolean;
+  cart_available: boolean;
   available: boolean;
   message: string;
   permissions_scope: string[];
   executor_devices?: {
     online: number;
     registered: number;
+    mcp_unavailable: number;
     authentication_required: number;
     capabilities: {
       module_search: { registered: number; online: number; available: boolean };

@@ -23,6 +23,15 @@ export async function POST(request: NextRequest) {
         protocol_version: EXECUTOR_PROTOCOL_VERSION
       });
     }
+    if (device.status === "mcp_unavailable") {
+      await repository.heartbeatDevice(device.id, "mcp_unavailable");
+      return apiOk({
+        job: null,
+        recovery: { recovered: false, reason: "mcp_unavailable" },
+        executor_state: "mcp_unavailable",
+        protocol_version: EXECUTOR_PROTOCOL_VERSION
+      });
+    }
     const activeDevice = await repository.heartbeatDevice(device.id, "online");
     if (!activeDevice) throw new ApiRouteError("executor device unavailable", 401, "invalid_executor_token");
     let job = await repository.claimJob(activeDevice, DEFAULT_JOB_LEASE_MS);

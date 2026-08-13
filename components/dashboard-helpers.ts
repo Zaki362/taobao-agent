@@ -131,11 +131,15 @@ export function isTaobaoCartAuthenticationPause(
   status: MpcStatus | null,
   productId?: string
 ) {
+  const cartExecutorAvailable = status?.cart_available
+    ?? status?.executor_devices?.capabilities.add_to_cart.available
+    ?? false;
+  if (cartExecutorAvailable) return false;
+
   const authenticationRequired = (status?.executor_devices?.authentication_required ?? 0) > 0;
   if (authenticationRequired) return true;
 
-  const cartExecutorAvailable = status?.executor_devices?.capabilities.add_to_cart.available === true;
-  return !cartExecutorAvailable && Boolean(findTaobaoAuthenticationFailedCartTask(session, productId));
+  return Boolean(findTaobaoAuthenticationFailedCartTask(session, productId));
 }
 
 export function findCurrentTaobaoMcpEvidence(session: SessionState, moduleId: string) {

@@ -158,7 +158,7 @@ test("Taobao login loss pauses the page and resumes the same durable job atomica
   }, { rawInput, sessionId, pausedState });
   await page.goto("/?resume=1");
 
-  await expect(page.getByText("搜索已暂停，已有结果不会丢失", { exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "淘宝登录已失效，真实搜索已安全暂停" })).toBeVisible();
   await expect(page.getByRole("button", { name: "重新登录后继续搜索" })).toBeVisible();
   await expect(page.getByRole("button", { name: "用已有部分结果进入选购" })).toBeVisible();
 

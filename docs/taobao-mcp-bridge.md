@@ -35,10 +35,16 @@ ALLOW_DEMO_CART_FALLBACK=false
 2. 启动 `npm run dev`，在 `/settings/executor` 注册本机设备并复制一次性令牌。
 3. 运行 `npm run executor:configure`，按提示保存页面地址和设备令牌。
 4. 运行 `npm run executor:doctor`。Doctor 只检查 MCP 工具列表、SceneCart 服务和设备令牌，不执行商品搜索。
-5. 保持 `npm run dev` 运行；默认启动器会在发现令牌后接入 `worker:local`。需要单独管理 Worker 时运行 `npm run worker:local`。
+5. 保持 `npm run dev` 运行；默认启动器会在发现令牌后接入并监督唯一的 `worker:local`，异常退出时指数退避重启。需要单独管理 Worker 时运行 `npm run worker:local`。
 6. 在网页中逐步填写需求、确认 Scene Brief 和购物规划，再点击开始搜索。第一条真实搜索才会验证淘宝当前登录态。
 
 正式 Worker 使用官方工具 `search_products` 获取候选；具备真实加购能力的设备还会使用 `get_product_skus` 和 `add_to_cart`。`get_current_tab` 只在真实调用已经明确报告登录失效后，用于低频检测登录是否恢复，不作为每次任务的预探针。
+
+## MCP 暂不可用时
+
+淘宝桌面版尚未加载工具层、MCP 端口暂不可达或必需工具缺失时，Worker 会保持 `mcp_unavailable` 心跳并按上限 30 秒的指数退避重复无副作用的 `tools/list` 检查。该状态下服务端不会向此设备分配 Job，网页显示“等待淘宝桌面版工具恢复”；未领取搜索仍留在持久队列，不增加尝试次数。工具恢复后 Worker 自动切回 `online`，未完成搜索队列继续执行，不需要用户重复点击开始，也不会回退 mock。
+
+这条自动恢复只适用于“工具尚不可用”。如果一次真实调用已经明确返回登录失效，必须进入下面的 `authentication_required` 分支；如果 MCP 在真实加购期间断开，恢复后也不会自动重放加购。
 
 ## 淘宝掉登录时
 
@@ -56,8 +62,13 @@ ALLOW_DEMO_CART_FALLBACK=false
 
 - 搜索结果必须来自当前 `local_executor` Job 的官方 MCP 回填；模型 fallback 只可补需求理解和规划，不能伪造淘宝候选。
 - 加购是高风险动作，网页和服务端都要求用户逐件显式确认；SceneCart 不会自动下单、提交订单或支付。
+- 真实加购不会因 Worker 重启、MCP 恢复或登录恢复而自动重放；回填失败时只重放本地结果账本，不重复执行淘宝动作。
 - `local_executor` 失败会保留为可重试失败。`ALLOW_DEMO_CART_FALLBACK` 不会把正式异步任务改写成演示成功。
 - `/api/mcp/status` 展示当前账号可用的本地执行器能力；`/hosted` 是运行与任务控制台，不代表使用 Codex hosted 执行。
+
+## 协议与部署顺序
+
+当前 Worker、Doctor 和服务端使用执行器协议 **v3**。PostgreSQL 部署必须先对目标数据库执行包含 `db/migrations/007_executor_mcp_availability_state.sql` 的 `npm run db:migrate`，再执行 `npm run db:check`，之后再部署 v3 服务端；migration 007 为 `executor_devices.status` 增加 `mcp_unavailable`。随后把本机项目更新到同一版本并重启 Worker。版本不一致会收到 `426 executor_protocol_mismatch`，v3 Worker 不能在缺少 migration 007 的旧 schema 上运行。
 
 ## 旧 experimental bridge（仅开发兼容）
 

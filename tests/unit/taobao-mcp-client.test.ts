@@ -258,4 +258,31 @@ describe("Taobao Streamable HTTP MCP client", () => {
     expect(methods).not.toContain("DELETE");
     expect(client.sessionId).toBeNull();
   });
+
+  it("forgets a half-initialized session when the initialized notification fails", async () => {
+    let initializeCount = 0;
+    const fetchImpl = vi.fn(async (_url: string, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      if (body.method === "initialize") {
+        initializeCount += 1;
+        return sse({
+          jsonrpc: "2.0",
+          id: body.id,
+          result: { protocolVersion: "2025-03-26", capabilities: {}, serverInfo: {} }
+        }, { "mcp-session-id": `half-session-${initializeCount}` });
+      }
+      if (body.method === "notifications/initialized" && initializeCount === 1) {
+        throw new Error("fetch failed");
+      }
+      if (body.method === "notifications/initialized") return new Response("", { status: 202 });
+      return sse({ jsonrpc: "2.0", id: body.id, result: { tools: [] } });
+    });
+    const client = new TaobaoMcpClient({ fetchImpl });
+
+    await expect(client.listTools()).rejects.toThrow("fetch failed");
+    expect(client.sessionId).toBeNull();
+    await expect(client.listTools()).resolves.toEqual([]);
+    expect(initializeCount).toBe(2);
+    expect(client.sessionId).toBe("half-session-2");
+  });
 });

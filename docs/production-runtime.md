@@ -67,7 +67,9 @@ npm run start
 - `agent_jobs`
 - `execution_events`
 
-`db/migrations/002_security_rate_limits.sql` 创建不保存邮箱或 IP 明文的认证限流表；`003_workflow_recovery_index.sql` 增加工作流恢复扫描索引；`004_runtime_service_heartbeats.sql` 保存恢复 Worker / Cron 心跳。migration runner 会保存每个 SQL 文件的 SHA-256 checksum；已执行 migration 被修改时会拒绝继续，必须新增 migration。`db:check` 除了校验所有 migration checksum，还会直接检查包括 `runtime_service_heartbeats` 在内的运行时实体表，防止表被意外删除但 migration 记录仍存在时产生假健康。
+`db/migrations/002_security_rate_limits.sql` 创建不保存邮箱或 IP 明文的认证限流表；`003_workflow_recovery_index.sql` 增加工作流恢复扫描索引；`004_runtime_service_heartbeats.sql` 保存恢复 Worker / Cron 心跳；`005_executor_authentication_state.sql` 增加登录暂停状态；`006_job_lease_token.sql` 增加租约代次保护；`007_executor_mcp_availability_state.sql` 增加 `mcp_unavailable` 设备状态。migration runner 会保存每个 SQL 文件的 SHA-256 checksum；已执行 migration 被修改时会拒绝继续，必须新增 migration。`db:check` 除了校验所有 migration checksum，还会直接检查包括 `runtime_service_heartbeats` 在内的运行时实体表，防止表被意外删除但 migration 记录仍存在时产生假健康。
+
+当前执行器协议为 **v3**。发布顺序必须是：先对目标数据库执行包含 migration 007 的 `npm run db:migrate && npm run db:check`，再部署 v3 服务端，最后更新本机项目并重启 Worker。Worker、Doctor 与服务端版本不一致时，心跳、领取或回填会以 `426 executor_protocol_mismatch` 失败；不要在旧 schema 上启动 v3 Worker。
 
 任务领取使用 PostgreSQL 事务和 `FOR UPDATE SKIP LOCKED`，支持多个执行器并发但不会重复领取同一任务。
 
@@ -75,7 +77,7 @@ npm run start
 
 本地启动使用 `npm run dev`。启动器会同时检查 `127.0.0.1` 和 Next.js 默认 IPv6 监听地址；3000 被占用时自动选择后续可用端口，并打印准确 URL。注册设备和运行 `executor:configure` 时必须使用这个实际 URL。若需要稳定地址，可在 `.env.local` 设置 `SCENECART_DEV_PORT=3001` 与匹配的 `SCENECART_API_URL=http://127.0.0.1:3001`。显式配置的端口被占用时启动器会直接报错，不会静默把网页和 Worker 分流到不同端口。
 
-默认 `npm run dev` 同时承担本地执行器管理：已有合法设备令牌时会等待 Web 健康后启动 `worker:local`；首次注册时可以保持命令运行，`executor:configure` 原子更新 `.env.local` 后，启动器会在数秒内发现令牌并接入 Worker。令牌不会输出到日志，Worker 启动失败也不会无限重试。纯网页调试或自动化测试使用 `npm run dev:web`，正式部署中的用户设备仍建议由进程守护器独立运行 `worker:local`。
+默认 `npm run dev` 同时承担本地执行器管理：已有合法设备令牌时会等待 Web 健康后启动 `worker:local`；首次注册时可以保持命令运行，`executor:configure` 原子更新 `.env.local` 后，启动器会在数秒内发现令牌并接入 Worker。令牌不会输出到日志；启动器只维护一个 Worker，异常退出时按 1 秒起、最多 30 秒的指数退避自动重启，稳定运行后重置退避。纯网页调试或自动化测试使用 `npm run dev:web`，正式部署中的用户设备仍建议由 systemd、launchd 或容器 supervisor 独立运行 `worker:local`。
 
 1. 在 SceneCart AI 注册并登录。执行器设备必须绑定账号；匿名访问设置页会安全跳转到登录页，成功后返回原设置页。
 2. 打开 `npm run dev` 在终端打印的页面地址，再进入 `/settings/executor`；本地端口可能因占用自动变化。
@@ -110,6 +112,9 @@ EXECUTOR_TAOBAO_SEARCH_TIMEOUT_MS=60000
 EXECUTOR_TAOBAO_CART_TIMEOUT_MS=60000
 EXECUTOR_TAOBAO_AUTH_RECOVERY_POLL_MS=10000
 EXECUTOR_TAOBAO_AUTH_PROBE_TIMEOUT_MS=10000
+EXECUTOR_TAOBAO_READINESS_PROBE_TIMEOUT_MS=10000
+EXECUTOR_TAOBAO_READINESS_BACKOFF_BASE_MS=2000
+EXECUTOR_TAOBAO_READINESS_BACKOFF_MAX_MS=30000
 ```
 
 再执行：
@@ -124,9 +129,11 @@ Doctor 会初始化官方本地 MCP 并检查工具列表、服务端和设备�
 npm run worker:local
 ```
 
-Worker 启动时会再次执行无副作用的 MCP `tools/list` 检查；只有官方 MCP、服务端健康、设备令牌和 `module_search` 能力都通过后，才会发送鉴权心跳并开始领取任务。搜索设备还必须检测到 `get_current_tab`，用于登录失败后的恢复检查；启用真实加购的设备还必须检测到 `get_product_skus` 和 `add_to_cart`。Doctor 会打印令牌当前拥有的商品搜索 / 真实加购能力。因此设置页显示“在线”代表基础执行链路已通过，而不只是本地进程存在。
+Worker 先检查服务端健康、设备令牌、持久失败回执和 `module_search` 能力，然后以 `mcp_unavailable` 心跳进入淘宝就绪检查。它会按指数退避重复执行无副作用的 MCP `tools/list`；在工具未就绪期间保持进程存活、停止领取 Job，网页和执行台明确显示“等待淘宝桌面版工具恢复”。搜索设备必须检测到 `search_products` 与 `get_current_tab`；启用真实加购的设备还必须检测到 `get_product_skus` 和 `add_to_cart`。全部通过后设备才切换为 `online` 并领取任务。因此“Worker 进程存在”“MCP 重连中”和“真实搜索可用”是三个可区分的状态。
 
-真实任务采用最小调用面：搜索使用淘宝 skill 默认的综合搜索路径 `all` 且每次用户确认只调用一次 `search_products`；加购先读取 `get_product_skus`，只有淘宝明确返回无规格或用户已完整选择有效规格时，才调用一次 `add_to_cart`。执行器不在搜索或加购前后调用 `get_current_tab`，因为淘宝桌面端在内部登录状态不同步时会让该工具主动跳转登录页；该工具只会在真实调用已经报告登录失败、Worker 进入鉴权暂停后用于低频检测登录是否恢复。Worker 在完整生命周期内复用同一个 Streamable HTTP `mcp-session-id`，仅在协议明确报告会话失效时重新初始化。退出时只清理本地会话引用，不向淘宝发送远端 `DELETE`；淘宝桌面端会按 TTL 回收旧会话，避免远端终止连带破坏购物 WebView 登录态。若真实工具返回登录错误，执行器会立即停止当前任务并暂停领取；用户在淘宝完成登录后无需重启 Worker，设备会恢复在线，但失败任务不会自动重放。网页会保留已回填候选，并要求用户显式选择“重新登录后继续搜索”以重试同一任务，或选择“用已有部分结果进入选购”跳过等待；两条路径都不会生成 mock 候选。
+真实任务采用最小调用面：搜索使用淘宝 skill 默认的综合搜索路径 `all` 且每次用户确认只调用一次 `search_products`；加购先读取 `get_product_skus`，只有淘宝明确返回无规格或用户已完整选择有效规格时，才调用一次 `add_to_cart`。执行器不在搜索或加购前后调用 `get_current_tab`，因为淘宝桌面端在内部登录状态不同步时会让该工具主动跳转登录页；该工具只会在真实调用已经报告登录失败、Worker 进入鉴权暂停后用于低频检测登录是否恢复。Worker 在完整生命周期内复用同一个 Streamable HTTP `mcp-session-id`，仅在协议明确报告会话失效时重新初始化。退出时只清理本地会话引用，不向淘宝发送远端 `DELETE`；淘宝桌面端会按 TTL 回收旧会话，避免远端终止连带破坏购物 WebView 登录态。
+
+MCP 传输不可达、工具层未加载或必需工具缺失会打开就绪熔断：Worker 切换为 `mcp_unavailable`，不再领取任务，并在每次新探测前重建 MCP 会话。未领取搜索保持 `pending`、尝试次数不增加；连接恢复并通过工具检查后自动继续队列。若真实工具返回登录错误，则进入更严格的 `authentication_required`：用户完成淘宝登录后无需重启 Worker，但登录恢复不会自动重试失败动作；网页保留已回填候选，并要求用户明确选择继续失败搜索或使用部分结果。真实加购在 MCP、Worker 或登录恢复后都不会自动重放，用户必须先确认淘宝购物车实际状态，再重新发起一次显式确认。
 
 Worker、Doctor 和服务端使用统一的执行器协议版本。每次心跳、任务领取和结果回填都会携带协议版本；缺失或不兼容时服务端返回 `426 executor_protocol_mismatch`。升级网页服务后应同步更新本地项目并重启 Worker，旧进程不会继续领取新任务。
 
@@ -138,6 +145,9 @@ EXECUTOR_TAOBAO_SEARCH_TIMEOUT_MS=60000
 EXECUTOR_TAOBAO_CART_TIMEOUT_MS=60000
 EXECUTOR_TAOBAO_AUTH_RECOVERY_POLL_MS=10000
 EXECUTOR_TAOBAO_AUTH_PROBE_TIMEOUT_MS=10000
+EXECUTOR_TAOBAO_READINESS_PROBE_TIMEOUT_MS=10000
+EXECUTOR_TAOBAO_READINESS_BACKOFF_BASE_MS=2000
+EXECUTOR_TAOBAO_READINESS_BACKOFF_MAX_MS=30000
 ```
 
 执行器每 15 秒发送心跳，并在有运行任务时续租。服务端明确拒绝续租时，Worker 会立即中止本地工具子进程；连续心跳失败达到 `EXECUTOR_LEASE_FAILURE_LIMIT`（默认 3）时也会 fail closed，避免失去任务所有权后继续执行真实淘宝动作或回填旧结果。任务完成结果会先写入 `.data/local-executor/results`，再回填服务端；若回执失败，租约恢复后会重放结果，不重复执行淘宝动作。
@@ -156,6 +166,7 @@ pending -> leased -> running -> completed
 - 完成接口可安全重放，已经完成的任务返回 `already_completed=true`。
 - 只有 `pending` 任务可以由用户取消；已被执行器领取的任务不会伪装成可撤销。
 - `completed` 任务始终幂等去重；`failed/cancelled` 任务只有在用户再次点击搜索、加购或执行台“重新入队”后才会清空旧错误并重置尝试次数。
+- 响应设备处于 `mcp_unavailable` 时不会领取任务；未开始的搜索保持原 `pending` Job，MCP 就绪后自动领取。`authentication_required` 仍必须由用户确认是否继续失败搜索；加购永不因连接恢复自动重放。
 - 搜索空结果和最终失败会写入模块搜索轨迹，Agent 会跳过该模块继续执行，不阻塞整条工作流。
 - `agent_runtime.workflow_status` 保存 `running / waiting_for_tools / completed / paused / error`，同时记录运行 ID、当前模块和状态转换次数。
 - 本地执行器完成或终态失败一个模块后，回填 API 会调用服务端 `workflow-runner`；即使浏览器已关闭，后续模块仍会串行入队。

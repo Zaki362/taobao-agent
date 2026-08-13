@@ -16,10 +16,31 @@ export async function POST(request: NextRequest) {
     const device = await authenticateExecutorToken(bearerToken(request));
     if (!device) throw new ApiRouteError("invalid executor token", 401, "invalid_executor_token");
     const body = await request.json().catch(() => ({}));
+    if (body.executor_state === "offline") {
+      const updated = await getRuntimeRepository().heartbeatDevice(device.id, "offline");
+      if (!updated) throw new ApiRouteError("executor device unavailable", 401, "invalid_executor_token");
+      return apiOk({
+        device: {
+          id: updated.id,
+          name: updated.name,
+          status: updated.status,
+          capabilities: updated.capabilities,
+          last_heartbeat_at: updated.last_heartbeat_at
+        },
+        executor_state: "offline",
+        lease_renewed: false,
+        protocol_version: EXECUTOR_PROTOCOL_VERSION,
+        server_time: new Date().toISOString()
+      });
+    }
     const executorState = body.executor_state === undefined
-      ? device.status === "authentication_required" ? "authentication_required" : "online"
+      ? device.status === "authentication_required" || device.status === "mcp_unavailable"
+        ? device.status
+        : "online"
       : body.executor_state === "online"
         ? "online"
+      : body.executor_state === "mcp_unavailable"
+        ? "mcp_unavailable"
       : body.executor_state === "authentication_required"
         ? "authentication_required"
         : null;
@@ -85,7 +106,7 @@ export async function POST(request: NextRequest) {
       releaseCartAfterVerifiedLogin:
         executorState === "online" && body.authentication_recovery_verified === true
     });
-    const effectiveExecutorState = executorState === "online" && holdState.active
+    const effectiveExecutorState = executorState !== "authentication_required" && holdState.active
       ? "authentication_required"
       : executorState;
     const updated = await repository.heartbeatDevice(device.id, effectiveExecutorState);

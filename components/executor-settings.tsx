@@ -2,6 +2,10 @@
 
 import { useEffect, useState } from "react";
 import { Check, Copy, RefreshCw, ShieldCheck, Terminal, Wifi } from "lucide-react";
+import {
+  executorDeviceStatusLabel,
+  executorDeviceViewState
+} from "@/components/executor-status-view";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 
@@ -68,12 +72,6 @@ function capabilityLabel(capability: string) {
   return capability;
 }
 
-function deviceStatus(device: Device) {
-  if (device.status === "revoked") return "已撤销";
-  const heartbeat = device.last_heartbeat_at ? Date.parse(device.last_heartbeat_at) : 0;
-  return heartbeat && Date.now() - heartbeat < 45_000 ? "在线" : "离线";
-}
-
 export function ExecutorSettings() {
   const [devices, setDevices] = useState<Device[]>([]);
   const [auditEvents, setAuditEvents] = useState<DeviceAuditEvent[]>([]);
@@ -87,7 +85,9 @@ export function ExecutorSettings() {
   const [enableCartCapability, setEnableCartCapability] = useState(false);
 
   const activeDevices = devices.filter((device) => device.status !== "revoked");
-  const onlineDevices = activeDevices.filter((device) => deviceStatus(device) === "在线");
+  const onlineDevices = activeDevices.filter((device) => executorDeviceViewState(device) === "online");
+  const reconnectingDevices = activeDevices.filter((device) => executorDeviceViewState(device) === "mcp_unavailable");
+  const authenticationRequiredDevices = activeDevices.filter((device) => executorDeviceViewState(device) === "authentication_required");
   const searchAvailable = readiness?.executor_capabilities.capabilities.module_search.available ?? false;
   const cartAvailable = readiness?.executor_capabilities.capabilities.add_to_cart.available ?? false;
   const environmentConfig = `TAOBAO_EXECUTION_BACKEND=local_executor\nSCENECART_API_URL=${apiUrl}\nSCENECART_DEVICE_TOKEN=${token || "你的设备令牌"}`;
@@ -251,7 +251,13 @@ export function ExecutorSettings() {
               {!readiness ? "正在读取产品模式" : readiness.product_mode === "production" ? "正式产品模式" : "开发预览模式"}
             </span>
             <span className={`rounded-full px-3 py-1.5 font-semibold ${onlineDevices.length ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-700"}`}>
-              {onlineDevices.length ? `${onlineDevices.length} 台设备在线` : "等待本地执行器"}
+              {onlineDevices.length
+                ? `${onlineDevices.length} 台设备在线`
+                : reconnectingDevices.length
+                  ? "淘宝工具重连中"
+                  : authenticationRequiredDevices.length
+                    ? "等待淘宝重新登录"
+                    : "等待本地执行器"}
             </span>
             <span className={`rounded-full px-3 py-1.5 font-semibold ${searchAvailable ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-700"}`}>
               {searchAvailable ? "真实搜索可用" : "搜索能力未连接"}
@@ -399,7 +405,7 @@ export function ExecutorSettings() {
             <div key={device.id} className="subtle-card flex flex-wrap items-center justify-between gap-3 p-4">
               <div>
                 <p className="font-medium">{device.name}</p>
-                <p className="mt-1 text-xs text-muted-foreground">{device.capabilities.map(capabilityLabel).join("、")} · {deviceStatus(device)}</p>
+                <p className="mt-1 text-xs text-muted-foreground">{device.capabilities.map(capabilityLabel).join("、")} · {executorDeviceStatusLabel(executorDeviceViewState(device))}</p>
               </div>
               <div className="flex flex-wrap items-center gap-3">
                 <p className="text-xs text-muted-foreground">最近心跳：{device.last_heartbeat_at ? new Date(device.last_heartbeat_at).toLocaleString("zh-CN", { hour12: false }) : "尚未连接"}</p>

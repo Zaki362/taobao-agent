@@ -12,6 +12,7 @@ export interface ExecutorCapabilitySummary {
 export interface ExecutorDeviceSummary {
   registered: number;
   online: number;
+  mcp_unavailable: number;
   authentication_required: number;
   capabilities: Record<RuntimeJobType, ExecutorCapabilitySummary>;
 }
@@ -35,6 +36,9 @@ export function summarizeExecutorDevices(
   const authenticationRequiredDevices = registeredDevices.filter(
     (device) => device.status === "authentication_required" && isExecutorDeviceResponsive(device, now)
   );
+  const mcpUnavailableDevices = registeredDevices.filter(
+    (device) => device.status === "mcp_unavailable" && isExecutorDeviceResponsive(device, now)
+  );
   const capabilities = Object.fromEntries(
     EXECUTOR_CAPABILITIES.map((capability) => {
       const registered = registeredDevices.filter((device) => device.capabilities.includes(capability)).length;
@@ -46,6 +50,7 @@ export function summarizeExecutorDevices(
   return {
     registered: registeredDevices.length,
     online: onlineDevices.length,
+    mcp_unavailable: mcpUnavailableDevices.length,
     authentication_required: authenticationRequiredDevices.length,
     capabilities
   };

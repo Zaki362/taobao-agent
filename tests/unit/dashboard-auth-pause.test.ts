@@ -43,12 +43,15 @@ function mcpStatus({ available, authenticationRequired = 0 }: {
 }): MpcStatus {
   return {
     mode: "local_executor",
+    search_available: available,
+    cart_available: available,
     available,
     message: "test",
     permissions_scope: [],
     executor_devices: {
       online: available ? 1 : 0,
       registered: 1,
+      mcp_unavailable: 0,
       authentication_required: authenticationRequired,
       capabilities: {
         module_search: { registered: 1, online: available ? 1 : 0, available },
@@ -173,6 +176,10 @@ describe("dashboard Taobao authentication pause", () => {
       state,
       mcpStatus({ available: false, authenticationRequired: 1 })
     )).toBe(true);
+    expect(isTaobaoCartAuthenticationPause(
+      state,
+      mcpStatus({ available: true, authenticationRequired: 1 })
+    )).toBe(false);
   });
 
   it("exposes only a validated proof from the current workflow and selected module", () => {

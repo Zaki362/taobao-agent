@@ -7,6 +7,7 @@ import { StatusPage } from "@/components/dashboard-common";
 import { ConfirmPlanPage, ConfirmScenePage } from "@/components/dashboard-confirmation";
 import { CartReviewPage } from "@/components/dashboard-execution";
 import { SearchProgressPage } from "@/components/dashboard-search-progress";
+import { MCP_STATUS_REFRESH_MS } from "@/components/executor-status-view";
 import {
   buildSceneInputFromBrief,
   findTaobaoAuthenticationFailedTask,
@@ -196,6 +197,33 @@ export function Dashboard() {
     refreshMcpStatus().catch(() => undefined);
     refreshRecentSessions().catch(() => undefined);
   }, []);
+
+  useEffect(() => {
+    // Keep retrying when the first status request fails and `mcpStatus` remains
+    // null. A successful non-local response can safely stop this local poller.
+    if (mcpStatus && mcpStatus.mode !== "local_executor") {
+      return;
+    }
+
+    const refresh = () => {
+      refreshMcpStatus().catch(() => undefined);
+    };
+    const refreshWhenVisible = () => {
+      if (document.visibilityState === "visible") refresh();
+    };
+    const timer = window.setInterval(refresh, MCP_STATUS_REFRESH_MS);
+
+    window.addEventListener("focus", refresh);
+    window.addEventListener("online", refresh);
+    document.addEventListener("visibilitychange", refreshWhenVisible);
+
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener("focus", refresh);
+      window.removeEventListener("online", refresh);
+      document.removeEventListener("visibilitychange", refreshWhenVisible);
+    };
+  }, [mcpStatus?.mode]);
 
   useEffect(() => {
     if (hasRestoredRef.current || typeof window === "undefined") {

@@ -59,8 +59,10 @@ describe("production readiness", () => {
     expect(checks.get("authentication")?.status).toBe("fail");
     expect(checks.get("workflow_recovery")?.status).toBe("fail");
     expect(checks.get("executor_backend")?.status).toBe("pass");
+    expect(checks.has("search_provider")).toBe(false);
     expect(checks.get("mcp_debug_endpoint")?.status).toBe("pass");
     expect(checks.get("executor_online")?.status).toBe("warn");
+    expect("operational_for_search" in readiness).toBe(false);
   });
 
   it("fails readiness when the manual MCP debug endpoint is configured", async () => {
@@ -131,6 +133,34 @@ describe("production readiness", () => {
     expect(checks.get("executor_cart_capability")?.status).toBe("warn");
     expect(readiness.executor_capabilities.capabilities.module_search.available).toBe(true);
     expect(readiness.executor_capabilities.capabilities.add_to_cart.available).toBe(false);
+    expect(readiness.operational_for_shopping).toBe(false);
+  });
+
+  it("reports a responsive MCP reconnect without advertising local search readiness", async () => {
+    const now = new Date().toISOString();
+    await localRuntimeRepository.createDevice({
+      id: "mcp-reconnecting-device",
+      user_id: "mcp-reconnecting-user",
+      name: "MCP reconnecting",
+      token_hash: "mcp-reconnecting-token",
+      capabilities: ["module_search", "add_to_cart"],
+      status: "mcp_unavailable",
+      last_heartbeat_at: now,
+      created_at: now,
+      updated_at: now
+    });
+
+    const readiness = await inspectRuntimeReadiness("mcp-reconnecting-user");
+    const checks = new Map(readiness.checks.map((item) => [item.id, item]));
+
+    expect(readiness.executor_capabilities.mcp_unavailable).toBe(1);
+    expect(readiness.executor_capabilities.capabilities.module_search.available).toBe(false);
+    expect(checks.get("executor_online")).toMatchObject({
+      status: "warn",
+      detail: expect.stringContaining("等待淘宝桌面版工具恢复"),
+      remediation: expect.stringContaining("executor:doctor")
+    });
+    expect(checks.get("executor_search_capability")?.status).toBe("warn");
     expect(readiness.operational_for_shopping).toBe(false);
   });
 

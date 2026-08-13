@@ -13,6 +13,7 @@ export type RuntimeJobType = "module_search" | "add_to_cart";
 export type ExecutorDeviceStatus =
   | "online"
   | "offline"
+  | "mcp_unavailable"
   | "authentication_required"
   | "revoked";
 
@@ -123,7 +124,7 @@ export interface RuntimeRepository {
   findDeviceByToken(tokenHash: string): Promise<ExecutorDevice | null>;
   heartbeatDevice(
     deviceId: string,
-    status?: Extract<ExecutorDeviceStatus, "online" | "authentication_required">
+    status?: Extract<ExecutorDeviceStatus, "online" | "offline" | "mcp_unavailable" | "authentication_required">
   ): Promise<ExecutorDevice | null>;
   listDevices(userId: string): Promise<ExecutorDevice[]>;
   updateDeviceCapabilities(

@@ -8,14 +8,14 @@ import {
 
 describe("executor protocol", () => {
   it("accepts the current protocol version", () => {
-    expect(EXECUTOR_PROTOCOL_VERSION).toBe("2");
+    expect(EXECUTOR_PROTOCOL_VERSION).toBe("3");
     const request = new Request("http://localhost/api/executor/heartbeat", {
       headers: { [EXECUTOR_PROTOCOL_HEADER]: EXECUTOR_PROTOCOL_VERSION }
     });
     expect(() => assertExecutorProtocol(request)).not.toThrow();
   });
 
-  it.each([undefined, "0", "1"])("rejects a missing or outdated protocol with 426: %s", (version) => {
+  it.each([undefined, "0", "1", "2"])("rejects a missing or outdated protocol with 426: %s", (version) => {
     const headers = version ? { [EXECUTOR_PROTOCOL_HEADER]: version } : undefined;
     const request = new Request("http://localhost/api/executor/heartbeat", { headers });
 

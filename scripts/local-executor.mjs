@@ -4,6 +4,12 @@ import process from "node:process";
 import nextEnv from "@next/env";
 import protocol from "../lib/runtime/executor-protocol.json" with { type: "json" };
 import { ExecutorLeaseGuard } from "./executor-lease-guard.mjs";
+import {
+  isMcpReadinessError,
+  mcpReadinessBackoffMs,
+  missingTaobaoCartTools,
+  missingTaobaoTools
+} from "./local-executor-readiness.mjs";
 import { TaobaoMcpClient } from "./taobao-mcp-client.mjs";
 import {
   buildTaobaoMcpSearchEvidence,
@@ -30,6 +36,9 @@ const taobaoCartTimeoutMs = Math.max(Number(process.env.EXECUTOR_TAOBAO_CART_TIM
 const taobaoSearchCooldownMs = Math.max(Number(process.env.EXECUTOR_TAOBAO_SEARCH_COOLDOWN_MS || 30000), 0);
 const taobaoAuthRecoveryPollMs = Math.max(Number(process.env.EXECUTOR_TAOBAO_AUTH_RECOVERY_POLL_MS || 10000), 5000);
 const taobaoAuthProbeTimeoutMs = Math.max(Number(process.env.EXECUTOR_TAOBAO_AUTH_PROBE_TIMEOUT_MS || 10000), 5000);
+const taobaoReadinessProbeTimeoutMs = Math.max(Number(process.env.EXECUTOR_TAOBAO_READINESS_PROBE_TIMEOUT_MS || 10000), 3000);
+const taobaoReadinessBackoffBaseMs = Math.max(Number(process.env.EXECUTOR_TAOBAO_READINESS_BACKOFF_BASE_MS || 2000), 250);
+const taobaoReadinessBackoffMaxMs = Math.max(Number(process.env.EXECUTOR_TAOBAO_READINESS_BACKOFF_MAX_MS || 30000), taobaoReadinessBackoffBaseMs);
 const taobaoSourceApp = process.env.TAOBAO_SOURCE_APP || "SceneCartAI";
 const apiTimeoutMs = Math.max(Number(process.env.EXECUTOR_API_TIMEOUT_MS || 20000), 5000);
 const resolveTimeoutMs = Math.max(Number(process.env.EXECUTOR_RESOLVE_TIMEOUT_MS || 60000), apiTimeoutMs);
@@ -49,6 +58,10 @@ if (!deviceToken) {
 let heartbeatInFlight = null;
 let stopped = false;
 let authenticationPaused = false;
+let mcpUnavailable = true;
+let mcpReadinessAttempt = 0;
+let executorCapabilities = [];
+let fatalApiError = null;
 let lastAuthenticationProbeAt = 0;
 let lastTaobaoSearchFinishedAt = 0;
 const leaseGuard = new ExecutorLeaseGuard({
@@ -69,6 +82,14 @@ class ExecutorJobError extends Error {
   }
 }
 
+class FatalExecutorApiError extends Error {
+  constructor(message, status) {
+    super(message);
+    this.name = "FatalExecutorApiError";
+    this.status = status;
+  }
+}
+
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -85,7 +106,13 @@ async function api(path, options = {}) {
     }
   });
   const payload = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(payload.error || `${path} failed with ${response.status}`);
+  if (!response.ok) {
+    const message = payload.error || `${path} failed with ${response.status}`;
+    if (response.status === 401 || response.status === 426) {
+      throw new FatalExecutorApiError(message, response.status);
+    }
+    throw new Error(message);
+  }
   return payload;
 }
 
@@ -104,11 +131,11 @@ async function verifyStartup() {
   }
   const heartbeatPayload = await api("/api/executor/heartbeat", {
     method: "POST",
-    // An omitted state brings a normal offline device online, but preserves a
-    // persisted authentication pause after a Worker restart.
+    // Never advertise the Worker as online until tools/list proves that this
+    // exact Taobao Desktop MCP session is ready.
     body: authenticationPaused
       ? JSON.stringify({ executor_state: "authentication_required" })
-      : "{}"
+      : JSON.stringify({ executor_state: "mcp_unavailable" })
   });
   const capabilities = Array.isArray(heartbeatPayload.device?.capabilities)
     ? heartbeatPayload.device.capabilities
@@ -131,28 +158,13 @@ async function verifyStartup() {
       );
     }
   }
-  // A restored durable callback must pause the server before any Taobao MCP
-  // startup traffic. If Taobao itself is unavailable, the Job still cannot replay.
-  const tools = await taobaoClient.listTools();
-  const toolNames = new Set(tools.map((tool) => tool?.name));
-  if (!toolNames.has("search_products")) {
-    throw new Error("淘宝桌面版 MCP 未暴露 search_products 工具");
-  }
-  if (!toolNames.has("get_current_tab")) {
-    throw new Error("淘宝桌面版 MCP 未暴露 get_current_tab，无法安全验证登录恢复");
-  }
-  if (capabilities.includes("add_to_cart")) {
-    const missingCartTools = ["get_product_skus", "add_to_cart"].filter((name) => !toolNames.has(name));
-    if (missingCartTools.length > 0) {
-      throw new Error(`设备声明了 add_to_cart 能力，但淘宝桌面版 MCP 缺少：${missingCartTools.join("、")}。`);
-    }
-  }
   if (heartbeatPayload.protocol_version !== executorProtocolVersion) {
     throw new Error("服务端未确认当前执行器协议，请更新项目代码后重启。");
   }
   process.stdout.write(
-    `[local-executor] startup checks passed; driver=taobao-mcp-http; runtime=${payload.runtime_store}; backend=${payload.effective_executor_backend}; capabilities=${capabilities.join(",")}\n`
+    `[local-executor] API and durability checks passed; runtime=${payload.runtime_store}; backend=${payload.effective_executor_backend}; capabilities=${capabilities.join(",")}\n`
   );
+  return capabilities;
 }
 
 function errorOutput(error) {
@@ -179,6 +191,78 @@ function createTaobaoMcpClient(timeoutMs) {
 // Streamable HTTP sessions are stateful. Reuse one transport for the complete
 // worker lifetime so Taobao Desktop keeps one consistent WebView/MCP context.
 const taobaoClient = createTaobaoMcpClient(Math.max(taobaoSearchTimeoutMs, taobaoCartTimeoutMs));
+
+function enterMcpUnavailable(error) {
+  const wasUnavailable = mcpUnavailable;
+  mcpUnavailable = true;
+  taobaoClient.resetSession();
+  if (!wasUnavailable && error) {
+    process.stderr.write(
+      `[local-executor] Taobao MCP readiness circuit opened: ${error instanceof Error ? error.message : String(error)}\n`
+    );
+  }
+}
+
+async function waitForMcpReadiness() {
+  while (!stopped && !authenticationPaused && mcpUnavailable) {
+    const unavailableHeartbeat = await heartbeat({ executorState: "mcp_unavailable", force: true });
+    if (unavailableHeartbeat?.executor_state === "authentication_required") {
+      authenticationPaused = true;
+      lastAuthenticationProbeAt = 0;
+      return false;
+    }
+    if (fatalApiError) return false;
+
+    try {
+      const tools = await taobaoClient.listTools(
+        operationSignal(undefined, taobaoReadinessProbeTimeoutMs)
+      );
+      const missingTools = missingTaobaoTools(tools, executorCapabilities);
+      if (missingTools.length > 0) {
+        throw new Error(`淘宝桌面版 MCP 缺少必需工具：${missingTools.join("、")}`);
+      }
+      const missingCartTools = executorCapabilities.includes("add_to_cart")
+        ? missingTaobaoCartTools(tools)
+        : [];
+      if (missingCartTools.length > 0) {
+        process.stderr.write(
+          `[local-executor] search is ready; optional cart tools are unavailable: ${missingCartTools.join(",")}\n`
+        );
+      }
+
+      const onlineHeartbeat = await heartbeat({ executorState: "online", force: true });
+      if (fatalApiError) return false;
+      if (onlineHeartbeat?.executor_state === "authentication_required") {
+        authenticationPaused = true;
+        lastAuthenticationProbeAt = 0;
+        return false;
+      }
+      if (onlineHeartbeat?.executor_state !== "online") {
+        throw new Error("服务端尚未确认本地执行器上线");
+      }
+
+      mcpUnavailable = false;
+      mcpReadinessAttempt = 0;
+      process.stdout.write(
+        `[local-executor] Taobao MCP ready; tools=${tools.map((tool) => tool?.name).filter(Boolean).join(",")}\n`
+      );
+      return true;
+    } catch (error) {
+      if (error instanceof FatalExecutorApiError || fatalApiError || stopped) return false;
+      enterMcpUnavailable(error);
+      const delayMs = mcpReadinessBackoffMs(mcpReadinessAttempt, {
+        baseMs: taobaoReadinessBackoffBaseMs,
+        maxMs: taobaoReadinessBackoffMaxMs
+      });
+      mcpReadinessAttempt += 1;
+      process.stderr.write(
+        `[local-executor] Taobao MCP unavailable; retrying readiness in ${delayMs}ms: ${error instanceof Error ? error.message : String(error)}\n`
+      );
+      await sleep(delayMs);
+    }
+  }
+  return !mcpUnavailable;
+}
 
 async function readCachedResult(job) {
   try {
@@ -271,14 +355,19 @@ function taobaoJobError(error, operation = "操作") {
   if (/Tool 执行层未就绪|应用已加载完成|连接失败|cli-rpc\.sock|ECONNREFUSED/i.test(output)) {
     return new ExecutorJobError(
       "淘宝桌面版工具执行层暂未就绪，请保持客户端主界面打开后重试。",
-      true
+      true,
+      "mcp_unavailable"
     );
   }
   if (/timed out|timeout|SIGTERM|SIGKILL/i.test(output)) {
     return new ExecutorJobError(`淘宝${operation}在限定时间内未完成。`, true);
   }
   if (/fetch failed|ECONNREFUSED|MCP.*请求失败|会话 ID/i.test(output)) {
-    return new ExecutorJobError("淘宝桌面版 MCP 暂不可达，请保持客户端运行后重试。", true);
+    return new ExecutorJobError(
+      "淘宝桌面版 MCP 暂不可达，请保持客户端运行后重试。",
+      true,
+      "mcp_unavailable"
+    );
   }
   return new ExecutorJobError(output ? output.slice(0, 1000) : `淘宝 MCP 未返回${operation}结果。`, true);
 }
@@ -385,7 +474,13 @@ async function heartbeat(options = {}) {
     await heartbeatInFlight.catch(() => undefined);
   }
   const jobId = leaseGuard.currentJobId;
-  const executorState = options.executorState ?? (authenticationPaused ? "authentication_required" : "online");
+  const executorState = options.executorState ?? (
+    authenticationPaused
+      ? "authentication_required"
+      : mcpUnavailable
+        ? "mcp_unavailable"
+        : "online"
+  );
   const requestBody = {
     current_job_id: jobId,
     executor_state: executorState,
@@ -413,6 +508,11 @@ async function heartbeat(options = {}) {
     } catch (error) {
       process.stderr.write(`[local-executor] heartbeat failed: ${error.message}\n`);
       if (jobId) leaseGuard.rejectHeartbeat(jobId);
+      if (error instanceof FatalExecutorApiError) {
+        fatalApiError = error;
+        stopped = true;
+        leaseGuard.stop(`fatal API ${error.status}`);
+      }
       return null;
     }
   })();
@@ -448,6 +548,23 @@ async function recoverTaobaoAuthentication() {
     return false;
   }
 
+  try {
+    const tools = await taobaoClient.listTools(
+      operationSignal(undefined, taobaoReadinessProbeTimeoutMs)
+    );
+    const missingTools = missingTaobaoTools(tools, executorCapabilities);
+    if (missingTools.length > 0) {
+      throw new Error(`淘宝桌面版 MCP 缺少必需工具：${missingTools.join("、")}`);
+    }
+  } catch (error) {
+    enterMcpUnavailable(error);
+    process.stderr.write(
+      `[local-executor] login is available but Taobao MCP tools are not ready yet: ${error instanceof Error ? error.message : String(error)}\n`
+    );
+    await heartbeat({ executorState: "authentication_required", force: true });
+    return false;
+  }
+
   const payload = await heartbeat({
     executorState: "online",
     authenticationRecoveryVerified: true,
@@ -455,6 +572,8 @@ async function recoverTaobaoAuthentication() {
   });
   if (payload?.executor_state !== "online") return false;
   authenticationPaused = false;
+  mcpUnavailable = false;
+  mcpReadinessAttempt = 0;
   lastTaobaoSearchFinishedAt = 0;
   process.stdout.write(
     "[local-executor] Taobao authentication recovered; job claiming has resumed and the failed action remains paused until user confirmation\n"
@@ -470,7 +589,7 @@ try {
       `[local-executor] restored pending authentication failure callback for ${pendingAuthenticationFailure.job_id}\n`
     );
   }
-  await verifyStartup();
+  executorCapabilities = await verifyStartup();
 } catch (error) {
   process.stderr.write(`[local-executor] startup failed: ${error instanceof Error ? error.message : String(error)}\n`);
   process.exit(1);
@@ -487,6 +606,10 @@ async function loop() {
       await recoverTaobaoAuthentication();
       await sleep(Math.max(pollMs, 5000));
       continue;
+    }
+    if (mcpUnavailable) {
+      await waitForMcpReadiness();
+      if (mcpUnavailable || authenticationPaused) continue;
     }
     try {
       const { job } = await api("/api/executor/jobs/claim", { method: "POST", body: "{}" });
@@ -525,6 +648,11 @@ async function loop() {
         }
       } catch (error) {
         const authenticationRequired = error instanceof ExecutorJobError && error.code === "auth_required";
+        const readinessFailure =
+          error instanceof ExecutorJobError &&
+          error.retryable &&
+          isMcpReadinessError(error);
+        if (readinessFailure) enterMcpUnavailable(error);
         let authenticationDurabilityEstablished = !authenticationRequired;
         const failureDisposition = executorFailureDisposition({
           authenticationRequired,
@@ -611,6 +739,10 @@ async function loop() {
           process.stderr.write(
             "[local-executor] authentication circuit breaker opened; no jobs will be claimed until Taobao login is verified locally\n"
           );
+        } else if (readinessFailure) {
+          process.stderr.write(
+            "[local-executor] MCP readiness circuit breaker opened; no more jobs will be claimed until tools/list succeeds\n"
+          );
         }
         continue;
       }
@@ -648,6 +780,15 @@ async function loop() {
       }
       // Keep the result ledger: an expired lease can replay acknowledgement without repeating Taobao actions.
     } catch (error) {
+      if (error instanceof FatalExecutorApiError) {
+        fatalApiError = error;
+        stopped = true;
+        leaseGuard.stop(`fatal API ${error.status}`);
+        process.stderr.write(
+          `[local-executor] fatal API response ${error.status}; handing restart to supervisor: ${error.message}\n`
+        );
+        break;
+      }
       process.stderr.write(`[local-executor] polling failed: ${error.message}\n`);
       await sleep(Math.max(pollMs, 3000));
     }
@@ -666,3 +807,4 @@ await loop();
 await taobaoClient.close().catch((error) => {
   process.stderr.write(`[local-executor] failed to close MCP session: ${error.message}\n`);
 });
+if (fatalApiError) process.exitCode = 1;

@@ -106,29 +106,37 @@ export class TaobaoMcpClient {
   }
 
   async initialize(signal) {
-    const id = ++this.requestId;
-    const initialized = await this.post({
-      jsonrpc: "2.0",
-      id,
-      method: "initialize",
-      params: {
-        protocolVersion: DEFAULT_PROTOCOL_VERSION,
-        capabilities: {},
-        clientInfo: { name: this.sourceApp, version: "0.1.0" }
+    try {
+      const id = ++this.requestId;
+      const initialized = await this.post({
+        jsonrpc: "2.0",
+        id,
+        method: "initialize",
+        params: {
+          protocolVersion: DEFAULT_PROTOCOL_VERSION,
+          capabilities: {},
+          clientInfo: { name: this.sourceApp, version: "0.1.0" }
+        }
+      }, { withSession: false, signal });
+      const payload = initialized.payload;
+      if (!payload || payload.id !== id || payload.error) {
+        throw new Error(errorMessage(payload, "淘宝 MCP 初始化响应无效"));
       }
-    }, { withSession: false, signal });
-    const payload = initialized.payload;
-    if (!payload || payload.id !== id || payload.error) {
-      throw new Error(errorMessage(payload, "淘宝 MCP 初始化响应无效"));
+      const sessionId = initialized.response.headers.get("mcp-session-id");
+      if (!sessionId) throw new Error("淘宝 MCP 未返回会话 ID");
+      this.sessionId = sessionId;
+      await this.post({
+        jsonrpc: "2.0",
+        method: "notifications/initialized"
+      }, { signal });
+      return payload.result;
+    } catch (error) {
+      // A server can allocate a session and then disappear before accepting the
+      // initialized notification. Never reuse that half-initialized session on
+      // the next readiness probe.
+      this.resetSession();
+      throw error;
     }
-    const sessionId = initialized.response.headers.get("mcp-session-id");
-    if (!sessionId) throw new Error("淘宝 MCP 未返回会话 ID");
-    this.sessionId = sessionId;
-    await this.post({
-      jsonrpc: "2.0",
-      method: "notifications/initialized"
-    }, { signal });
-    return payload.result;
   }
 
   async ensureSession(signal) {

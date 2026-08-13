@@ -7,7 +7,7 @@ import type { SessionState } from "@/lib/session/types";
 export interface WorkflowRecoveryResult {
   recovered: boolean;
   session_id?: string;
-  reason?: "completed_result" | "terminal_state" | "missing_continuation" | "recovery_failed" | "authentication_required";
+  reason?: "completed_result" | "terminal_state" | "missing_continuation" | "recovery_failed" | "authentication_required" | "mcp_unavailable";
   error_message?: string;
 }
 

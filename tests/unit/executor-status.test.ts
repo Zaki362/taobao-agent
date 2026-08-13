@@ -60,6 +60,30 @@ describe("executor capability status", () => {
     expect(isExecutorDeviceResponsive(authPaused, now)).toBe(true);
   });
 
+  it("keeps an MCP-unavailable worker responsive without advertising search availability", () => {
+    const now = Date.now();
+    const reconnecting = device({
+      id: "mcp-reconnecting",
+      capabilities: ["module_search", "add_to_cart"],
+      status: "mcp_unavailable",
+      last_heartbeat_at: new Date(now - 1_000).toISOString()
+    });
+
+    const summary = summarizeExecutorDevices([reconnecting], now);
+    expect(summary).toMatchObject({
+      registered: 1,
+      online: 0,
+      mcp_unavailable: 1,
+      authentication_required: 0,
+      capabilities: {
+        module_search: { registered: 1, online: 0, available: false },
+        add_to_cart: { registered: 1, online: 0, available: false }
+      }
+    });
+    expect(isExecutorDeviceResponsive(reconnecting, now)).toBe(true);
+    expect(isExecutorDeviceOnline(reconnecting, now)).toBe(false);
+  });
+
   it("does not keep a stale authentication pause visible", () => {
     const now = Date.now();
     const authPaused = device({

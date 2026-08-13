@@ -212,8 +212,9 @@ function assertExecutorConfigurator() {
 function assertDevelopmentLauncher() {
   const launcher = tryReadText("scripts/dev-server.mjs");
   const autoLauncher = tryReadText("scripts/dev-auto.mjs");
+  const workerSupervisor = tryReadText("scripts/dev-auto-supervisor.mjs");
   const pkgText = tryReadText("package.json");
-  if (!launcher || !autoLauncher || !pkgText) return;
+  if (!launcher || !autoLauncher || !workerSupervisor || !pkgText) return;
 
   let pkg;
   try {
@@ -233,9 +234,14 @@ function assertDevelopmentLauncher() {
     !autoLauncher.includes("runtimeEnv.SCENECART_API_URL = apiBaseUrl") ||
     !autoLauncher.includes("resolveExecutorEnvironment") ||
     !autoLauncher.includes("discoverAndStartWorker") ||
-    !autoLauncher.includes('spawnCommand("npm", ["run", "worker:local"]')
+    !autoLauncher.includes("createWorkerSupervisor") ||
+    !autoLauncher.includes('spawn("npm", ["run", "worker:local"]') ||
+    !autoLauncher.includes("env: config.env") ||
+    !workerSupervisor.includes("scheduleRestart") ||
+    !workerSupervisor.includes("WORKER_RESTART_MAX_MS") ||
+    !workerSupervisor.includes('child.kill("SIGTERM")')
   ) {
-    fail("默认开发启动器必须检测双栈端口冲突、热发现设备令牌，并让网页与本地执行器共享同一个实际 API 地址");
+    fail("默认开发启动器必须检测双栈端口冲突、热发现设备令牌、监督单一 Worker，并让网页与本地执行器共享同一个实际 API 地址");
   }
 }
 

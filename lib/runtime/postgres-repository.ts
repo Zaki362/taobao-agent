@@ -328,10 +328,10 @@ export const postgresRuntimeRepository: RuntimeRepository = {
         [deviceId]
       );
       if (!lockedDevice.rowCount) return null;
-      const activeHolds = status === "online"
+      const activeHolds = status !== "authentication_required"
         ? await selectActiveAuthenticationFailureHoldsByDevice(deviceId, client)
         : [];
-      const effectiveStatus = status === "online" && activeHolds.length > 0
+      const effectiveStatus = status !== "authentication_required" && activeHolds.length > 0
         ? "authentication_required"
         : status;
       const result = await client.query(

@@ -88,6 +88,8 @@ function loadPersistedRuntimeState(): LocalRuntimeState {
         ? "revoked" as const
         : device.status === "authentication_required"
           ? "authentication_required" as const
+          : device.status === "mcp_unavailable"
+            ? "mcp_unavailable" as const
           : "offline" as const
     }));
     const jobs = records<RuntimeJob>(parsed.jobs).map((job) => ({
@@ -349,7 +351,7 @@ export const localRuntimeRepository: RuntimeRepository = {
     const found = state.devices.get(deviceId);
     if (!found || found.status === "revoked") return null;
     const now = new Date().toISOString();
-    const effectiveStatus = status === "online" && [...state.jobs.values()].some(
+    const effectiveStatus = status !== "authentication_required" && [...state.jobs.values()].some(
       (job) => activeAuthenticationHoldForJob(state, job)?.device_id === deviceId
     )
       ? "authentication_required"

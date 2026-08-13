@@ -102,6 +102,29 @@ describe("durable job queue contract", () => {
     expect(duplicateAfterCompletion.status).toBe("completed");
   });
 
+  it("keeps queued jobs untouched while the responsive worker is waiting for Taobao MCP", async () => {
+    await localRuntimeRepository.createDevice(device);
+    const pending = await localRuntimeRepository.createJob({
+      id: "job-waiting-for-mcp",
+      user_id: device.user_id,
+      session_id: "session-waiting-for-mcp",
+      job_type: "module_search",
+      idempotency_key: "waiting-for-mcp",
+      payload: { keyword: "车载充电器" }
+    });
+
+    const reconnecting = await localRuntimeRepository.heartbeatDevice(device.id, "mcp_unavailable");
+    expect(reconnecting?.status).toBe("mcp_unavailable");
+    expect(await localRuntimeRepository.claimJob(reconnecting!, 30_000)).toBeNull();
+    expect(await localRuntimeRepository.getJob(pending.id)).toMatchObject({
+      status: "pending",
+      attempts: 0
+    });
+
+    const online = await localRuntimeRepository.heartbeatDevice(device.id, "online");
+    expect((await localRuntimeRepository.claimJob(online!, 30_000))?.id).toBe(pending.id);
+  });
+
   it("persists a server-validated proof for a live Taobao MCP result", async () => {
     await localRuntimeRepository.createDevice(device);
     const sessionId = `session-live-evidence-${Date.now()}`;

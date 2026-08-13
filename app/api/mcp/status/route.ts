@@ -17,8 +17,10 @@ export async function GET() {
       const cartAvailable = executorDevices.capabilities.add_to_cart.available;
       const message = executorDevices.authentication_required > 0 && executorDevices.online === 0
         ? "本地执行器已暂停领取任务：淘宝账号需要重新登录。登录恢复后，搜索不会自动继续；请由你确认继续中断的搜索，或直接查看已有部分结果。"
+        : executorDevices.mcp_unavailable > 0 && executorDevices.online === 0
+          ? "淘宝桌面版工具暂未就绪，真实搜索已安全排队。本地执行器会持续检测，连接恢复后自动领取未完成的搜索任务。"
         : executorDevices.online === 0
-        ? "本地执行器队列已配置，但当前没有在线设备。请在设置页运行 Doctor 并启动 worker:local。"
+        ? "本地执行器队列已配置，但当前没有响应设备。npm run dev 会自动重启 Worker；也可在设置页运行 Doctor 检查淘宝桌面版。"
         : !searchAvailable
           ? "本地执行器在线，但没有设备声明商品搜索能力；搜索任务不会被错误领取。"
           : cartAvailable
@@ -29,12 +31,15 @@ export async function GET() {
         configured_mode: getConfiguredExecutionBackend(),
         product_mode: getProductMode(),
         demo_cart_fallback: allowDemoCartFallback(),
+        search_available: searchAvailable,
+        cart_available: cartAvailable,
         available: searchAvailable,
         message,
         permissions_scope: ["本地淘宝搜索", "本地商品详情", "加购需显式确认"],
         executor_devices: {
           online: executorDevices.online,
           registered: executorDevices.registered,
+          mcp_unavailable: executorDevices.mcp_unavailable,
           authentication_required: executorDevices.authentication_required,
           capabilities: executorDevices.capabilities
         }
@@ -46,6 +51,8 @@ export async function GET() {
       configured_mode: getConfiguredExecutionBackend(),
       product_mode: getProductMode(),
       demo_cart_fallback: allowDemoCartFallback(),
+      search_available: status.available,
+      cart_available: status.available,
       available: status.available,
       message: status.message,
       permissions_scope: status.permissions_scope
