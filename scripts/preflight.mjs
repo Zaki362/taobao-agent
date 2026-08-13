@@ -668,11 +668,8 @@ function assertArchitectureContracts() {
         orchestrator.includes('event_type: "agent.purchase_bundle.accepted"') &&
         cart.includes("refreshBundleAdoptionProgress") &&
         mcpHosted.includes("refreshBundleAdoptionProgress") &&
-        dashboard.includes("/api/session/purchase-bundle") &&
-        dashboardResults.includes("采用这套组合") &&
-        dashboardResults.includes("逐件确认加购") &&
         sessionsRoute.includes("bundle_adoption: session.bundle_adoption"),
-      message: "预算安全购买组合必须经用户确认后形成服务端校验的待处理清单，并仅通过逐件高风险确认推进加购"
+      message: "预算安全购买组合服务端能力必须经用户确认后形成校验过的待处理清单，并仅通过逐件高风险确认推进加购"
     },
     {
       ok:

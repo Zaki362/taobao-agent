@@ -7,7 +7,6 @@ import {
   CheckCircle2,
   ExternalLink,
   Loader2,
-  PackageCheck,
   RefreshCw,
   Search,
   ShoppingCart,
@@ -57,7 +56,7 @@ function ProductImage({ product, className = "" }: { product: ProductCandidate; 
   );
 }
 
-function BundleItemImage({ item }: { item: DashboardShoppingListItem }) {
+function ShoppingItemImage({ item }: { item: DashboardShoppingListItem }) {
   const [failed, setFailed] = useState(false);
   const imageUrl = item.image_url?.trim().replace(/^http:\/\//, "https://");
 
@@ -112,7 +111,6 @@ export function ResultsPage({
   onSelectModule,
   selectedProducts,
   onRecoverCompletionGaps,
-  onAcceptPurchaseBundle,
   onAddToCart,
   onProceedToCartReview,
   onReturnToSearchProgress,
@@ -127,7 +125,6 @@ export function ResultsPage({
   onSelectModule: (moduleId: string) => void;
   selectedProducts: ProductCandidate[];
   onRecoverCompletionGaps: () => void;
-  onAcceptPurchaseBundle: () => void;
   onAddToCart: (product: ProductCandidate) => void;
   onProceedToCartReview: () => void;
   onReturnToSearchProgress: () => void;
@@ -150,25 +147,13 @@ export function ResultsPage({
       && task.module_id === selectedModuleId
       && (task.status === "pending" || task.status === "running")
   );
-  const completionReport = session.completion_report;
-  const purchaseBundle = completionReport?.purchase_bundle;
+  const gapCount = session.completion_report?.uncovered_module_ids.length ?? 0;
   const shoppingList = deriveShoppingListView(session);
   const authenticationPaused = isTaobaoAuthenticationPause(session);
   const cartAuthenticationPaused = isTaobaoCartAuthenticationPause(session, mcpStatus);
   const selectedTaobaoMcpEvidence = findCurrentTaobaoMcpEvidence(session, selectedModuleId);
-  const gapCount = completionReport?.uncovered_module_ids.length ?? 0;
-  const bundleAddedCount = shoppingList.bundleItems.filter(
-    (item) => item.status === "added" && item.cart_source !== "demo"
-  ).length;
-  const bundleDemoCount = shoppingList.bundleItems.filter(
-    (item) => item.status === "added" && item.cart_source === "demo"
-  ).length;
-  const bundleQueuedCount = shoppingList.bundleItems.filter((item) => item.status === "queued").length;
-  const bundleFailedCount = shoppingList.bundleItems.filter((item) => item.status === "failed").length;
-  const bundleAwaitingCount = shoppingList.bundleItems.filter((item) => item.status === "awaiting_confirmation").length;
-  const bundleProgress = shoppingList.bundleItems.length > 0
-    ? Math.round((bundleAddedCount / shoppingList.bundleItems.length) * 100)
-    : 0;
+  const visibleShoppingItems = shoppingList.listItems.filter((item) => item.status !== "suggested");
+  const shoppingPreviewItems = visibleShoppingItems.slice(0, 4);
 
   const shoppingItemForProduct = (productId: string) =>
     shoppingList.listItems.find((item) => item.product_id === productId)
@@ -194,124 +179,10 @@ export function ResultsPage({
         </div>
       ) : null}
 
-      <section className="purchase-bundle-card" aria-labelledby="agent-bundle-title">
-        <div className="space-y-5 p-5 md:p-6">
-          <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-            <div className="flex min-w-0 items-start gap-3.5">
-              <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-[15px] bg-primary text-white shadow-card" aria-hidden="true">
-                <Sparkles className="h-4 w-4" />
-              </span>
-              <div className="min-w-0">
-                <div className="flex flex-wrap items-center gap-2">
-                  <p className="agent-brief-eyebrow">Agent 建议清单</p>
-                  {purchaseBundle ? (
-                    <Badge variant={shoppingList.bundleAdopted ? "success" : "secondary"}>
-                      {shoppingList.bundleAdopted ? "已采用" : "待你确认"}
-                    </Badge>
-                  ) : null}
-                </div>
-                <h1 id="agent-bundle-title" className="mt-1.5 text-2xl font-semibold leading-tight tracking-tight md:text-[28px]">
-                  {purchaseBundle
-                    ? `我先为你选好了 ${shoppingList.bundleItems.length} 件`
-                    : "候选结果已经整理完成"}
-                </h1>
-                <p className="mt-2 max-w-3xl text-sm leading-6 text-muted-foreground">
-                  {purchaseBundle
-                    ? `按你的 ${formatCurrency(purchaseBundle.total_budget)} 总预算组合，预计 ${formatCurrency(purchaseBundle.estimated_total)}。采用后仍由你逐件确认真实加购。`
-                    : "可以从下方切换分类，比较候选并逐件加入淘宝购物车。"}
-                </p>
-              </div>
-            </div>
-
-            {purchaseBundle ? (
-              <div className="grid shrink-0 grid-cols-3 gap-2 text-center sm:min-w-[300px]">
-                <div className="rounded-[16px] bg-white/80 px-3 py-2.5">
-                  <span className="block text-lg font-semibold">{shoppingList.bundleItems.length}</span>
-                  <span className="text-[10px] text-muted-foreground">清单商品</span>
-                </div>
-                <div className="rounded-[16px] bg-white/80 px-3 py-2.5">
-                  <span className="block text-lg font-semibold text-emerald-700">{bundleAddedCount}</span>
-                  <span className="text-[10px] text-muted-foreground">真实已加购</span>
-                </div>
-                <div className="rounded-[16px] bg-white/80 px-3 py-2.5">
-                  <span className="block text-lg font-semibold text-primary">{formatCurrency(shoppingList.bundleTotal)}</span>
-                  <span className="text-[10px] text-muted-foreground">组合估算</span>
-                </div>
-              </div>
-            ) : null}
-          </div>
-
-          {shoppingList.bundleItems.length > 0 ? (
-            <div className="grid gap-2.5 md:grid-cols-2">
-              {shoppingList.bundleItems.map((item) => (
-                <button
-                  key={item.product_id}
-                  type="button"
-                  className="purchase-bundle-item text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
-                  onClick={() => onSelectModule(item.module_id)}
-                  aria-label={`查看${item.module_name ?? "对应分类"}候选：${item.title}`}
-                >
-                  <span className="purchase-bundle-thumb"><BundleItemImage item={item} /></span>
-                  <span className="min-w-0 flex-1">
-                    <span className="flex items-center gap-2 text-[10px] font-medium text-muted-foreground">
-                      <span>{item.module_name ?? "推荐分类"}</span>
-                      <span aria-hidden="true">·</span>
-                      <strong className="text-primary">{formatCurrency(item.price)}</strong>
-                    </span>
-                    <span className="mt-1 block truncate text-sm font-medium text-foreground">{item.title}</span>
-                  </span>
-                  <ShoppingStatusBadge item={item} />
-                </button>
-              ))}
-            </div>
-          ) : null}
-
-          {purchaseBundle ? (
-            <div className="flex flex-col gap-4 border-t border-border/60 pt-4 lg:flex-row lg:items-center lg:justify-between">
-              {shoppingList.bundleAdopted ? (
-                <div className="min-w-0 flex-1" aria-live="polite">
-                  <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
-                    <span className="font-medium text-foreground">淘宝加购进度 {bundleAddedCount}/{shoppingList.bundleItems.length}</span>
-                    <span className="text-muted-foreground">
-                      {bundleQueuedCount > 0 ? `${bundleQueuedCount} 件处理中 · ` : ""}
-                      {bundleDemoCount > 0 ? `${bundleDemoCount} 件仅演示 · ` : ""}
-                      {bundleAwaitingCount + bundleFailedCount} 件待确认
-                    </span>
-                  </div>
-                  <div className="purchase-progress-track mt-2">
-                    <div className="purchase-progress-value" style={{ width: `${bundleProgress}%` }} />
-                  </div>
-                </div>
-              ) : (
-                <p className="text-xs leading-5 text-muted-foreground">采用清单只会保存待处理商品，不会批量操作淘宝，也不会下单支付。</p>
-              )}
-              <div className="flex flex-col gap-2 sm:flex-row">
-                {gapCount > 0 ? (
-                  <Button size="sm" variant="ghost" disabled={authenticationPaused || busy} onClick={onRecoverCompletionGaps}>
-                    补齐 {gapCount} 个缺失分类
-                  </Button>
-                ) : null}
-                {shoppingList.bundleAdopted ? (
-                  <Button size="sm" onClick={onProceedToCartReview} disabled={shoppingList.listItems.length === 0 || busy}>
-                    查看购物清单<ArrowRight className="h-4 w-4" />
-                  </Button>
-                ) : (
-                  <Button size="sm" onClick={onAcceptPurchaseBundle} disabled={busy || shoppingList.bundleItems.length === 0}>
-                    <PackageCheck className="h-4 w-4" />采用 Agent 建议清单
-                  </Button>
-                )}
-              </div>
-            </div>
-          ) : shoppingList.listItems.length > 0 ? (
-            <div className="flex justify-end border-t border-border/60 pt-4">
-              <Button size="sm" onClick={onProceedToCartReview}>查看购物清单<ArrowRight className="h-4 w-4" /></Button>
-            </div>
-          ) : null}
-        </div>
-      </section>
-
-      <div className="flex flex-col gap-2.5 lg:flex-row lg:items-center">
-        <div className="module-tabs hide-scrollbar min-w-0 flex-1" role="tablist" aria-label="商品分类">
+      <div className="results-workspace">
+        <section className="min-w-0 space-y-3" aria-label="淘宝搜索结果">
+          <div className="flex flex-col gap-2.5 xl:flex-row xl:items-center">
+            <div className="module-tabs hide-scrollbar min-w-0 flex-1" role="tablist" aria-label="商品分类">
           {session.shopping_plan.modules.map((module) => {
             const count = (session.module_candidates[module.module_id] ?? []).length;
             const active = selectedModule?.module_id === module.module_id;
@@ -330,23 +201,30 @@ export function ResultsPage({
               </button>
             );
           })}
-        </div>
-        {selectedTaobaoMcpEvidence ? (
-          <p
-            className="shrink-0 rounded-full border border-emerald-200 bg-emerald-50 px-3 py-2 text-[11px] font-medium text-emerald-800"
-            title={`${selectedTaobaoMcpEvidence.source_app} / ${selectedTaobaoMcpEvidence.tool} / Job ${selectedTaobaoMcpEvidence.job_id} / ${selectedTaobaoMcpEvidence.raw_result_count} 条`}
-          >
-            本次淘宝 MCP · {formatEvidenceTime(selectedTaobaoMcpEvidence.captured_at)} · 「{selectedTaobaoMcpEvidence.keyword}」
-          </p>
-        ) : null}
-      </div>
+            </div>
+            <div className="flex shrink-0 flex-wrap items-center gap-2">
+              {selectedTaobaoMcpEvidence ? (
+                <p
+                  className="rounded-full border border-emerald-200 bg-emerald-50 px-3 py-2 text-[11px] font-medium text-emerald-800"
+                  title={`${selectedTaobaoMcpEvidence.source_app} / ${selectedTaobaoMcpEvidence.tool} / Job ${selectedTaobaoMcpEvidence.job_id} / ${selectedTaobaoMcpEvidence.raw_result_count} 条`}
+                >
+                  本次淘宝 MCP · {formatEvidenceTime(selectedTaobaoMcpEvidence.captured_at)} · 「{selectedTaobaoMcpEvidence.keyword}」
+                </p>
+              ) : null}
+              {gapCount > 0 ? (
+                <Button size="sm" variant="outline" disabled={authenticationPaused || busy} onClick={onRecoverCompletionGaps}>
+                  补齐 {gapCount} 个缺失分类
+                </Button>
+              ) : null}
+            </div>
+          </div>
 
-      <div
-        id="product-results-panel"
-        className="product-result-grid"
-        role="tabpanel"
-        aria-labelledby={selectedModule ? `product-module-tab-${selectedModule.module_id}` : undefined}
-      >
+          <div
+            id="product-results-panel"
+            className="product-result-grid"
+            role="tabpanel"
+            aria-labelledby={selectedModule ? `product-module-tab-${selectedModule.module_id}` : undefined}
+          >
         {selectedProducts.map((product, index) => {
           const shoppingItem = shoppingItemForProduct(product.product_id);
           const effectiveStatus = cartingProductId === product.product_id ? "queued" : shoppingItem?.status;
@@ -422,7 +300,7 @@ export function ResultsPage({
         })}
 
         {selectedProducts.length === 0 ? (
-          <div className="empty-result-card md:col-span-2 lg:col-span-3">
+          <div className="empty-result-card md:col-span-2">
             <Search className="h-7 w-7 text-primary/70" />
             <h2 className="mt-4 text-lg font-semibold">{authenticationPaused ? "这个分类尚未完成真实搜索" : selectedModuleWaiting ? "这个分类仍在搜索" : "这个分类暂时没有可用商品"}</h2>
             <p className="mt-2 max-w-lg text-sm leading-6 text-muted-foreground">{authenticationPaused ? "恢复淘宝登录后，可以从搜索暂停页继续。" : selectedModuleWaiting ? "结果完成后会自动保存，可以稍后刷新查看。" : "只补搜当前分类，不会影响已经保存的其他候选。"}</p>
@@ -436,6 +314,82 @@ export function ResultsPage({
             </div>
           </div>
         ) : null}
+          </div>
+        </section>
+
+        <aside className="results-cart-sidebar" aria-labelledby="results-cart-title">
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <p className="agent-brief-eyebrow">实时购物摘要</p>
+              <h2 id="results-cart-title" className="mt-1 text-lg font-semibold">我的购物清单</h2>
+            </div>
+            <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-[14px] bg-primary/10 text-primary">
+              <ShoppingCart className="h-5 w-5" />
+            </span>
+          </div>
+
+          <div className="results-cart-metrics" aria-live="polite">
+            <div>
+              <strong>{shoppingList.realAddedCount}</strong>
+              <span>淘宝已加购</span>
+            </div>
+            <div>
+              <strong>{formatCurrency(shoppingList.realAddedTotal)}</strong>
+              <span>已加购总价</span>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-3 gap-2 text-center text-[11px]">
+            <div className="results-cart-status"><strong>{shoppingList.queuedCount}</strong><span>处理中</span></div>
+            <div className="results-cart-status"><strong>{shoppingList.awaitingCount}</strong><span>待确认</span></div>
+            <div className="results-cart-status"><strong>{shoppingList.failedCount}</strong><span>需重试</span></div>
+          </div>
+
+          {shoppingPreviewItems.length > 0 ? (
+            <div className="space-y-2 border-t border-border/60 pt-4">
+              {shoppingPreviewItems.map((item) => (
+                <button
+                  key={item.product_id}
+                  type="button"
+                  className="results-cart-item"
+                  onClick={() => onSelectModule(item.module_id)}
+                  aria-label={`查看${item.module_name ?? "对应分类"}：${item.title}`}
+                >
+                  <span className="h-11 w-11 shrink-0 overflow-hidden rounded-[12px] bg-muted"><ShoppingItemImage item={item} /></span>
+                  <span className="min-w-0 flex-1 text-left">
+                    <span className="block truncate text-xs font-medium text-foreground">{item.title}</span>
+                    <span className="mt-0.5 block text-[11px] font-semibold text-primary">{formatCurrency(item.price)}</span>
+                  </span>
+                  <ShoppingStatusBadge item={item} />
+                </button>
+              ))}
+              {visibleShoppingItems.length > shoppingPreviewItems.length ? (
+                <p className="text-center text-[11px] text-muted-foreground">另有 {visibleShoppingItems.length - shoppingPreviewItems.length} 件商品</p>
+              ) : null}
+            </div>
+          ) : (
+            <div className="results-cart-empty">
+              <ShoppingCart className="h-5 w-5" />
+              <p>还没有加入商品</p>
+              <span>从左侧候选中逐件确认即可</span>
+            </div>
+          )}
+
+          {shoppingList.demoAddedCount > 0 ? (
+            <p className="rounded-[12px] bg-amber-50 px-3 py-2 text-[11px] leading-5 text-amber-800">
+              另有 {shoppingList.demoAddedCount} 件仅在演示清单中，未计入淘宝已加购。
+            </p>
+          ) : null}
+
+          <Button
+            className="w-full"
+            onClick={onProceedToCartReview}
+            disabled={visibleShoppingItems.length === 0 || busy}
+          >
+            查看购物清单<ArrowRight className="h-4 w-4" />
+          </Button>
+          <p className="text-center text-[10px] leading-4 text-muted-foreground">SceneCart 不会自动下单或支付</p>
+        </aside>
       </div>
     </div>
   );

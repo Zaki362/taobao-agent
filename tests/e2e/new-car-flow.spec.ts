@@ -415,7 +415,7 @@ test("authenticated new-car workflow reaches recommendations through the durable
     await expect(page.getByRole("button", { name: "查看推荐结果" })).toBeEnabled();
     await page.getByRole("button", { name: "查看推荐结果" }).click();
     await expect(page.getByText("这个分类暂时没有可用商品")).toBeVisible();
-    await expect(page.getByText("Agent 建议清单", { exact: true })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "我的购物清单" })).toBeVisible();
     await expect(page.getByText("还有可以补强的地方")).toHaveCount(0);
     await expect(page.getByText("换个思路", { exact: true })).toHaveCount(0);
 
@@ -461,7 +461,7 @@ test("authenticated new-car workflow reaches recommendations through the durable
     const recentTask = page.locator("article").filter({ hasText: completedState.raw_input }).first();
     await expect(recentTask).toContainText("推荐已生成");
     await recentTask.getByRole("button", { name: "继续" }).click();
-    await expect(page.getByText("Agent 建议清单", { exact: true })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "我的购物清单" })).toBeVisible();
 
     const unconfirmedRecovery = await page.request.post("/api/agent/remediate", {
       headers: { Origin: "http://127.0.0.1:3100" },
@@ -506,44 +506,27 @@ test("authenticated new-car workflow reaches recommendations through the durable
     });
     expect(unconfirmedBundle.status()).toBe(400);
 
+    const cartSummary = page.getByRole("complementary", { name: "我的购物清单" });
+    await expect(cartSummary.getByText("淘宝已加购", { exact: true })).toBeVisible();
+    await expect(cartSummary.getByText("已加购总价", { exact: true })).toBeVisible();
+    await expect(cartSummary.getByRole("button", { name: "查看购物清单" })).toBeDisabled();
     page.once("dialog", (dialog) => dialog.accept());
-    await page.getByRole("button", { name: "采用 Agent 建议清单" }).click();
-    const adoptedBundle = page.getByRole("region", { name: /我先为你选好了/ });
-    await expect(adoptedBundle.getByText("已采用", { exact: true })).toBeVisible();
-    const adoptedResponse = await page.request.get(`/api/session/state?session_id=${persistedSessionId}`);
-    const adoptedState = await adoptedResponse.json() as {
-      bundle_adoption: { status: string; product_ids: string[]; pending_product_ids: string[] };
-    };
-    expect(adoptedState.bundle_adoption.status).toBe("accepted");
-    expect(adoptedState.bundle_adoption.pending_product_ids).toEqual(adoptedState.bundle_adoption.product_ids);
-    await expect(adoptedBundle.getByText("待加购", { exact: true })).toHaveCount(
-      adoptedState.bundle_adoption.product_ids.length
-    );
-    await expect(adoptedBundle.getByText(`淘宝加购进度 0/${adoptedState.bundle_adoption.product_ids.length}`)).toBeVisible();
-    await expect(page.getByRole("button", { name: "查看购物清单" })).toBeEnabled();
-
-    await page.getByRole("button", { name: "查看购物清单" }).focus();
-    await page.keyboard.press("Enter");
-    await expect(page.getByRole("heading", { name: `购物清单共 ${adoptedState.bundle_adoption.product_ids.length} 件` })).toBeVisible();
-    await expect(page.getByText("待确认加购", { exact: true })).toHaveCount(
-      adoptedState.bundle_adoption.product_ids.length
-    );
-    await expect(page.getByText("真实已加购金额 ¥0", { exact: true })).toBeVisible();
-    await page.getByRole("button", { name: "返回上一步继续加购" }).click();
-
-    page.once("dialog", (dialog) => dialog.accept());
-    await page.getByRole("button", { name: "确认加购" }).first().click();
+    await page.getByRole("button", { name: "加入购物车" }).first().click();
     await expect(page.getByRole("button", { name: "淘宝已加" }).first()).toBeVisible({
       timeout: 30_000
     });
+    await expect(cartSummary.locator(".results-cart-metrics > div").first().getByText("1", { exact: true })).toBeVisible();
 
-    await page.getByRole("button", { name: "查看购物清单" }).focus();
+    await cartSummary.getByRole("button", { name: "查看购物清单" }).focus();
     await page.keyboard.press("Enter");
+    await expect(page.getByRole("heading", { name: "购物清单共 1 件" })).toBeVisible();
     await expect(page.getByText("我的购物清单")).toBeVisible();
     await expect(page.getByText(/E2E 真实链路候选/).first()).toBeVisible();
     await expect(page.getByRole("button", { name: "在淘宝购物车中管理" }).first()).toBeVisible();
 
-    const selectedProductId = adoptedState.bundle_adoption.product_ids[0];
+    const selectedStateResponse = await page.request.get(`/api/session/state?session_id=${persistedSessionId}`);
+    const selectedState = await selectedStateResponse.json() as { selected_items: Array<{ product_id: string }> };
+    const selectedProductId = selectedState.selected_items[0].product_id;
     const unconfirmedRemoval = await page.request.post("/api/cart/remove", {
       headers: { Origin: "http://127.0.0.1:3100" },
       data: {

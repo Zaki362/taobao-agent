@@ -269,16 +269,9 @@ async function runDemo(page, context) {
     await page.getByText(/面试演示数据：采集于 2026-08-08/).first().waitFor();
   });
 
-  await step("显式采用 Agent 建议清单", async () => {
-    page.once("dialog", (dialog) => dialog.accept());
-    await page.getByRole("button", { name: "采用 Agent 建议清单" }).click();
-    await page.getByText("已采用", { exact: true }).waitFor();
-    await page.getByRole("button", { name: "查看购物清单" }).waitFor();
-  });
-
   await step("确认加入产品内演示清单（不会调用淘宝加购）", async () => {
     page.once("dialog", (dialog) => dialog.accept());
-    await page.getByRole("button", { name: "确认加购" }).first().click();
+    await page.getByRole("button", { name: "加入购物车" }).first().click();
     await page.getByText("演示已加", { exact: true }).first().waitFor({ timeout: 30_000 });
   });
 

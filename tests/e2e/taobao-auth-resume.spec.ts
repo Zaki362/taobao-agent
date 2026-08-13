@@ -302,7 +302,7 @@ test("Taobao login loss pauses the page and resumes the same durable job atomica
       partial_results_status: "partial_results_accepted"
     }
   });
-  await expect(page.getByText("Agent 建议清单", { exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "我的购物清单" })).toBeVisible();
   await expect(page.getByText(/淘宝真实链路候选/).first()).toBeVisible();
   await expect(page.getByText(/本次淘宝 MCP ·/).first()).toBeVisible();
   await expect(page.getByText("淘宝登录已失效，加购已暂停", { exact: true })).toBeVisible();
