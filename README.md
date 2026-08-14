@@ -99,6 +99,16 @@ npm run dev
 
 `npm run dev` 现在是一命令开发入口：它先启动网页；如果 `.env.local` 已配置 `SCENECART_DEVICE_TOKEN`，会在网页健康后自动启动正式 `worker:local`。首次使用时可以保持该命令运行，完成设备注册和 `executor:configure` 后，启动器会热发现新令牌并自动接入 Worker，不需要重启网页或再开第二个终端。Worker 异常退出时，启动器会按 1 秒起、最多 30 秒的指数退避自动重启；同一时间只保留一个 Worker，令牌更新时会安全切换。淘宝 MCP 尚未就绪不会让搜索被错误领取：Worker 会保持运行并持续探测，网页显示恢复状态，MCP 恢复后自动消费原有搜索队列。`npm run dev:web` 只启动 Next.js，供 E2E、纯 UI 调试或需要手动管理 Worker 时使用；`dev:auto` 保留为 `dev` 的兼容别名。若 `3000` 已被其他应用占用，启动器会选择下一个可用端口并在终端打印准确地址；配置脚本和 Doctor 会自动识别该 SceneCart 实例。
 
+网页部署在 Vercel、运行时使用 Neon PostgreSQL，而淘宝仍由面试电脑执行时，使用云端面试启动器：
+
+```bash
+npm run demo:cloud:prepare -- --url https://你的正式域名
+npm run demo:cloud:configure
+npm run demo:cloud -- --url https://你的正式域名
+```
+
+`prepare` 只需在首次接入或更换云端地址时运行：它保留本地 `SCENECART_API_URL` 和本地设备令牌，只新增云端地址，并把恢复密钥保存到 Git 忽略、权限 0600 的本机文件。云端 `/settings/executor` 注册设备后运行 `demo:cloud:configure`，隐藏保存独立的 `SCENECART_CLOUD_DEVICE_TOKEN`；它不会覆盖本地令牌。`demo:cloud` 用于面试开始前约 10–15 分钟到面试结束这段时间：先校验 HTTPS、production、PostgreSQL、执行器协议、淘宝 MCP、云端设备令牌和恢复密钥，再持续监督本机真实淘宝 Worker；在没有外部分钟级调度的 Hobby 环境中，还会同时维持恢复心跳。它不会部署网页，也不会启动本地 Next.js。演示结束按 `Ctrl+C`，不要为了常驻而持续消耗免费额度。只做无常驻进程的预检可加 `--check`；只有已经配置外部分钟级恢复调度时才加 `--skip-recovery`。
+
 首次连接本地执行器时，在 `/settings/executor` 注册设备并复制一次性令牌。设备始终需要绑定 SceneCart 账号；即使主购物流程处于本地匿名开发模式，设置页也会先引导登录/注册，并在成功后自动返回。然后在项目目录运行：
 
 ```bash
@@ -160,6 +170,8 @@ DATABASE_SSL=false
 AUTH_REQUIRED=true
 APP_ORIGIN=https://your-scenecart.example.com
 SCENECART_API_URL=http://127.0.0.1:3000
+SCENECART_DEMO_CLOUD_URL=https://your-scenecart.example.com
+SCENECART_CLOUD_DEVICE_TOKEN=
 SCENECART_DEVICE_TOKEN=
 SCENECART_CRON_SECRET=
 ```
@@ -182,6 +194,8 @@ SCENECART_CRON_SECRET=
 - `AUTH_REQUIRED=true`：正式部署必须开启，确保 Session、设备与任务按用户隔离。
 - `APP_ORIGIN`：正式产品允许发起写请求的网页 Origin；多个地址使用逗号分隔。
 - `SCENECART_RELEASE_VERIFY_URL`：可选的正式发布探测地址；`npm run release:verify` 未显式传 `--url` 时优先使用它，否则使用 `APP_ORIGIN` 的第一个地址。
+- `SCENECART_DEMO_CLOUD_URL`：可选的云端面试网页根地址；`npm run demo:cloud` 未传 `--url` 时优先读取它。该命令只接受非本地 HTTPS 地址。
+- `SCENECART_CLOUD_DEVICE_TOKEN`：只保存在面试电脑 `.env.local` 的云端设备令牌；与纯本地 `SCENECART_DEVICE_TOKEN` 分离，不能上传 Vercel。
 - `SCENECART_DEVICE_TOKEN`：在 `/settings/executor` 注册设备后一次性获得，配置在运行淘宝桌面版与本地执行器的机器，不应写入仓库。
 - `SCENECART_CRON_SECRET`：至少 32 字符的独立高熵密钥，只用于保护服务端恢复扫描端点；不能复用设备 Token、DeepSeek Key 或用户密码。
 - `SCENECART_RECOVERY_STALE_MS`：恢复调度失联阈值，默认 180000ms；readiness 会校验持久心跳，而不是只检查 Secret 是否存在。

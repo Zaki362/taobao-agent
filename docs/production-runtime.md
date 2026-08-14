@@ -230,6 +230,14 @@ pending -> leased -> running -> completed
 
 自托管环境运行 `npm run worker:recovery`，默认每 30 秒处理最多 5 个可恢复会话；云平台可每分钟调用一次内部恢复端点。PostgreSQL 会通过活动工作流部分索引定位扫描范围，先排除仍有健康运行 Job 的会话，再按最旧更新时间选出真正需要补偿的候选，避免普通会话数量超过 100 或健康任务长期占位造成扫描饥饿。单个异常 Session 的恢复失败会被隔离并计入 `failed`，不会阻塞同批其他会话。每次扫描会 UPSERT `runtime_service_heartbeats`；readiness 和执行台默认在 180 秒无新心跳后报告失联。两种方式都不会调用淘宝，只处理服务端持久状态。可用 `SCENECART_RECOVERY_INTERVAL_MS` 调整常驻 Worker 间隔，最小 10 秒；用 `SCENECART_RECOVERY_STALE_MS` 调整失联阈值。
 
+面试使用 Vercel Hobby 且没有外部分钟级调度时，可以从运行淘宝桌面版的电脑临时启动完整本机侧：
+
+```bash
+npm run demo:cloud -- --url https://你的正式域名
+```
+
+启动器会先检查云端 production/PostgreSQL 契约和本机淘宝能力，再监督 `worker:local` 与 `worker:recovery`。它只用于面试预热到结束的短时窗口；不是生产守护进程，也不替代数据库 migration。若外部恢复调度已就绪，可显式加 `--skip-recovery`，避免重复的恢复心跳。
+
 仓库 `.github/workflows/quality.yml` 已提供 PostgreSQL 16 集成验证、migration 检查、advisory lock 竞争测试、单元测试、生产构建和端到端测试。正式发布应将该 workflow 设为主分支必需检查。
 
 ## 8. 验证

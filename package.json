@@ -31,6 +31,9 @@
     "worker:recovery": "node scripts/workflow-recovery-worker.mjs",
     "executor:configure": "node scripts/configure-executor.mjs",
     "executor:doctor": "node scripts/executor-doctor.mjs",
+    "demo:cloud:prepare": "node scripts/prepare-cloud-demo.mjs",
+    "demo:cloud:configure": "node scripts/configure-cloud-executor.mjs",
+    "demo:cloud": "node scripts/demo-cloud.mjs",
     "demo:interview": "node scripts/interview-demo.mjs",
     "demo:interview:verify": "node scripts/interview-demo.mjs --verify"
   },

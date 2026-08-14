@@ -32,9 +32,12 @@ TAOBAO_EXECUTION_BACKEND=local_executor
 SCENECART_ENABLE_MCP_DEBUG=false
 SCENECART_CRON_SECRET=至少32字符的独立随机密钥
 SCENECART_RECOVERY_STALE_MS=180000
+DATABASE_POOL_SIZE=1
 ```
 
 `DATABASE_URL`、`POSTGRES_PASSWORD`、`DEEPSEEK_API_KEY` 和 `SCENECART_CRON_SECRET` 应使用部署平台 Secret，不写入镜像、Compose 文件或 Git。设备令牌只保存在运行 `worker:local` 的用户机器 `.env.local` 中，不上传到部署平台。自托管 Compose 会启动独立 `recovery` 服务；其他平台应每分钟携带 Bearer Secret 调用 `/api/internal/workflow-recovery`。
+
+当前 Vercel Hobby 面试部署在 `vercel.json` 固定使用单一 `sin1` Function Region；Neon 也应选择 `sin1`，让服务端事务与数据库同区。`DATABASE_POOL_SIZE=1` 用于限制每个 Serverless 实例持有的 PostgreSQL 连接数；连接字符串优先使用 Neon 提供的 pooled `DATABASE_URL`。纯本地运行不读取 `vercel.json`，仍由 `npm run dev` 和本地 runtime 独立工作。
 
 ## 发布检查
 

@@ -153,7 +153,7 @@ function assertPackageScripts() {
   }
 
   const scripts = pkg.scripts ?? {};
-  const required = ["dev", "build", "typecheck", "preflight", "release:audit", "release:verify", "check", "db:migrate", "db:check", "test:unit", "test:integration", "test:e2e", "eval:agent", "worker:local", "worker:recovery", "executor:configure", "executor:doctor"];
+  const required = ["dev", "build", "typecheck", "preflight", "release:audit", "release:verify", "check", "db:migrate", "db:check", "test:unit", "test:integration", "test:e2e", "eval:agent", "worker:local", "worker:recovery", "executor:configure", "executor:doctor", "demo:cloud:prepare", "demo:cloud:configure", "demo:cloud"];
 
   for (const scriptName of required) {
     if (typeof scripts[scriptName] !== "string") {
@@ -378,8 +378,14 @@ function assertRequiredFiles() {
     "scripts/configure-executor.mjs",
     "scripts/executor-config-utils.mjs",
     "scripts/executor-doctor.mjs",
+    "scripts/demo-cloud.mjs",
+    "scripts/demo-cloud-utils.mjs",
+    "scripts/cloud-demo-config.mjs",
+    "scripts/prepare-cloud-demo.mjs",
+    "scripts/configure-cloud-executor.mjs",
     "scripts/db-migrate.mjs",
     "scripts/db-check.mjs",
+    "vercel.json",
     ".github/workflows/quality.yml",
     "Dockerfile",
     "docker-compose.yml",

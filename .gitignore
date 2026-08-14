@@ -27,6 +27,10 @@ pnpm-debug.log*
 .DS_Store
 .idea
 .vscode
+# Marketplace integrations may install local agent helper skills. They are not
+# required by the application or deployment artifact.
+.agents
+skills-lock.json
 
 # local runtime / cache
 .data

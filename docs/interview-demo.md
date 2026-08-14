@@ -93,6 +93,18 @@ npm run test:integration
 
 ## 4. 面试前一小时：本机运行预检
 
+如果本次展示采用“Vercel 网页 + Neon PostgreSQL + 本机淘宝 Worker”，不要运行本地网页。先确保生产环境已经完成 migration，在云端 `/settings/executor` 注册当前电脑的设备令牌，并保持淘宝 MCP 可用。首次配置依次运行：
+
+```bash
+npm run demo:cloud:prepare -- --url https://你的正式域名
+npm run demo:cloud:configure
+npm run demo:cloud -- --url https://你的正式域名
+```
+
+看到 `READY cloud_demo` 后再打开打印的云端地址操作。该命令会保持真实淘宝 Worker 和 Hobby 环境需要的恢复 Worker 在线，并在异常退出后指数退避重启；演示结束按 `Ctrl+C`。它不是部署命令，不能代替 Vercel/Neon 配置和数据库迁移，也不适合 24 小时常驻。前一天只验证配置可运行 `npm run demo:cloud -- --check --url https://你的正式域名`；check 模式退出时不会留下在线 Worker。
+
+下方 4.1–4.3 是纯本地网页演示路径。云端演示仍需执行 Doctor，但不需要再运行 `npm run dev`。
+
 ### 4.1 配置演示环境
 
 `.env.local` 至少确认以下值，不要在录屏或投屏中展示令牌和 Key：
