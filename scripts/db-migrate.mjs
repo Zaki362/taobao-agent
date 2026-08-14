@@ -5,10 +5,10 @@ import process from "node:process";
 import pg from "pg";
 
 const { Pool } = pg;
-const databaseUrl = process.env.DATABASE_URL;
+const databaseUrl = process.env.DATABASE_URL_UNPOOLED || process.env.DATABASE_URL;
 
 if (!databaseUrl) {
-  throw new Error("DATABASE_URL is required to run migrations.");
+  throw new Error("DATABASE_URL_UNPOOLED or DATABASE_URL is required to run migrations.");
 }
 
 const pool = new Pool({
