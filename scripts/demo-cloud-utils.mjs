@@ -1,5 +1,18 @@
 const LOCAL_HOSTNAMES = new Set(["localhost", "127.0.0.1", "::1"]);
 
+export function resolveNodeProxyEnvironment(environment = {}) {
+  if (environment.NODE_USE_ENV_PROXY !== undefined) return {};
+  const proxyConfigured = [
+    environment.HTTPS_PROXY,
+    environment.HTTP_PROXY,
+    environment.ALL_PROXY,
+    environment.https_proxy,
+    environment.http_proxy,
+    environment.all_proxy
+  ].some((value) => Boolean(String(value ?? "").trim()));
+  return proxyConfigured ? { NODE_USE_ENV_PROXY: "1" } : {};
+}
+
 export function parseCloudDemoArgs(args = []) {
   const options = {
     checkOnly: false,

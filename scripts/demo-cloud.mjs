@@ -11,6 +11,7 @@ import { createWorkerSupervisor } from "./dev-auto-supervisor.mjs";
 import {
   normalizeCloudDemoUrl,
   parseCloudDemoArgs,
+  resolveNodeProxyEnvironment,
   sanitizeCloudDemoMessage,
   validateCloudRuntime
 } from "./demo-cloud-utils.mjs";
@@ -109,6 +110,7 @@ async function relaunchWithNode22IfAvailable() {
     stdio: "inherit",
     env: {
       ...process.env,
+      ...resolveNodeProxyEnvironment(process.env),
       [NODE_22_REEXEC_FLAG]: "true",
       PATH: `${path.dirname(node22)}${path.delimiter}${process.env.PATH ?? ""}`
     }

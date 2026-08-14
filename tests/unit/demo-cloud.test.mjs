@@ -6,6 +6,7 @@ import {
 import {
   normalizeCloudDemoUrl,
   parseCloudDemoArgs,
+  resolveNodeProxyEnvironment,
   sanitizeCloudDemoMessage,
   validateCloudRuntime
 } from "../../scripts/demo-cloud-utils.mjs";
@@ -58,6 +59,16 @@ describe("cloud interview demo launcher", () => {
     expect(sanitizeCloudDemoMessage(
       "Bearer abcdefghijklmnopqrstuvwxyz0123456789 postgresql://user:password@example/db"
     )).toBe("Bearer [redacted] [redacted-database-url]");
+  });
+
+  it("enables Node's environment proxy support only when a proxy is configured", () => {
+    expect(resolveNodeProxyEnvironment({ HTTPS_PROXY: "http://127.0.0.1:7890" }))
+      .toEqual({ NODE_USE_ENV_PROXY: "1" });
+    expect(resolveNodeProxyEnvironment({})).toEqual({});
+    expect(resolveNodeProxyEnvironment({
+      HTTPS_PROXY: "http://127.0.0.1:7890",
+      NODE_USE_ENV_PROXY: "0"
+    })).toEqual({});
   });
 
   it("adds or replaces only the cloud demo URL in local configuration", () => {
