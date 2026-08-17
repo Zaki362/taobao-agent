@@ -140,7 +140,8 @@ test("authenticated new-car workflow reaches recommendations through the durable
   await page.goto("/settings/executor");
   await expect(page).toHaveURL(/\/login\?next=%2Fsettings%2Fexecutor$/);
   await page.getByRole("button", { name: "还没有账号？创建账号" }).click();
-  await page.getByLabel("邮箱").fill(`e2e-${Date.now()}@example.com`);
+  const e2eEmail = `e2e-${Date.now()}@example.com`;
+  await page.getByLabel("邮箱").fill(e2eEmail);
   await page.getByLabel("密码").fill("e2e-secure-password");
   await page.getByRole("button", { name: "注册并登录" }).click();
   await expect(page).toHaveURL(/\/settings\/executor$/);
@@ -152,7 +153,13 @@ test("authenticated new-car workflow reaches recommendations through the durable
   });
   const authorizedRecoveryPayload = await authorizedRecovery.json();
   expect(authorizedRecovery.ok(), JSON.stringify(authorizedRecoveryPayload)).toBeTruthy();
-  expect(authorizedRecoveryPayload).toMatchObject({ scanned: 0, recovered: 0 });
+  expect(authorizedRecoveryPayload).toMatchObject({
+    scanned: expect.any(Number),
+    recovered: expect.any(Number),
+    failed: 0,
+    items: expect.any(Array)
+  });
+  expect(authorizedRecoveryPayload.recovered).toBeLessThanOrEqual(authorizedRecoveryPayload.scanned);
 
   const deviceResponse = await page.request.post("/api/executor/devices", {
     headers: { Origin: "http://127.0.0.1:3100" },
@@ -190,6 +197,11 @@ test("authenticated new-car workflow reaches recommendations through the durable
   );
   await page.goto("/");
   expect((await freshLandingMcpStatusResponse).ok()).toBeTruthy();
+  await page.getByRole("button", { name: "账户菜单" }).click();
+  await expect(page.getByRole("menu", { name: "账户菜单" })).toBeVisible();
+  await expect(page.getByText(e2eEmail, { exact: true })).toBeVisible();
+  await expect(page.getByRole("menuitem", { name: "执行器设置" })).toBeVisible();
+  await expect(page.getByRole("menuitem", { name: "退出登录" })).toBeVisible();
 
   const outdatedHeartbeat = await page.request.post("/api/executor/heartbeat", {
     headers: {

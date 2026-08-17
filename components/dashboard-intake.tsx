@@ -179,16 +179,29 @@ export function LandingPage({
   onRestoreSession: (session: ShoppingSessionSummary) => void;
 }) {
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const [authenticated, setAuthenticated] = useState(false);
   const [authenticationRequired, setAuthenticationRequired] = useState(false);
+  const [accountEmail, setAccountEmail] = useState("");
+  const [accountMenuOpen, setAccountMenuOpen] = useState(false);
   const canStart = sceneInput.trim().length >= 6 && interactiveReady && !busy;
   const scenario = getScenarioConfig(selectedScenario);
 
   useEffect(() => {
     fetch("/api/auth/me")
       .then((response) => response.json())
-      .then((payload) => setAuthenticationRequired(payload.authentication_required === true))
+      .then((payload) => {
+        setAuthenticated(payload.authenticated === true);
+        setAuthenticationRequired(payload.authentication_required === true);
+        setAccountEmail(typeof payload.user?.email === "string" ? payload.user.email : "");
+      })
       .catch(() => undefined);
   }, []);
+
+  async function logout() {
+    setAccountMenuOpen(false);
+    await fetch("/api/auth/logout", { method: "POST" }).catch(() => undefined);
+    window.location.assign("/login");
+  }
 
   return (
     <div className="landing-shell">
@@ -205,7 +218,53 @@ export function LandingPage({
           <a href="/settings/executor" className="header-icon-link" title="设置" aria-label="设置">
             <Settings2 className="h-4 w-4" />
           </a>
-          {authenticationRequired ? <a href="/login" className="header-text-link">账户</a> : null}
+          {authenticationRequired ? (
+            authenticated ? (
+              <div className="relative">
+                <button
+                  type="button"
+                  className="header-text-link"
+                  aria-label="账户菜单"
+                  aria-haspopup="menu"
+                  aria-expanded={accountMenuOpen}
+                  onClick={() => setAccountMenuOpen((open) => !open)}
+                >
+                  账户
+                </button>
+                {accountMenuOpen ? (
+                  <div
+                    role="menu"
+                    aria-label="账户菜单"
+                    className="absolute right-0 top-11 z-50 w-64 rounded-[20px] border border-border/70 bg-white p-2 shadow-xl"
+                  >
+                    <div className="px-3 py-2">
+                      <p className="text-[11px] font-medium uppercase tracking-[0.12em] text-muted-foreground">当前账户</p>
+                      <p className="mt-1 truncate text-sm font-medium text-foreground" title={accountEmail || "已登录"}>
+                        {accountEmail || "已登录"}
+                      </p>
+                    </div>
+                    <a
+                      href="/settings/executor"
+                      role="menuitem"
+                      className="flex h-10 items-center rounded-[14px] px-3 text-sm text-foreground transition hover:bg-muted"
+                    >
+                      执行器设置
+                    </a>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      onClick={logout}
+                      className="flex h-10 w-full items-center rounded-[14px] px-3 text-left text-sm text-red-600 transition hover:bg-red-50"
+                    >
+                      退出登录
+                    </button>
+                  </div>
+                ) : null}
+              </div>
+            ) : (
+              <a href="/login" className="header-text-link">登录</a>
+            )
+          ) : null}
         </nav>
       </header>
 
