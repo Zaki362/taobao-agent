@@ -85,7 +85,7 @@ describe("production readiness", () => {
     expect(readiness.configured_executor_backend).toBe("qoder_cli");
     expect(readiness.effective_executor_backend).toBe("local_executor");
     expect(checks.get("executor_backend")?.status).toBe("fail");
-    expect(checks.get("executor_backend")?.detail).toContain("已阻断配置的 backend=qoder_cli");
+    expect(checks.get("executor_backend")?.detail).toContain("已阻断已退役或当前模式不允许的 backend=qoder_cli");
   });
 
   it("does not mistake production safety overrides for valid deployment configuration", async () => {

@@ -236,7 +236,7 @@ pending -> leased -> running -> completed
 npm run demo:cloud -- --url https://你的正式域名
 ```
 
-启动器会先检查云端 production/PostgreSQL 契约和本机淘宝能力，再监督 `worker:local` 与 `worker:recovery`。它只用于面试预热到结束的短时窗口；不是生产守护进程，也不替代数据库 migration。若外部恢复调度已就绪，可显式加 `--skip-recovery`，避免重复的恢复心跳。
+启动器会先检查云端 production/PostgreSQL 契约和本机淘宝能力，再监督 `worker:local` 与 `worker:recovery`。仅淘宝 MCP 未就绪时，它会按 2 秒起、最多 30 秒的指数退避持续探测，提示打开、解锁和登录淘宝桌面版，恢复后自动继续；云端 API、设备令牌、执行器协议和恢复密钥错误不重试。`--check` 是一次快速探测，不会无限等待 MCP。启动器只用于面试预热到结束的短时窗口；不是生产守护进程，也不替代数据库 migration。若外部恢复调度已就绪，可显式加 `--skip-recovery`，避免重复的恢复心跳。
 
 仓库 `.github/workflows/quality.yml` 已提供 PostgreSQL 16 集成验证、migration 检查、advisory lock 竞争测试、单元测试、生产构建和端到端测试。正式发布应将该 workflow 设为主分支必需检查。
 

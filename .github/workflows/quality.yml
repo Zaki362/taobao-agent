@@ -2,8 +2,12 @@ name: quality
 
 on:
   push:
-    branches: [main, "codex/**"]
+    branches: [main]
   pull_request:
+
+concurrency:
+  group: quality-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 jobs:
   verify:
@@ -37,6 +41,8 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      - name: Audit production dependencies
+        run: npm audit --omit=dev --audit-level=high --registry=https://registry.npmjs.org
       - run: npm run db:migrate
       - run: npm run db:check
       - run: npm run test:unit

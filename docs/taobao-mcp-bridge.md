@@ -1,6 +1,6 @@
-# 淘宝 MCP 接入说明
+# 淘宝桌面版官方 MCP 接入说明
 
-> 本页同时记录当前正式接法和旧 experimental bridge，避免把历史兼容路径误当成面试主链路。
+> 本页只描述当前正式接法。旧 experimental bridge、Qoder CLI 和 MCP mock adapter 已从运行代码中删除。
 
 ## 当前正式链路
 
@@ -70,26 +70,6 @@ ALLOW_DEMO_CART_FALLBACK=false
 
 当前 Worker、Doctor 和服务端使用执行器协议 **v3**。PostgreSQL 部署必须先对目标数据库执行包含 `db/migrations/007_executor_mcp_availability_state.sql` 的 `npm run db:migrate`，再执行 `npm run db:check`，之后再部署 v3 服务端；migration 007 为 `executor_devices.status` 增加 `mcp_unavailable`。随后把本机项目更新到同一版本并重启 Worker。版本不一致会收到 `426 executor_protocol_mismatch`，v3 Worker 不能在缺少 migration 007 的旧 schema 上运行。
 
-## 旧 experimental bridge（仅开发兼容）
+## 已退役路径
 
-仓库仍保留：
-
-- `scripts/taobao-native-bridge.mjs`
-- `lib/mcp/live.ts`
-- `npm run bridge:taobao`
-- `TAOBAO_MCP_BASE_URL=http://127.0.0.1:8787`
-
-它对应旧的 `experimental_local` provider：Next.js 通过 bridge 的 `GET /health` 和 `POST /run` 适配 `search_taobao_products`、`open_product_detail`、`extract_product_info`、`add_to_cart`。这套协议只用于迁移、适配器开发或隔离调试，不是正式产品或面试主链路。
-
-使用它必须同时满足：
-
-```dotenv
-SCENECART_PRODUCT_MODE=development
-TAOBAO_EXECUTION_BACKEND=experimental_local
-SCENECART_ENABLE_MCP_DEBUG=true
-TAOBAO_MCP_BASE_URL=http://127.0.0.1:8787
-```
-
-正式产品模式会阻断 `experimental_local` 并安全收敛到 `local_executor`，readiness 同时报告误配置。旧 bridge 不提供“真实 MCP 不可达就自动回退 mock”的正式语义；若开发者另外启用 mock，必须在界面和讲解中明确披露，不能把结果说成实时淘宝搜索。
-
-面试、真实设备验收和生产部署请始终使用 `TAOBAO_NATIVE_MCP_URL`，不要启动 `bridge:taobao`，也不要设置 `TAOBAO_EXECUTION_BACKEND=experimental_local`。
+仓库不再提供 8787 experimental bridge、Qoder CLI provider 或 MCP mock adapter。若旧环境仍配置 `TAOBAO_EXECUTION_BACKEND=qoder_cli` 或 `experimental_local`，运行时会安全回到 `local_executor`，readiness 同时报告误配置，直到配置被改正。

@@ -2,6 +2,10 @@ import process from "node:process";
 import nextEnv from "@next/env";
 import protocol from "../lib/runtime/executor-protocol.json" with { type: "json" };
 import { discoverExecutorApiUrl } from "./executor-config-utils.mjs";
+import {
+  executorDoctorExitCode,
+  MCP_READINESS_EXIT_CODE
+} from "./local-executor-readiness.mjs";
 import { TaobaoMcpClient } from "./taobao-mcp-client.mjs";
 
 nextEnv.loadEnvConfig(process.cwd());
@@ -12,6 +16,7 @@ const taobaoMcpUrl = process.env.TAOBAO_NATIVE_MCP_URL || "http://127.0.0.1:3654
 const taobaoSourceApp = process.env.TAOBAO_SOURCE_APP || "SceneCartAI";
 const deviceToken = process.env.SCENECART_DEVICE_TOKEN;
 const checks = [];
+const compactOutput = process.argv.includes("--compact");
 const executorProtocolVersion = protocol.version;
 let taobaoToolNames = new Set();
 let taobaoMcpReady = false;
@@ -109,13 +114,22 @@ await check("device_token", async () => {
 });
 
 for (const item of checks) {
+  if (compactOutput && item.status === "pass") continue;
   process.stdout.write(`${item.status === "pass" ? "PASS" : "FAIL"}  ${item.name}: ${item.detail}\n`);
 }
-process.stdout.write("INFO  taobao_driver: 商品搜索与真实加购均直连淘宝桌面版官方 HTTP MCP，不再消耗 Qoder Credits\n");
-process.stdout.write("INFO  taobao_skill: Doctor 不主动搜索或打开详情页；第一条已确认任务会验证真实登录态\n");
+if (!compactOutput) {
+  process.stdout.write("INFO  taobao_driver: 商品搜索与真实加购均直连淘宝桌面版官方 HTTP MCP，不再消耗 Qoder Credits\n");
+  process.stdout.write("INFO  taobao_skill: Doctor 不主动搜索或打开详情页；第一条已确认任务会验证真实登录态\n");
+}
 
-if (checks.some((item) => item.status === "fail")) {
-  process.exitCode = 1;
+const doctorExitCode = executorDoctorExitCode(checks);
+if (doctorExitCode !== 0) {
+  process.exitCode = doctorExitCode;
+  if (!compactOutput && doctorExitCode === MCP_READINESS_EXIT_CODE) {
+    process.stdout.write(
+      "WAIT  taobao_mcp: 这是可恢复的未就绪状态；云端启动器会等待淘宝桌面版恢复\n"
+    );
+  }
 }
 
 // Doctor is a one-shot diagnostic, not a task consumer. Do not leave a fresh

@@ -16,6 +16,10 @@ import {
   validateCloudRuntime
 } from "./demo-cloud-utils.mjs";
 import { validateExecutorDeviceToken } from "./executor-config-utils.mjs";
+import {
+  MCP_READINESS_EXIT_CODE,
+  mcpReadinessBackoffMs
+} from "./local-executor-readiness.mjs";
 
 const ROOT = process.cwd();
 const NODE_22_REEXEC_FLAG = "SCENECART_DEMO_CLOUD_NODE22_REEXEC";
@@ -24,6 +28,8 @@ const CHILDREN = {
   executor: path.join(ROOT, "scripts/local-executor.mjs"),
   recovery: path.join(ROOT, "scripts/workflow-recovery-worker.mjs")
 };
+const DOCTOR_RETRY_BASE_MS = 2_000;
+const DOCTOR_RETRY_MAX_MS = 30_000;
 
 function help() {
   process.stdout.write(`SceneCart 云端面试演示启动器
@@ -33,9 +39,10 @@ function help() {
   npm run demo:cloud -- --check --url https://你的域名
   npm run demo:cloud -- --skip-recovery --url https://你的域名
 
-默认会检查云端生产契约、淘宝 MCP、设备令牌与恢复密钥，然后持续运行
-本机淘宝 Worker 和恢复 Worker。只有已经配置外部分钟级恢复调度时才使用
---skip-recovery。按 Ctrl+C 统一退出。
+默认会检查云端生产契约、淘宝 MCP、设备令牌与恢复密钥。如果淘宝桌面版尚未就绪，
+会以最多 30 秒的退避持续等待，恢复后自动启动本机淘宝 Worker 和恢复 Worker。
+--check 只执行一次快速检查，未就绪时立即退出；不会无限等待。只有已经配置外部
+分钟级恢复调度时才使用 --skip-recovery。按 Ctrl+C 统一退出。
 `);
 }
 
@@ -78,19 +85,63 @@ async function checkRecoveryAccess(apiBaseUrl, secret) {
   process.stdout.write("PASS  recovery_access: 恢复密钥有效；启动后将每 30 秒维持云端恢复心跳\n");
 }
 
-function runDoctor(environment) {
+function runDoctor(environment, { compact = false } = {}) {
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [path.join(ROOT, "scripts/executor-doctor.mjs")], {
+    const doctorArgs = [path.join(ROOT, "scripts/executor-doctor.mjs")];
+    if (compact) doctorArgs.push("--compact");
+    const child = spawn(process.execPath, doctorArgs, {
       cwd: ROOT,
       env: environment,
       stdio: "inherit"
     });
     child.once("error", reject);
     child.once("exit", (code, signal) => {
-      if (code === 0) resolve();
-      else reject(new Error(`executor:doctor 未通过（${signal ? `signal ${signal}` : `exit ${code}`}）`));
+      resolve({ code, signal });
     });
   });
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+export async function waitForDoctor(environment, {
+  checkOnly,
+  doctor = runDoctor,
+  wait = sleep,
+  output = process.stdout,
+  errorOutput = process.stderr
+}) {
+  let attempt = 0;
+  while (true) {
+    const { code, signal } = await doctor(environment, { compact: attempt > 0 });
+    if (code === 0) {
+      if (attempt > 0) {
+        output.write("PASS  taobao_recovery: 淘宝桌面版 MCP 已恢复，继续启动 Worker\n");
+      }
+      return;
+    }
+    if (signal || code !== MCP_READINESS_EXIT_CODE) {
+      throw new Error(
+        `executor:doctor 未通过（${signal ? `signal ${signal}` : `exit ${code ?? "unknown"}`}）`
+      );
+    }
+    if (checkOnly) {
+      throw new Error(
+        "快速检查：淘宝桌面版 MCP 尚未就绪。请打开、解锁并登录淘宝桌面版后重试；正式启动请不加 --check，将自动等待恢复。"
+      );
+    }
+
+    const delayMs = mcpReadinessBackoffMs(attempt, {
+      baseMs: DOCTOR_RETRY_BASE_MS,
+      maxMs: DOCTOR_RETRY_MAX_MS
+    });
+    attempt += 1;
+    errorOutput.write(
+      `[demo:cloud] 淘宝桌面版尚未就绪。请打开、解锁并登录客户端；${Math.ceil(delayMs / 1000)} 秒后自动重试（第 ${attempt} 次）。\n`
+    );
+    await wait(delayMs);
+  }
 }
 
 async function relaunchWithNode22IfAvailable() {
@@ -240,7 +291,7 @@ export async function startCloudDemo(args = process.argv.slice(2)) {
   } else {
     await checkRecoveryAccess(apiBaseUrl, recoverySecret);
   }
-  await runDoctor(childEnvironment);
+  await waitForDoctor(childEnvironment, { checkOnly: options.checkOnly });
 
   if (options.checkOnly) {
     process.stdout.write(

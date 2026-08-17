@@ -32,12 +32,12 @@ describe("MCP backend policy", () => {
     expect(getExecutionBackend()).toBe("local_executor");
   });
 
-  it("keeps explicitly selected compatibility backends in development", () => {
+  it("recognizes retired backend configuration but never executes it", () => {
     process.env.SCENECART_PRODUCT_MODE = "development";
     process.env.TAOBAO_EXECUTION_BACKEND = "qoder_cli";
 
     expect(getConfiguredExecutionBackend()).toBe("qoder_cli");
-    expect(getExecutionBackend()).toBe("qoder_cli");
+    expect(getExecutionBackend()).toBe("local_executor");
   });
 
   it("fails closed to the durable local executor in formal product mode", () => {

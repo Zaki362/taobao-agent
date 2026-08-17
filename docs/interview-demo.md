@@ -101,7 +101,7 @@ npm run demo:cloud:configure
 npm run demo:cloud -- --url https://你的正式域名
 ```
 
-看到 `READY cloud_demo` 后再打开打印的云端地址操作。该命令会保持真实淘宝 Worker 和 Hobby 环境需要的恢复 Worker 在线，并在异常退出后指数退避重启；演示结束按 `Ctrl+C`。它不是部署命令，不能代替 Vercel/Neon 配置和数据库迁移，也不适合 24 小时常驻。前一天只验证配置可运行 `npm run demo:cloud -- --check --url https://你的正式域名`；check 模式退出时不会留下在线 Worker。
+如果淘宝桌面版尚未启动、未解锁或 MCP 工具未加载，保持命令运行并按终端提示处理；它会以最多 30 秒的退避持续探测，恢复后自动继续启动。看到 `READY cloud_demo` 后再打开打印的云端地址操作。该命令会保持真实淘宝 Worker 和 Hobby 环境需要的恢复 Worker 在线，并在异常退出后指数退避重启；演示结束按 `Ctrl+C`。它不是部署命令，不能代替 Vercel/Neon 配置和数据库迁移，也不适合 24 小时常驻。前一天只验证配置可运行 `npm run demo:cloud -- --check --url https://你的正式域名`；check 模式只探测一次，未就绪时快速失败，退出时不会留下在线 Worker。
 
 下方 4.1–4.3 是纯本地网页演示路径。云端演示仍需执行 Doctor，但不需要再运行 `npm run dev`。
 
@@ -248,7 +248,7 @@ Doctor 不执行搜索，也不证明淘宝账号仍处于登录态；第一条�
 
 禁止把以下内容当作真实搜索兜底：
 
-- 切换到 `qoder_cli`、`codex_hosted` 或 `experimental_local` 后仍称为正式链路。
+- 把历史 `codex_hosted` 任务或已经退役的 Qoder / experimental bridge 说成当前正式链路。
 - 把模型 fallback 生成的规划等同于淘宝商品结果。
 - 把 demo cart 条目说成真实淘宝购物车成功。
 - 为了通过页面而开启 production 中禁止的 Mock 或调试端点。

@@ -25,7 +25,6 @@
     "test:e2e": "playwright test",
     "eval:agent": "vitest run --config vitest.evaluation.config.ts",
     "eval:agent:live": "node scripts/run-live-agent-eval.mjs",
-    "bridge:taobao": "node scripts/taobao-native-bridge.mjs",
     "worker:codex": "node scripts/codex-hosted-worker.mjs",
     "worker:local": "node scripts/local-executor.mjs",
     "worker:recovery": "node scripts/workflow-recovery-worker.mjs",
@@ -42,7 +41,7 @@
     "clsx": "^2.1.1",
     "framer-motion": "^12.12.1",
     "lucide-react": "^0.511.0",
-    "next": "^15.3.1",
+    "next": "15.5.21",
     "pg": "^8.22.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
@@ -59,5 +58,12 @@
     "tailwindcss": "^3.4.17",
     "typescript": "^5.8.3",
     "vitest": "^4.1.10"
+  },
+  "overrides": {
+    "next": {
+      "sharp": "0.35.0"
+    },
+    "nanoid": "3.3.18",
+    "postcss": "$postcss"
   }
 }

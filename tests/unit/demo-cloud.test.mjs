@@ -10,6 +10,8 @@ import {
   sanitizeCloudDemoMessage,
   validateCloudRuntime
 } from "../../scripts/demo-cloud-utils.mjs";
+import { waitForDoctor } from "../../scripts/demo-cloud.mjs";
+import { MCP_READINESS_EXIT_CODE } from "../../scripts/local-executor-readiness.mjs";
 
 describe("cloud interview demo launcher", () => {
   it("parses check, recovery, and URL options", () => {
@@ -89,5 +91,62 @@ describe("cloud interview demo launcher", () => {
     );
     expect(configured).toContain("SCENECART_DEVICE_TOKEN=local_token");
     expect(configured).toContain("SCENECART_CLOUD_DEVICE_TOKEN=cloud_token");
+  });
+
+  it("keeps retrying transient Taobao readiness with capped backoff until it recovers", async () => {
+    const results = [
+      { code: MCP_READINESS_EXIT_CODE, signal: null },
+      { code: MCP_READINESS_EXIT_CODE, signal: null },
+      { code: 0, signal: null }
+    ];
+    const compactModes = [];
+    const delays = [];
+    let output = "";
+    let errorOutput = "";
+
+    await waitForDoctor({}, {
+      checkOnly: false,
+      doctor: async (_environment, options) => {
+        compactModes.push(options.compact);
+        return results.shift();
+      },
+      wait: async (delay) => delays.push(delay),
+      output: { write: (value) => { output += value; } },
+      errorOutput: { write: (value) => { errorOutput += value; } }
+    });
+
+    expect(compactModes).toEqual([false, true, true]);
+    expect(delays).toEqual([2_000, 4_000]);
+    expect(errorOutput).toMatch(/打开、解锁并登录/);
+    expect(output).toMatch(/已恢复，继续启动 Worker/);
+  });
+
+  it("makes --check a single fast readiness probe", async () => {
+    let calls = 0;
+    let waits = 0;
+    await expect(waitForDoctor({}, {
+      checkOnly: true,
+      doctor: async () => {
+        calls += 1;
+        return { code: MCP_READINESS_EXIT_CODE, signal: null };
+      },
+      wait: async () => { waits += 1; },
+      output: { write: () => {} },
+      errorOutput: { write: () => {} }
+    })).rejects.toThrow(/快速检查/);
+    expect(calls).toBe(1);
+    expect(waits).toBe(0);
+  });
+
+  it("fails fast for Doctor API, token, protocol, and process failures", async () => {
+    let waits = 0;
+    await expect(waitForDoctor({}, {
+      checkOnly: false,
+      doctor: async () => ({ code: 1, signal: null }),
+      wait: async () => { waits += 1; },
+      output: { write: () => {} },
+      errorOutput: { write: () => {} }
+    })).rejects.toThrow(/exit 1/);
+    expect(waits).toBe(0);
   });
 });

@@ -336,7 +336,7 @@ function assertRequiredFiles() {
     "components/dashboard-confirmation.tsx",
     "components/dashboard-execution.tsx",
     "components/dashboard-intake.tsx",
-    "components/dashboard-results.tsx",
+    "components/dashboard-results-simple.tsx",
     "components/dashboard-workflow.ts",
     "lib/agent/directives.ts",
     "lib/agent/decision-engine.ts",
@@ -394,7 +394,6 @@ function assertRequiredFiles() {
     "vitest.evaluation.config.ts",
     "tests/evaluation/new-car-agent-quality.test.ts",
     "tsconfig.e2e.json",
-    "lib/mcp/qoder.ts",
     "lib/session/guards.ts",
     "lib/session/summaries.ts",
     "lib/session/store.ts",
@@ -413,8 +412,28 @@ function assertRequiredFiles() {
 function assertRemovedLegacyFiles() {
   const removedFiles = [
     {
+      file: "components/dashboard-results.tsx",
+      message: "旧推荐页已被当前购物清单联动页面替代，请不要恢复双实现"
+    },
+    {
+      file: "lib/mcp/qoder.ts",
+      message: "Qoder CLI provider 已退役，真实链路只允许持久化本地执行器"
+    },
+    {
       file: "lib/mcp/qoder-async.ts",
       message: "旧 Qoder 后台加购实验文件已废弃，请不要重新引入"
+    },
+    {
+      file: "lib/mcp/live.ts",
+      message: "旧 experimental bridge adapter 已退役"
+    },
+    {
+      file: "lib/mcp/mock.ts",
+      message: "旧 MCP mock adapter 已退役，商品候选不能伪装为实时搜索"
+    },
+    {
+      file: "scripts/taobao-native-bridge.mjs",
+      message: "旧 8787 bridge 已退役，请使用淘宝桌面版官方 HTTP MCP"
     }
   ];
 
@@ -455,7 +474,7 @@ function assertArchitectureContracts() {
   const hostedConsole = tryReadText("components/hosted-console.tsx");
   const executorSettings = tryReadText("components/executor-settings.tsx");
   const dashboardWorkflow = tryReadText("components/dashboard-workflow.ts");
-  const dashboardResults = tryReadText("components/dashboard-results.tsx");
+  const dashboardResults = tryReadText("components/dashboard-results-simple.tsx");
   const dashboardConfirmation = tryReadText("components/dashboard-confirmation.tsx");
   const dashboardExecution = tryReadText("components/dashboard-execution.tsx");
   const config = tryReadText("components/dashboard-config.ts");
@@ -469,7 +488,6 @@ function assertArchitectureContracts() {
   const cart = tryReadText("lib/agent/cart.ts");
   const cartRoute = tryReadText("app/api/cart/add/route.ts");
   const cartRemoveRoute = tryReadText("app/api/cart/remove/route.ts");
-  const qoder = tryReadText("lib/mcp/qoder.ts");
   const mcpExecutor = tryReadText("lib/mcp/executor.ts");
   const mcpLogging = tryReadText("lib/mcp/logging.ts");
   const mcpHosted = tryReadText("lib/mcp/hosted.ts");
@@ -551,7 +569,6 @@ function assertArchitectureContracts() {
     !hostedWorkerAuth ||
     !cart ||
     !cartRoute ||
-    !qoder ||
     !mcpExecutor ||
     !mcpLogging ||
     !mcpHosted ||
@@ -631,9 +648,9 @@ function assertArchitectureContracts() {
         agentRemediateRoute.includes("body.confirmed !== true") &&
         agentRemediateRoute.includes("recoverAgentCompletionGaps") &&
         agentRemediateRoute.includes('body.scope === "thin"') &&
-        dashboardResults.includes("Agent 完成报告") &&
-        dashboardResults.includes("继续补齐") &&
-        dashboardResults.includes("继续优化") &&
+        dashboardResults.includes("session.completion_report") &&
+        dashboardResults.includes("onRecoverCompletionGaps") &&
+        dashboardResults.includes("个缺失分类") &&
         types.includes("user_confirmed_retry") &&
         sessionGuards.includes("user_confirmed_retry") &&
         hostedConsole.includes("Agent 完成质量审计") &&
@@ -657,8 +674,8 @@ function assertArchitectureContracts() {
         validation.includes("allowedRefinements") &&
         workflowRunner.includes('event_type: "agent.purchase_bundle.composed"') &&
         sessionGuards.includes("isAgentPurchaseBundle") &&
-        dashboardResults.includes("Agent 建议购买组合") &&
-        dashboardResults.includes("AI 上下文建议") &&
+        hostedConsole.includes("purchase_bundle") &&
+        hostedConsole.includes("购买组合") &&
         hostedConsole.includes("预算安全购买组合"),
       message: "Agent 完成搜索后必须生成经预算、候选白名单与必需覆盖 guardrail 校验的购买组合，并提供白名单内的上下文调整建议"
     },
@@ -791,15 +808,15 @@ function assertArchitectureContracts() {
         matcher.includes("reviewModuleCandidatesWithAgent") &&
         matcher.includes("keywordOverride") &&
         modulesSearchRoute.includes("keyword_override") &&
-        dashboardResults.includes("suggested_keyword") &&
-        dashboardResults.includes("Agent 搜索决策轨迹") &&
+        dashboardResults.includes("selectedReview?.suggested_keyword") &&
+        hostedConsole.includes("module_search_traces") &&
         sessionStore.includes("module_reviews") &&
         sessionStore.includes("normalizeModuleSearchTraces") &&
         sessionStore.includes("module_search_traces") &&
         matcher.includes("setModuleSearchTrace") &&
         matcher.includes("keywordAttemptReason") &&
         matcher.includes("ai_decision_summary") &&
-        dashboardResults.includes("module_search_traces"),
+        dashboardResults.includes("findCurrentTaobaoMcpEvidence"),
       message: "商品匹配后必须生成 Agent 候选池评估和搜索决策轨迹，并支持按建议关键词补搜"
     },
     {
@@ -925,9 +942,8 @@ function assertArchitectureContracts() {
         orchestrator.includes("applyMarketBudgetSuggestion") &&
         budgetReallocationRoute.includes("confirmed !== true") &&
         budgetReallocationRoute.includes("applyMarketBudgetSuggestion") &&
-        dashboard.includes("/api/session/budget-reallocation") &&
-        dashboard.includes("applyBudgetSuggestion") &&
-        dashboardResults.includes("确认调配并查看新规划"),
+        hostedConsole.includes("reallocation_suggestions") &&
+        hostedConsole.includes("真实市场反馈"),
       message: "真实候选产生的跨模块预算建议必须由用户显式确认、由服务端校验金额与总额，并只失效受影响模块"
     },
     {
@@ -986,14 +1002,6 @@ function assertArchitectureContracts() {
     },
     {
       ok:
-        !qoder.includes("TAOBAO_NATIVE_PATH") &&
-        !qoder.includes("callTaobaoNative") &&
-        !qoder.includes("runDirectSearch") &&
-        !qoder.includes("runDirectAddToCart"),
-      message: "Qoder provider 不应重新引入直接 taobao-native 实验路径，避免商品页跳转导致登录态问题"
-    },
-    {
-      ok:
         localExecutor.includes('taobaoClient.callTool("search_products"') &&
         localExecutor.includes('type: "all"') &&
         localExecutor.includes('taobaoClient.callTool(\n      "add_to_cart"') &&
@@ -1018,8 +1026,11 @@ function assertArchitectureContracts() {
       ok:
         mcpClient.includes("getConfiguredExecutionBackend") &&
         mcpClient.includes("isFormalProductMode") &&
+        mcpClient.includes('configured === "qoder_cli" || configured === "experimental_local"') &&
         mcpClient.includes('configured !== "local_executor"') &&
         mcpClient.includes('return "local_executor"') &&
+        !mcpClient.includes("@/lib/mcp/qoder") &&
+        !mcpClient.includes("@/lib/mcp/live") &&
         !mcpClient.includes("fs.existsSync") &&
         !mcpClient.includes("DEFAULT_QODERCLI_PATH") &&
         mcpRunRoute.includes("isMcpDebugEnabled") &&
@@ -1053,7 +1064,7 @@ function assertArchitectureContracts() {
     {
       ok:
         dashboard.includes("cartingProductId") &&
-        dashboardResults.includes("cartingProductId === productId") &&
+        dashboardResults.includes("cartingProductId === product.product_id") &&
         !dashboard.includes('setStage("carting");'),
       message: "加购交互应保留在推荐页内显示商品级 loading，不能退回整页 carting loading"
     },

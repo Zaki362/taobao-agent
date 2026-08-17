@@ -186,9 +186,9 @@ export async function inspectRuntimeReadiness(userId?: string) {
     true,
     configuredExecutor === "local_executor"
       ? "真实淘宝操作通过持久任务和本地执行器运行"
-      : productMode === "production" && executor === "local_executor"
-        ? `已阻断配置的 backend=${configuredExecutor}；运行时安全回退到 local_executor，但仍需修正配置`
-        : `当前 backend=${configuredExecutor}，仍是开发兼容路径`,
+      : executor === "local_executor"
+        ? `已阻断已退役或当前模式不允许的 backend=${configuredExecutor}；运行时安全回退到 local_executor，但仍需修正配置`
+        : `当前 backend=${configuredExecutor}，仅允许开发期历史任务兼容`,
     "正式环境设置 TAOBAO_EXECUTION_BACKEND=local_executor"
   ));
   checks.push(check(

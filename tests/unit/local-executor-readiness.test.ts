@@ -6,7 +6,9 @@ import { describe, expect, it } from "vitest";
 import * as readiness from "../../scripts/local-executor-readiness.mjs";
 
 const {
+  executorDoctorExitCode,
   isMcpReadinessError,
+  MCP_READINESS_EXIT_CODE,
   mcpReadinessBackoffMs,
   missingTaobaoCartTools,
   missingTaobaoTools,
@@ -43,6 +45,23 @@ describe("local executor MCP readiness", () => {
     const options = { baseMs: 500, maxMs: 4000 };
     expect([0, 1, 2, 3, 4, 20].map((attempt) => mcpReadinessBackoffMs(attempt, options)))
       .toEqual([500, 1000, 2000, 4000, 4000, 4000]);
+  });
+
+  it("distinguishes recoverable MCP startup failures from fatal Doctor failures", () => {
+    expect(executorDoctorExitCode([
+      { name: "taobao_mcp", status: "pass" },
+      { name: "scenecart_api", status: "pass" },
+      { name: "device_token", status: "pass" }
+    ])).toBe(0);
+    expect(executorDoctorExitCode([
+      { name: "taobao_mcp", status: "fail", detail: "fetch failed" },
+      { name: "scenecart_api", status: "pass" },
+      { name: "device_token", status: "pass" }
+    ])).toBe(MCP_READINESS_EXIT_CODE);
+    expect(executorDoctorExitCode([
+      { name: "taobao_mcp", status: "fail", detail: "工具尚未加载" },
+      { name: "device_token", status: "fail", detail: "unauthorized" }
+    ])).toBe(1);
   });
 
   it("keeps claiming behind tools/list readiness without weakening auth or cart safety", async () => {

@@ -107,7 +107,7 @@ npm run demo:cloud:configure
 npm run demo:cloud -- --url https://你的正式域名
 ```
 
-`prepare` 只需在首次接入或更换云端地址时运行：它保留本地 `SCENECART_API_URL` 和本地设备令牌，只新增云端地址，并把恢复密钥保存到 Git 忽略、权限 0600 的本机文件。云端 `/settings/executor` 注册设备后运行 `demo:cloud:configure`，隐藏保存独立的 `SCENECART_CLOUD_DEVICE_TOKEN`；它不会覆盖本地令牌。`demo:cloud` 用于面试开始前约 10–15 分钟到面试结束这段时间：先校验 HTTPS、production、PostgreSQL、执行器协议、淘宝 MCP、云端设备令牌和恢复密钥，再持续监督本机真实淘宝 Worker；在没有外部分钟级调度的 Hobby 环境中，还会同时维持恢复心跳。它不会部署网页，也不会启动本地 Next.js。演示结束按 `Ctrl+C`，不要为了常驻而持续消耗免费额度。只做无常驻进程的预检可加 `--check`；只有已经配置外部分钟级恢复调度时才加 `--skip-recovery`。
+`prepare` 只需在首次接入或更换云端地址时运行：它保留本地 `SCENECART_API_URL` 和本地设备令牌，只新增云端地址，并把恢复密钥保存到 Git 忽略、权限 0600 的本机文件。云端 `/settings/executor` 注册设备后运行 `demo:cloud:configure`，隐藏保存独立的 `SCENECART_CLOUD_DEVICE_TOKEN`；它不会覆盖本地令牌。`demo:cloud` 用于面试开始前约 10–15 分钟到面试结束这段时间：先校验 HTTPS、production、PostgreSQL、执行器协议、淘宝 MCP、云端设备令牌和恢复密钥，再持续监督本机真实淘宝 Worker；在没有外部分钟级调度的 Hobby 环境中，还会同时维持恢复心跳。淘宝客户端暂未启动、未解锁或工具尚未加载时，启动器不会退出，而会按 2 秒起、最多 30 秒退避探测，恢复后自动继续；云端契约、设备令牌、协议或恢复密钥错误仍会立即失败。它不会部署网页，也不会启动本地 Next.js。演示结束按 `Ctrl+C`，不要为了常驻而持续消耗免费额度。只做无常驻进程的单次快速预检可加 `--check`，它遇到 MCP 未就绪会立即退出；只有已经配置外部分钟级恢复调度时才加 `--skip-recovery`。
 
 首次连接本地执行器时，在 `/settings/executor` 注册设备并复制一次性令牌。设备始终需要绑定 SceneCart 账号；即使主购物流程处于本地匿名开发模式，设置页也会先引导登录/注册，并在成功后自动返回。然后在项目目录运行：
 
@@ -183,9 +183,8 @@ SCENECART_CRON_SECRET=
 - `ALLOW_DEMO_CART_FALLBACK`：只可能在开发预览的同步兼容 provider 加购异常时生效；正式 `local_executor` 异步失败不会自动写入 demo item。设为 `false` 可在本地保持与正式失败语义一致。
 - `DEEPSEEK_DISABLED=true`：仅用于自动化测试或离线诊断，显式禁止读取 `.env.local` 中的真实 Key，保证测试不会产生模型调用和费用。
 - `DEEPSEEK_*_TIMEOUT_MS`：可按解析、规划、调整、方案复核、候选复核、Agent 决策、购买组合和推荐解释分别设置完整响应超时；计时覆盖响应头和正文读取，失败后使用经过校验的确定性方案继续流程。`DEEPSEEK_AGENT_CHAT_TIMEOUT_MS` 与 `DEEPSEEK_AGENT_REASONER_TIMEOUT_MS` 分别约束常规调度和复杂恢复决策，`DEEPSEEK_BUNDLE_TIMEOUT_MS` 约束最终预算组合提案，`DEEPSEEK_REQUEST_TIMEOUT_MS` 可作为其他未单独配置任务的统一覆盖值。
-- `TAOBAO_EXECUTION_BACKEND`：正式路径使用 `local_executor`。`qoder_cli`、`codex_hosted`、`experimental_local` 只用于迁移和本地调试。
-- 未配置 `TAOBAO_EXECUTION_BACKEND` 时也默认使用 `local_executor`；安装 Qoder CLI 不会再隐式改变网页后端架构。开发兼容 provider 必须通过环境变量显式启用。
-- 正式产品模式会阻断 `qoder_cli`、`codex_hosted` 和 `experimental_local` 直接执行；即使环境变量误配，实际工具调用也只会进入 `local_executor` 持久任务队列，同时 readiness 会保留并报告原始误配置。
+- `TAOBAO_EXECUTION_BACKEND`：真实淘宝路径固定使用 `local_executor`。未配置时同样默认走持久任务队列；历史 `qoder_cli`、`experimental_local` 配置只用于 readiness 识别误配置，已经不能执行。
+- `codex_hosted` 仅保留为开发期任务兼容与历史数据读取；正式产品模式会阻断它。生产与面试的搜索、详情和显式加购都由 `local_executor` 执行。
 - `SCENECART_ENABLE_MCP_DEBUG`：默认 `false`。仅开发环境显式设为 `true` 时开放手动 MCP 调试端点；production 始终返回 404，正常购物流程不依赖该接口。
 - `HOSTED_WORKER_TOKEN`：只保留给旧 Codex hosted 开发兼容流程。正式产品模式会以 `410 legacy_hosted_disabled` 拒绝旧任务 API，生产环境必须删除该令牌并停止 `worker:codex`。
 - `RUNTIME_STORE=postgres`：启用 PostgreSQL 用户、Session、任务与事件持久化；`local` 只适合开发和自动化测试。
@@ -252,11 +251,8 @@ lib/llm/
 lib/mcp/
   client.ts                        执行 backend 选择
   executor.ts                      工具调用与日志记录
-  qoder.ts                         Qoder CLI / 淘宝 skill provider
   local-executor.ts                持久任务模式 adapter
   hosted.ts                        Codex hosted worker 任务模式
-  live.ts                          experimental local bridge adapter
-  mock.ts                          演示商品池
 
 lib/session/
   types.ts                         核心状态类型
@@ -378,8 +374,7 @@ npm run worker:local
 
 - [产品创作复盘](./product_creation_recap.md)
 - [产品架构与技术方案](./architecture_and_technical_design.md)
-- [Qoder CLI Provider（旧开发兼容）](./docs/qoder-cli-provider.md)
-- [淘宝官方 MCP 与旧 Bridge 说明](./docs/taobao-mcp-bridge.md)
+- [淘宝桌面版官方 MCP 接入说明](./docs/taobao-mcp-bridge.md)
 - [Codex Hosted Worker（旧开发兼容）](./docs/codex-hosted-worker.md)
 - [生产运行时与本地执行器](./docs/production-runtime.md)
 - [正式部署指南](./docs/deployment.md)

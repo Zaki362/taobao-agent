@@ -21,6 +21,12 @@ export function getConfiguredExecutionBackend(): ExecutorBackend {
 
 export function getExecutionBackend(): ExecutorBackend {
   const configured = getConfiguredExecutionBackend();
+  // The Qoder CLI and experimental bridge adapters have been retired. Keep
+  // recognizing their old configuration values so readiness can explain the
+  // misconfiguration, but never make either path executable again.
+  if (configured === "qoder_cli" || configured === "experimental_local") {
+    return "local_executor";
+  }
   if (isFormalProductMode() && configured !== "local_executor") {
     return "local_executor";
   }
@@ -50,19 +56,8 @@ export async function getMcpClient() {
     };
   }
 
-  if (backend === "qoder_cli") {
-    const { qoderMcpAdapter } = await import("@/lib/mcp/qoder");
-    const qoderStatus = await qoderMcpAdapter.detect();
-    return {
-      client: qoderMcpAdapter,
-      status: qoderStatus
-    };
-  }
-
-  const { liveMcpAdapter } = await import("@/lib/mcp/live");
-  const liveStatus = await liveMcpAdapter.detect();
   return {
-    client: liveMcpAdapter,
-    status: liveStatus
+    client: localExecutorMcpAdapter,
+    status: await localExecutorMcpAdapter.detect()
   };
 }

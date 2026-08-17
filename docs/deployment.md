@@ -65,9 +65,9 @@ SCENECART_RELEASE_VERIFY_URL=https://scenecart.example.com npm run release:verif
 
 `SCENECART_PRODUCT_MODE=production` 会强制关闭演示购物车回退，即使误设 `ALLOW_DEMO_CART_FALLBACK=true` 也不会把真实加购失败伪装成成功。开发回退也不是所有失败的总兜底：只有 development、`ALLOW_DEMO_CART_FALLBACK=true` 且使用同步开发兼容 provider 时，失败才会生成明确标记的“演示购物车”条目；正式 `local_executor` 的异步 Job 失败会保留为失败并等待用户重试。
 
-正式模式也会阻断旧的 `qoder_cli`、`codex_hosted` 与 `experimental_local` 直连路径。误配置时 effective backend 会安全收敛为 `local_executor`，但 readiness 仍保持失败，直到部署环境显式配置正确。
+历史 `qoder_cli` 与 `experimental_local` 执行适配器已经删除；旧配置仍会被识别为误配置并安全收敛到 `local_executor`。正式模式也会阻断 `codex_hosted`。readiness 会保持失败，直到部署环境显式配置正确。
 
-安装 Qoder CLI 不会自动把网页后端切换到 `qoder_cli`；所有兼容 provider 都必须在开发环境显式配置。正式环境还必须保持 `SCENECART_ENABLE_MCP_DEBUG=false`，production 即使误配为 `true` 也会隐藏 `/api/mcp/run`，但 release audit 会继续报错直到配置被修正。
+正式环境还必须保持 `SCENECART_ENABLE_MCP_DEBUG=false`；production 即使误配为 `true` 也会隐藏 `/api/mcp/run`，但 release audit 会继续报错直到配置被修正。
 
 正式环境不要配置 `HOSTED_WORKER_TOKEN`，也不要运行 `npm run worker:codex`。production 会直接拒绝 `/api/hosted/tasks*` 旧 Worker 协议；浏览器主流程也不会轮询旧宿主状态。`/hosted` 页面仍是当前会话、任务、模型和执行器的运维控制台，并不代表继续使用 Codex hosted 执行淘宝任务。
 
