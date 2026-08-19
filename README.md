@@ -331,7 +331,9 @@ npm run build
 npm run start
 ```
 
-当前执行器协议为 **v4**。v4 增加搜索完成后的只读 `product_detail` 证据任务。发布前先停止旧 Worker，对数据库执行包含 migration 008 的 `npm run db:migrate && npm run db:check`；若确有升级前已领取的搜索/加购需要回填，可临时把 `SCENECART_EXECUTOR_V3_DRAIN_UNTIL` 设为未来不超过 2 小时的 ISO 时间，再部署 v4 服务端并立即更新本机 Worker。旧 v3 Worker始终不能领取新任务；排空接口还会核对 Job 领取时记录的协议版本、设备和租约代次。截止时间到达或变量留空后，所有 v3 请求都会收到 `426 executor_protocol_mismatch`，也绝不会领取或误解释 `product_detail`。migration 007 增加 `mcp_unavailable` 设备状态，migration 008 增加领取协议标记。
+Vercel Production 构建会通过 `scripts/build.mjs` 自动执行 `db:migrate` 与 `db:check`，只有两步都成功才继续 Next.js 构建；Preview 和本地构建不会连接生产数据库。手工部署或其他平台仍需显式执行上述命令。
+
+当前执行器协议为 **v4**。v4 增加搜索完成后的只读 `product_detail` 证据任务。发布前先停止旧 Worker；Vercel Production 构建会自动执行包含 migration 008 的迁移与校验，其他发布方式需手工执行；若确有升级前已领取的搜索/加购需要回填，可临时把 `SCENECART_EXECUTOR_V3_DRAIN_UNTIL` 设为未来不超过 2 小时的 ISO 时间，再部署 v4 服务端并立即更新本机 Worker。旧 v3 Worker始终不能领取新任务；排空接口还会核对 Job 领取时记录的协议版本、设备和租约代次。截止时间到达或变量留空后，所有 v3 请求都会收到 `426 executor_protocol_mismatch`，也绝不会领取或误解释 `product_detail`。migration 007 增加 `mcp_unavailable` 设备状态，migration 008 增加领取协议标记。
 
 实例启动并收到恢复 Worker 心跳后，用一条命令完成静态配置、数据库、health 与只读 readiness 验证：
 

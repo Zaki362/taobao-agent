@@ -246,6 +246,26 @@ function assertDevelopmentLauncher() {
   }
 }
 
+function assertProductionBuildMigrationGate() {
+  const pkgText = tryReadText("package.json");
+  const buildScript = tryReadText("scripts/build.mjs");
+  if (!pkgText || !buildScript) return;
+  let pkg;
+  try {
+    pkg = JSON.parse(pkgText);
+  } catch {
+    return;
+  }
+  if (
+    !String(pkg.scripts?.build ?? "").includes("scripts/build.mjs") ||
+    !buildScript.includes('environment.VERCEL_ENV === "production"') ||
+    !buildScript.includes('import("./db-migrate.mjs")') ||
+    !buildScript.includes('import("./db-check.mjs")')
+  ) {
+    fail("Vercel Production 构建必须先执行并验证数据库迁移，本地和 Preview 构建不得访问生产数据库");
+  }
+}
+
 function assertE2EServerIsolation() {
   const playwright = tryReadText("playwright.config.ts");
   const nextConfig = tryReadText("next.config.ts");
@@ -1274,6 +1294,7 @@ function run() {
   assertGitignore();
   assertExecutorConfigurator();
   assertDevelopmentLauncher();
+  assertProductionBuildMigrationGate();
   assertE2EServerIsolation();
   assertDeploymentAssets();
   assertRequiredFiles();
