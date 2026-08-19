@@ -8,16 +8,35 @@ import {
   establishAuthenticationFailureHold,
   reconcileAuthenticationFailureHoldsForDevice
 } from "@/lib/runtime/jobs";
-import { assertExecutorProtocol, EXECUTOR_PROTOCOL_VERSION } from "@/lib/runtime/executor-protocol";
+import {
+  assertExecutorProtocol,
+  assertPreviousProtocolInFlightJob,
+  EXECUTOR_PROTOCOL_VERSION,
+  isPreviousExecutorProtocolDrain,
+  receivedExecutorProtocol
+} from "@/lib/runtime/executor-protocol";
 
 export async function POST(request: NextRequest) {
   try {
-    assertExecutorProtocol(request);
+    const drainingPreviousProtocol = isPreviousExecutorProtocolDrain(request);
+    if (!drainingPreviousProtocol) assertExecutorProtocol(request);
+    const body = await request.json().catch(() => ({}));
+    const currentJobId = typeof body.current_job_id === "string" ? body.current_job_id : undefined;
+    if (drainingPreviousProtocol && !currentJobId) {
+      assertPreviousProtocolInFlightJob(null, "");
+    }
     const device = await authenticateExecutorToken(bearerToken(request));
     if (!device) throw new ApiRouteError("invalid executor token", 401, "invalid_executor_token");
-    const body = await request.json().catch(() => ({}));
+    const repository = getRuntimeRepository();
+    const previousProtocolJob = drainingPreviousProtocol && currentJobId
+      ? await repository.getJob(currentJobId)
+      : null;
+    if (drainingPreviousProtocol) assertPreviousProtocolInFlightJob(previousProtocolJob, device.id);
+    const responseProtocolVersion = drainingPreviousProtocol
+      ? receivedExecutorProtocol(request)!
+      : EXECUTOR_PROTOCOL_VERSION;
     if (body.executor_state === "offline") {
-      const updated = await getRuntimeRepository().heartbeatDevice(device.id, "offline");
+      const updated = await repository.heartbeatDevice(device.id, "offline");
       if (!updated) throw new ApiRouteError("executor device unavailable", 401, "invalid_executor_token");
       return apiOk({
         device: {
@@ -29,7 +48,7 @@ export async function POST(request: NextRequest) {
         },
         executor_state: "offline",
         lease_renewed: false,
-        protocol_version: EXECUTOR_PROTOCOL_VERSION,
+        protocol_version: responseProtocolVersion,
         server_time: new Date().toISOString()
       });
     }
@@ -47,8 +66,6 @@ export async function POST(request: NextRequest) {
     if (!executorState) {
       throw new ApiRouteError("invalid executor state", 400, "invalid_executor_state");
     }
-    const repository = getRuntimeRepository();
-    const currentJobId = typeof body.current_job_id === "string" ? body.current_job_id : undefined;
     const authenticationFailure = body.authentication_failure &&
       typeof body.authentication_failure === "object" &&
       !Array.isArray(body.authentication_failure)
@@ -97,7 +114,7 @@ export async function POST(request: NextRequest) {
         authentication_hold_active: !held.authenticationFailureAcknowledged,
         authentication_failure_acknowledged: held.authenticationFailureAcknowledged,
         job: held.job,
-        protocol_version: EXECUTOR_PROTOCOL_VERSION,
+        protocol_version: responseProtocolVersion,
         server_time: new Date().toISOString()
       });
     }
@@ -111,8 +128,22 @@ export async function POST(request: NextRequest) {
       : executorState;
     const updated = await repository.heartbeatDevice(device.id, effectiveExecutorState);
     if (!updated) throw new ApiRouteError("executor device unavailable", 401, "invalid_executor_token");
-    const renewedJob = effectiveExecutorState === "online" && currentJobId
-      ? await repository.renewJobLease(currentJobId, device.id, DEFAULT_JOB_LEASE_MS)
+    const shouldRenewLease = effectiveExecutorState === "online" && Boolean(currentJobId);
+    const leaseToken = shouldRenewLease
+      ? drainingPreviousProtocol
+        ? previousProtocolJob?.lease_token ?? ""
+        : typeof body.lease_token === "string" ? body.lease_token : ""
+      : "";
+    if (shouldRenewLease && !leaseToken) {
+      throw new ApiRouteError("missing job lease token", 409, "job_lease_token_required");
+    }
+    const renewedJob = shouldRenewLease
+      ? await repository.renewJobLease(
+        currentJobId!,
+        device.id,
+        leaseToken,
+        DEFAULT_JOB_LEASE_MS
+      )
       : null;
     return apiOk({
       device: updated ? {
@@ -125,7 +156,7 @@ export async function POST(request: NextRequest) {
       executor_state: updated?.status ?? effectiveExecutorState,
       lease_renewed: Boolean(renewedJob),
       authentication_hold_active: holdState.active,
-      protocol_version: EXECUTOR_PROTOCOL_VERSION,
+      protocol_version: responseProtocolVersion,
       server_time: new Date().toISOString()
     });
   } catch (error) {

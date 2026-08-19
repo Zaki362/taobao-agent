@@ -117,6 +117,11 @@ export async function resolveDevServer({
   throw new Error(`未找到可用开发端口（已检查 ${defaultPort}-${defaultPort + maxAttempts - 1}）。`);
 }
 
+export function resolveDevDistDir(env = process.env) {
+  const configured = env.NEXT_DIST_DIR?.trim();
+  return configured || ".next-dev";
+}
+
 function hasPortArgument(args) {
   return args.some((argument) => argument === "-p" || argument === "--port" || argument.startsWith("--port="));
 }
@@ -130,7 +135,11 @@ export async function startDevServer(args = process.argv.slice(2)) {
   const childEnv = {
     ...runtimeEnv,
     SCENECART_API_URL: selection.url,
-    SCENECART_DEV_PORT: String(selection.port)
+    SCENECART_DEV_PORT: String(selection.port),
+    // Keep the long-running development compiler isolated from `next build`.
+    // Next otherwise lets both processes mutate `.next`, which can leave a
+    // seemingly-live dev server returning missing-chunk 500s after a build.
+    NEXT_DIST_DIR: resolveDevDistDir(runtimeEnv)
   };
 
   if (selection.changedFromDefault && selection.source === "automatic") {

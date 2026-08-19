@@ -9,7 +9,7 @@
     "dev": "node scripts/dev-auto.mjs",
     "dev:web": "node scripts/dev-server.mjs",
     "dev:auto": "node scripts/dev-auto.mjs",
-    "build": "next build",
+    "build": "node scripts/build.mjs",
     "start": "next start",
     "lint": "npm run typecheck",
     "typecheck": "tsc --noEmit",

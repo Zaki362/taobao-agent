@@ -1,9 +1,10 @@
 import { cookies } from "next/headers";
 import { ApiRouteError } from "@/lib/api/responses";
+import { AUTH_COOKIE_NAME } from "@/lib/auth/constants";
 import { authenticateToken } from "@/lib/auth/service";
 import { isFormalProductMode } from "@/lib/runtime/product-mode";
 
-export const AUTH_COOKIE_NAME = "scenecart_session";
+export { AUTH_COOKIE_NAME } from "@/lib/auth/constants";
 
 function hasHttpsAppOrigin() {
   const origins = (process.env.APP_ORIGIN ?? "")

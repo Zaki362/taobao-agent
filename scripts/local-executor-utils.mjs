@@ -1,10 +1,15 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { createHash } from "node:crypto";
 
 const RECOMMENDATION_TYPES = ["稳妥推荐", "性价比推荐", "升级推荐"];
 const SEARCH_RISK_NOTE = "当前为搜索结果摘要，未自动打开详情页，建议点开淘宝详情页确认规格与适配性";
+const PRODUCT_DETAIL_EVIDENCE_SCHEMA = "scenecart.taobao-mcp-product-detail-evidence/v1";
+const PRODUCT_DETAIL_TOOL = "navigate_to_url+read_page_content";
 export const PENDING_AUTH_FAILURE_SCHEMA = "scenecart.pending-auth-failure/v1";
+export const PENDING_RESULT_ACKNOWLEDGEMENT_SCHEMA = "scenecart.pending-result-acknowledgement/v1";
 const AUTH_FAILURE_JOB_TYPES = new Set(["module_search", "add_to_cart"]);
+const RESULT_ACKNOWLEDGEMENT_JOB_TYPES = new Set(["module_search", "product_detail", "add_to_cart"]);
 
 function asText(value) {
   return typeof value === "string" ? value.trim() : "";
@@ -37,6 +42,19 @@ function normalizeDetailUrl(value, productId) {
   const detailUrl = asText(value);
   if (/^https?:\/\//i.test(detailUrl)) return detailUrl.replace(/^http:\/\//i, "https://");
   return productId ? `https://item.taobao.com/item.htm?id=${encodeURIComponent(productId)}` : "";
+}
+
+export function isTrustedTaobaoDetailUrl(value) {
+  try {
+    const url = new URL(asText(value));
+    if (url.protocol !== "https:") return false;
+    const hostname = url.hostname.toLowerCase();
+    return ["taobao.com", "tmall.com", "tmall.hk", "tb.cn"].some(
+      (domain) => hostname === domain || hostname.endsWith(`.${domain}`)
+    );
+  } catch {
+    return false;
+  }
 }
 
 function resultObject(raw) {
@@ -280,6 +298,90 @@ export function buildTaobaoMcpSearchEvidence(context) {
     captured_at: capturedAt,
     cache_hit: false,
     raw_result_count: rawResultCount
+  };
+}
+
+function detailEvidenceContext(context) {
+  const sourceApp = asText(context?.sourceApp);
+  const jobId = asText(context?.jobId);
+  const searchJobId = asText(context?.searchJobId);
+  const moduleId = asText(context?.moduleId);
+  const workflowRunId = asText(context?.workflowRunId);
+  const productId = asText(context?.productId);
+  const detailUrl = asText(context?.detailUrl);
+  const capturedAt = asText(context?.capturedAt) || new Date().toISOString();
+  if (!sourceApp || !jobId || !searchJobId || !moduleId || !workflowRunId || !productId || !detailUrl) {
+    throw new Error("淘宝 MCP 详情证据缺少任务上下文。");
+  }
+  if (!Number.isFinite(Date.parse(capturedAt))) {
+    throw new Error("淘宝 MCP 详情证据时间无效。");
+  }
+  return {
+    schema: PRODUCT_DETAIL_EVIDENCE_SCHEMA,
+    source: "taobao-mcp",
+    tool: PRODUCT_DETAIL_TOOL,
+    source_app: sourceApp,
+    job_id: jobId,
+    search_job_id: searchJobId,
+    module_id: moduleId,
+    workflow_run_id: workflowRunId,
+    product_id: productId,
+    detail_url: detailUrl,
+    captured_at: capturedAt
+  };
+}
+
+export function buildUnavailableTaobaoMcpProductDetailEvidence(context, reason, toolsUsed = []) {
+  const unavailableReason = asText(reason).replace(/\s+/g, " ").slice(0, 300);
+  if (!unavailableReason) throw new Error("淘宝 MCP 详情不可用证据缺少原因。");
+  return {
+    ...detailEvidenceContext(context),
+    status: "unavailable",
+    tools_used: uniqueStrings(
+      toolsUsed.filter((tool) => tool === "navigate_to_url" || tool === "read_page_content"),
+      2
+    ),
+    unavailable_reason: unavailableReason
+  };
+}
+
+export function normalizeTaobaoMcpProductDetailEvidence(raw, context) {
+  const result = resultObject(raw);
+  if (result.success === false) {
+    throw new Error(asText(result.error ?? result.message) || "淘宝详情读取失败。");
+  }
+  const pageTitle = asText(result.title ?? result.pageTitle ?? result.page_title).replace(/\s+/g, " ").slice(0, 300);
+  const pageUrl = asText(result.url ?? result.pageUrl ?? result.page_url).slice(0, 1000);
+  const visibleText = asText(
+    result.content ?? result.text ?? result.visibleText ?? result.visible_text
+  ).replace(/\s+/g, " ");
+  if (!pageTitle || !pageUrl || !visibleText) {
+    throw new Error("淘宝 read_page_content 未返回完整的标题、URL 和可见正文。");
+  }
+  const displayedPriceTexts = uniqueStrings(
+    visibleText.match(/(?:¥|￥)\s*\d+(?:\.\d{1,2})?/g) ?? [],
+    5
+  );
+  const factTerms = uniqueStrings(
+    (Array.isArray(context?.factTerms) ? context.factTerms : [])
+      .filter((term) => typeof term === "string")
+      .map((term) => term.slice(0, 40)),
+    12
+  );
+  const matchedFacts = factTerms.filter((term) => visibleText.includes(term)).slice(0, 5);
+  return {
+    ...detailEvidenceContext(context),
+    status: "verified",
+    tools_used: ["navigate_to_url", "read_page_content"],
+    summary: {
+      page_title: pageTitle,
+      page_url: pageUrl,
+      visible_text_sha256: createHash("sha256").update(visibleText).digest("hex"),
+      matched_facts: matchedFacts,
+      // These are deliberately labelled as visible strings, not authoritative
+      // SKU prices. Exact SKU pricing still requires explicit SKU selection.
+      displayed_price_texts: displayedPriceTexts
+    }
   };
 }
 
@@ -577,6 +679,219 @@ export class PendingAuthenticationFailureCoordinator {
   }
 }
 
+export function createPendingResultAcknowledgement(job, result, createdAt = new Date().toISOString()) {
+  const jobId = asText(job?.id);
+  const jobType = asText(job?.job_type);
+  const leaseToken = asText(job?.lease_token);
+  if (
+    !jobId || jobId.length > 200 ||
+    !RESULT_ACKNOWLEDGEMENT_JOB_TYPES.has(jobType) ||
+    leaseToken.length < 16 || leaseToken.length > 200
+  ) {
+    throw new Error("结果回调缺少有效的执行任务上下文。");
+  }
+  if (!result || typeof result !== "object" || Array.isArray(result)) {
+    throw new Error("结果回调必须包含对象结果。");
+  }
+  if (!Number.isFinite(Date.parse(createdAt))) {
+    throw new Error("结果回调时间无效。");
+  }
+  return {
+    schema: PENDING_RESULT_ACKNOWLEDGEMENT_SCHEMA,
+    job_id: jobId,
+    job_type: jobType,
+    lease_token: leaseToken,
+    result,
+    created_at: createdAt
+  };
+}
+
+export function parsePendingResultAcknowledgement(value) {
+  const candidate = value && typeof value === "object" ? value : {};
+  return createPendingResultAcknowledgement(
+    {
+      id: candidate.schema === PENDING_RESULT_ACKNOWLEDGEMENT_SCHEMA ? candidate.job_id : "",
+      job_type: candidate.job_type,
+      lease_token: candidate.lease_token
+    },
+    candidate.result,
+    candidate.created_at
+  );
+}
+
+/**
+ * A successful local operation and its server acknowledgement are two distinct
+ * durability boundaries. This write-ahead record is fsynced before the Worker
+ * releases the execution lease. It is removed only after an idempotent
+ * `completed` response, or an explicit stale/superseded response.
+ */
+export class PendingResultAcknowledgementStore {
+  constructor(filePath) {
+    this.filePath = path.resolve(filePath);
+  }
+
+  async load() {
+    try {
+      const raw = await fs.readFile(this.filePath, "utf8");
+      return parsePendingResultAcknowledgement(JSON.parse(raw));
+    } catch (error) {
+      if (error && typeof error === "object" && error.code === "ENOENT") return null;
+      throw error;
+    }
+  }
+
+  async syncParentDirectory() {
+    let handle;
+    try {
+      handle = await fs.open(path.dirname(this.filePath), "r");
+      await handle.sync();
+    } catch (error) {
+      if (!["EINVAL", "ENOTSUP", "EPERM"].includes(error?.code)) throw error;
+    } finally {
+      await handle?.close().catch(() => undefined);
+    }
+  }
+
+  async save(callback) {
+    const normalized = parsePendingResultAcknowledgement(callback);
+    const directory = path.dirname(this.filePath);
+    const temporary = `${this.filePath}.${process.pid}.${Date.now()}.tmp`;
+    await fs.mkdir(directory, { recursive: true, mode: 0o700 });
+    try {
+      const handle = await fs.open(temporary, "wx", 0o600);
+      try {
+        await handle.writeFile(JSON.stringify(normalized), "utf8");
+        await handle.sync();
+      } finally {
+        await handle.close();
+      }
+      await fs.rename(temporary, this.filePath);
+      await fs.chmod(this.filePath, 0o600);
+      await this.syncParentDirectory();
+    } catch (error) {
+      await fs.unlink(temporary).catch(() => undefined);
+      throw error;
+    }
+    return normalized;
+  }
+
+  async clear(expectedJobId, expectedLeaseToken) {
+    const current = await this.load();
+    if (!current) return false;
+    if (
+      current.job_id !== expectedJobId ||
+      current.lease_token !== expectedLeaseToken
+    ) {
+      throw new Error("拒绝清除不匹配的结果回调。");
+    }
+    await fs.unlink(this.filePath);
+    await this.syncParentDirectory();
+    return true;
+  }
+}
+
+function resultAcknowledgementWasConfirmed(response, callback) {
+  return response?.job?.id === callback.job_id && response?.job?.status === "completed";
+}
+
+export class PendingResultAcknowledgementCoordinator {
+  constructor(store) {
+    this.store = store;
+    this.pending = null;
+  }
+
+  async restore() {
+    this.pending = await this.store.load();
+    return this.pending;
+  }
+
+  hold(callback) {
+    const normalized = parsePendingResultAcknowledgement(callback);
+    if (
+      this.pending &&
+      (
+        this.pending.job_id !== normalized.job_id ||
+        this.pending.lease_token !== normalized.lease_token
+      )
+    ) {
+      throw new Error("已有另一个结果等待服务端确认，拒绝覆盖回调账本。");
+    }
+    this.pending = normalized;
+    return this.pending;
+  }
+
+  async current() {
+    if (this.pending) return this.pending;
+    this.pending = await this.store.load();
+    return this.pending;
+  }
+
+  async persistHeld() {
+    const callback = await this.current();
+    if (!callback) return { persisted: true, callback: null };
+    try {
+      await this.store.save(callback);
+      return { persisted: true, callback };
+    } catch (error) {
+      return {
+        persisted: false,
+        callback,
+        error: error instanceof Error ? error.message : String(error)
+      };
+    }
+  }
+
+  async deliver(report, options = {}) {
+    const callback = await this.current();
+    if (!callback) return { state: "empty", callback: null, persisted: true };
+    const persistence = await this.persistHeld();
+    let response;
+    try {
+      response = await report(callback);
+      if (!resultAcknowledgementWasConfirmed(response, callback)) {
+        return {
+          state: "pending",
+          callback,
+          persisted: persistence.persisted,
+          error: "服务端尚未确认任务进入 completed 终态。"
+        };
+      }
+    } catch (error) {
+      if (options.isFatalError?.(error, callback)) throw error;
+      if (!options.isDiscardableError?.(error, callback)) {
+        return {
+          state: "pending",
+          callback,
+          persisted: persistence.persisted,
+          error: error instanceof Error ? error.message : String(error)
+        };
+      }
+    }
+
+    const discarded = !response;
+    this.pending = null;
+    let cleanupError;
+    try {
+      const stored = await this.store.load();
+      if (
+        stored?.job_id === callback.job_id &&
+        stored?.lease_token === callback.lease_token
+      ) {
+        await this.store.clear(callback.job_id, callback.lease_token);
+      }
+    } catch (error) {
+      cleanupError = error instanceof Error ? error.message : String(error);
+    }
+    return {
+      state: discarded ? "discarded" : "confirmed",
+      callback,
+      response,
+      persisted: persistence.persisted,
+      cleanup_error: cleanupError
+    };
+  }
+}
+
 export function executorFailureDisposition({ authenticationRequired, leaseLost }) {
   // Authentication failure is durable evidence that the action must not be
   // replayed. It wins even when lease renewal failed at the same time: the
@@ -584,21 +899,4 @@ export function executorFailureDisposition({ authenticationRequired, leaseLost }
   if (authenticationRequired) return "persist_authentication_failure";
   if (leaseLost) return "abandon_lost_lease";
   return "report_failure";
-}
-
-export function canAcknowledgeResultWithoutCache(job, result) {
-  return job?.job_type === "add_to_cart" && result?.success === true;
-}
-
-export async function cacheResultForAcknowledgement(job, result, writeCache) {
-  try {
-    await writeCache();
-    return { cached: true };
-  } catch (error) {
-    if (!canAcknowledgeResultWithoutCache(job, result)) throw error;
-    return {
-      cached: false,
-      error: error instanceof Error ? error.message : String(error)
-    };
-  }
 }

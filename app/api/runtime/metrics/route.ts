@@ -3,8 +3,8 @@ import { getRequestIdentity } from "@/lib/auth/request";
 import { apiOk, apiRouteError, requireString } from "@/lib/api/responses";
 import { ensureSession } from "@/lib/agent/orchestrator";
 import { getRuntimeRepository } from "@/lib/runtime";
-import { getLlmTelemetrySnapshot } from "@/lib/llm/telemetry";
-import { evaluateRuntimeHealth } from "@/lib/runtime/monitoring";
+import { sessionLlmTelemetrySnapshot } from "@/lib/llm/session-evidence";
+import { evaluateRuntimeHealth, summarizeRuntimeJobTypes } from "@/lib/runtime/monitoring";
 import { isExecutorDeviceOnline, summarizeExecutorDevices } from "@/lib/runtime/executor-status";
 import {
   summarizeWorkflowRecoveryHeartbeat,
@@ -21,7 +21,7 @@ export async function GET(request: NextRequest) {
     const repository = getRuntimeRepository();
     const [jobs, devices, deviceAuditEvents, recoveryHeartbeat] = await Promise.all([
       repository.listJobs(sessionId, identity.userId),
-      identity.userId ? repository.listDevices(identity.userId) : Promise.resolve([]),
+      repository.listDevices(identity.userId),
       identity.userId ? repository.listAuditEvents(identity.userId, 12) : Promise.resolve([]),
       repository.getServiceHeartbeat(WORKFLOW_RECOVERY_SERVICE)
     ]);
@@ -32,6 +32,16 @@ export async function GET(request: NextRequest) {
     }, {});
     const pendingJobs = jobs.filter((job) => job.status === "pending");
     const completedJobs = jobs.filter((job) => job.status === "completed" && job.completed_at);
+    const detailJobs = jobs.filter((job) => job.job_type === "product_detail");
+    const completedDetailJobs = detailJobs.filter((job) => job.status === "completed");
+    const detailEvidenceStatus = (job: (typeof jobs)[number]) => {
+      const evidence = job.result?.detail_evidence;
+      return evidence && typeof evidence === "object" && !Array.isArray(evidence)
+        ? (evidence as Record<string, unknown>).status
+        : undefined;
+    };
+    const verifiedDetailJobs = completedDetailJobs.filter((job) => detailEvidenceStatus(job) === "verified");
+    const unavailableDetailJobs = completedDetailJobs.filter((job) => detailEvidenceStatus(job) === "unavailable");
     const averageDurationMs = completedJobs.length
       ? Math.round(completedJobs.reduce(
           (sum, job) => sum + Math.max(0, Date.parse(job.completed_at!) - Date.parse(job.created_at)),
@@ -39,6 +49,7 @@ export async function GET(request: NextRequest) {
         ) / completedJobs.length)
       : 0;
     const executorDevices = summarizeExecutorDevices(devices, now);
+    const jobsByType = summarizeRuntimeJobTypes(jobs);
 
     const jobMetrics = {
       total: jobs.length,
@@ -51,14 +62,18 @@ export async function GET(request: NextRequest) {
         ? Math.max(...pendingJobs.map((job) => now - Date.parse(job.created_at)))
         : 0,
       average_duration_ms: averageDurationMs,
+      by_type: jobsByType,
       pending_by_type: {
         module_search: pendingJobs.filter((job) => job.job_type === "module_search").length,
+        product_detail: pendingJobs.filter((job) => job.job_type === "product_detail").length,
         add_to_cart: pendingJobs.filter((job) => job.job_type === "add_to_cart").length
       }
     };
     const deviceMetrics = {
       total: executorDevices.registered,
       online: executorDevices.online,
+      mcp_unavailable: executorDevices.mcp_unavailable,
+      authentication_required: executorDevices.authentication_required,
       capabilities: executorDevices.capabilities,
       last_heartbeat_at: devices
         .filter((device) => isExecutorDeviceOnline(device, now))
@@ -67,7 +82,18 @@ export async function GET(request: NextRequest) {
         .sort()
         .at(-1) ?? null
     };
-    const llmMetrics = getLlmTelemetrySnapshot();
+    const detailEvidenceMetrics = {
+      total: detailJobs.length,
+      verified: verifiedDetailJobs.length,
+      unavailable: unavailableDetailJobs.length,
+      failed: detailJobs.filter((job) => job.status === "failed" || job.status === "cancelled").length,
+      last_verified_at: verifiedDetailJobs
+        .map((job) => job.completed_at)
+        .filter((value): value is string => Boolean(value))
+        .sort()
+        .at(-1) ?? null
+    };
+    const llmMetrics = sessionLlmTelemetrySnapshot(session.llm_calls);
     const workflowRecovery = {
       configured: (process.env.SCENECART_CRON_SECRET?.trim().length ?? 0) >= 32,
       ...summarizeWorkflowRecoveryHeartbeat(recoveryHeartbeat, now)
@@ -80,10 +106,12 @@ export async function GET(request: NextRequest) {
       devices: deviceMetrics,
       device_audit_events: deviceAuditEvents,
       workflow_recovery: workflowRecovery,
+      detail_evidence: detailEvidenceMetrics,
       llm: llmMetrics,
       health: evaluateRuntimeHealth({
         jobs: jobMetrics,
         devices: deviceMetrics,
+        detailEvidence: detailEvidenceMetrics,
         llm: llmMetrics,
         workflowRecovery,
         agentRuntime: session.agent_runtime

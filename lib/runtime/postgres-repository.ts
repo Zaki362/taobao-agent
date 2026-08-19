@@ -1,6 +1,11 @@
 import type { PoolClient } from "pg";
 import { createHash, randomUUID } from "node:crypto";
 import { query, withTransaction } from "@/lib/runtime/database";
+import { allowUnownedRuntimeJobs } from "@/lib/runtime/product-mode";
+import {
+  claimableJobTypes,
+  executorCapabilityForJobType
+} from "@/lib/runtime/types";
 import type {
   AuthenticationFailureHold,
   AuthSessionRecord,
@@ -71,6 +76,7 @@ function normalizeJob(row: Record<string, unknown>): RuntimeJob {
     lease_owner_id: row.lease_owner_id ? String(row.lease_owner_id) : undefined,
     lease_expires_at: iso(row.lease_expires_at as Date),
     lease_token: row.lease_token ? String(row.lease_token) : undefined,
+    lease_protocol: row.lease_protocol ? String(row.lease_protocol) : undefined,
     last_auth_failure_token_hash: row.last_auth_failure_token_hash
       ? String(row.last_auth_failure_token_hash)
       : undefined,
@@ -226,6 +232,48 @@ export const postgresRuntimeRepository: RuntimeRepository = {
          AND sessions.state #>> '{agent_runtime,auto_continue}' = 'true'
          AND sessions.state #>> '{agent_runtime,workflow_status}' IN ('running', 'waiting_for_tools')
          ${ownerClause}
+         AND NOT EXISTS (
+           SELECT 1
+           FROM agent_jobs AS detail_jobs
+           WHERE detail_jobs.session_id = sessions.id
+             AND detail_jobs.job_type = 'product_detail'
+             AND detail_jobs.status IN ('pending', 'leased', 'running')
+             AND detail_jobs.payload->>'workflow_run_id' = sessions.state #>> '{agent_runtime,workflow_run_id}'
+             AND sessions.state->'module_candidates'->(detail_jobs.payload->>'module_id')->0->>'product_id' =
+               detail_jobs.payload->>'product_id'
+             AND sessions.state->'module_candidates'->(detail_jobs.payload->>'module_id')->0->>'detail_url' =
+               detail_jobs.payload->>'detail_url'
+             AND EXISTS (
+               SELECT 1
+               FROM jsonb_array_elements(COALESCE(sessions.state->'hosted_tasks', '[]'::jsonb))
+                 WITH ORDINALITY AS provenance(task, position)
+               WHERE provenance.task->>'task_type' = 'module_search'
+                 AND provenance.task->>'module_id' = detail_jobs.payload->>'module_id'
+                 AND provenance.task->>'status' = 'completed'
+                 AND COALESCE(
+                   provenance.task->>'runtime_job_id',
+                   provenance.task->>'task_id'
+                 ) = detail_jobs.payload->>'search_job_id'
+                 AND provenance.task->'payload'->>'preferred_product_detail_job_id' = detail_jobs.id::text
+                 AND provenance.task->'payload'->>'preferred_product_id' = detail_jobs.payload->>'product_id'
+                 AND NOT EXISTS (
+                   SELECT 1
+                   FROM jsonb_array_elements(COALESCE(sessions.state->'hosted_tasks', '[]'::jsonb))
+                     WITH ORDINALITY AS newer_provenance(task, position)
+                   WHERE newer_provenance.position < provenance.position
+                     AND newer_provenance.task->>'task_type' = 'module_search'
+                     AND newer_provenance.task->>'module_id' = detail_jobs.payload->>'module_id'
+                     AND COALESCE(
+                       newer_provenance.task->'payload'->>'preferred_product_detail_job_id',
+                       ''
+                     ) <> ''
+                 )
+             )
+             AND COALESCE(
+               sessions.state->'module_candidates'->(detail_jobs.payload->>'module_id')->0->'detail_evidence'->>'job_id',
+               ''
+             ) <> detail_jobs.id::text
+         )
          AND (
            NOT EXISTS (
              SELECT 1
@@ -288,8 +336,15 @@ export const postgresRuntimeRepository: RuntimeRepository = {
     await query("DELETE FROM auth_sessions WHERE token_hash = $1", [tokenHash]);
   },
 
-  async touchAuthSession(tokenHash) {
-    await query("UPDATE auth_sessions SET last_seen_at = NOW() WHERE token_hash = $1", [tokenHash]);
+  async touchAuthSession(tokenHash, minIntervalMs = 0) {
+    await query(
+      `UPDATE auth_sessions
+       SET last_seen_at = NOW()
+       WHERE token_hash = $1
+         AND expires_at > NOW()
+         AND last_seen_at <= NOW() - ($2::text || ' milliseconds')::interval`,
+      [tokenHash, Math.max(0, Math.floor(minIntervalMs))]
+    );
   },
 
   async createDevice(device) {
@@ -391,6 +446,7 @@ export const postgresRuntimeRepository: RuntimeRepository = {
          lease_owner_id = CASE WHEN agent_jobs.status IN ('failed', 'cancelled') THEN NULL ELSE agent_jobs.lease_owner_id END,
          lease_expires_at = CASE WHEN agent_jobs.status IN ('failed', 'cancelled') THEN NULL ELSE agent_jobs.lease_expires_at END,
          lease_token = CASE WHEN agent_jobs.status IN ('failed', 'cancelled') THEN NULL ELSE agent_jobs.lease_token END,
+         lease_protocol = CASE WHEN agent_jobs.status IN ('failed', 'cancelled') THEN NULL ELSE agent_jobs.lease_protocol END,
          completed_at = CASE WHEN agent_jobs.status IN ('failed', 'cancelled') THEN NULL ELSE agent_jobs.completed_at END,
          updated_at = CASE WHEN agent_jobs.status IN ('failed', 'cancelled') THEN NOW() ELSE agent_jobs.updated_at END
        WHERE NOT EXISTS (
@@ -454,7 +510,7 @@ export const postgresRuntimeRepository: RuntimeRepository = {
     return result.rows.map(normalizeJob);
   },
 
-  async claimJob(device, leaseMs) {
+  async claimJob(device, leaseMs, protocolVersion = "4") {
     if (device.status !== "online") return null;
     return withTransaction(async (client) => {
       const deviceResult = await client.query(
@@ -476,11 +532,14 @@ export const postgresRuntimeRepository: RuntimeRepository = {
            updated_at = NOW()
          WHERE status IN ('leased', 'running') AND lease_expires_at <= NOW()`
       );
+      const ownerPredicate = allowUnownedRuntimeJobs()
+        ? "(user_id IS NULL OR user_id = $1)"
+        : "user_id = $1";
       const selected = await client.query(
         `SELECT * FROM agent_jobs
          WHERE status = 'pending'
            AND available_at <= NOW()
-           AND (user_id IS NULL OR user_id = $1)
+           AND ${ownerPredicate}
            AND job_type = ANY($2::text[])
            AND NOT (
              lease_token IS NOT NULL AND EXISTS (
@@ -520,7 +579,7 @@ export const postgresRuntimeRepository: RuntimeRepository = {
          ORDER BY priority DESC, created_at ASC
          FOR UPDATE SKIP LOCKED
          LIMIT 1`,
-        [storedDevice.user_id, storedDevice.capabilities]
+        [storedDevice.user_id, claimableJobTypes(storedDevice.capabilities)]
       );
       if (!selected.rowCount) return null;
       const claimed = await client.query(
@@ -529,33 +588,38 @@ export const postgresRuntimeRepository: RuntimeRepository = {
            lease_owner_id = $2,
            lease_expires_at = NOW() + ($3::text || ' milliseconds')::interval,
            lease_token = $4,
+           lease_protocol = $5,
            attempts = attempts + 1,
            updated_at = NOW()
          WHERE id = $1 RETURNING *`,
-        [selected.rows[0].id, storedDevice.id, Math.max(leaseMs, 5_000), randomUUID()]
+        [selected.rows[0].id, storedDevice.id, Math.max(leaseMs, 5_000), randomUUID(), protocolVersion]
       );
       return normalizeJob(claimed.rows[0]);
     });
   },
 
-  async renewJobLease(jobId, deviceId, leaseMs) {
+  async renewJobLease(jobId, deviceId, leaseToken, leaseMs) {
     const result = await query(
       `UPDATE agent_jobs SET
          status = 'running',
-         lease_expires_at = NOW() + ($3::text || ' milliseconds')::interval,
+         lease_expires_at = NOW() + ($4::text || ' milliseconds')::interval,
          updated_at = NOW()
-       WHERE id = $1 AND lease_owner_id = $2 AND status IN ('leased', 'running')
+       WHERE id = $1
+         AND lease_owner_id = $2
+         AND lease_token = $3
+         AND status IN ('leased', 'running')
        RETURNING *`,
-      [jobId, deviceId, Math.max(leaseMs, 5_000)]
+      [jobId, deviceId, leaseToken, Math.max(leaseMs, 5_000)]
     );
     return result.rowCount ? normalizeJob(result.rows[0]) : null;
   },
 
-  async completeJob(jobId, deviceId, result) {
+  async completeJob(jobId, deviceId, result, leaseToken) {
     return withTransaction(async (client) => {
       const job = await selectJobForUpdate(client, jobId);
-      if (job.status === "completed") return { job, alreadyCompleted: true };
       if (job.lease_owner_id !== deviceId) throw new Error("job lease owner mismatch");
+      if (!job.lease_token || job.lease_token !== leaseToken) throw new Error("job lease token mismatch");
+      if (job.status === "completed") return { job, alreadyCompleted: true };
       const updated = await client.query(
         `UPDATE agent_jobs SET status = 'completed', result = $2::jsonb, completed_at = NOW(),
          lease_expires_at = NULL, updated_at = NOW() WHERE id = $1 RETURNING *`,
@@ -565,11 +629,12 @@ export const postgresRuntimeRepository: RuntimeRepository = {
     });
   },
 
-  async failJob(jobId, deviceId, errorMessage, retryDelayMs = 2_000, terminal = false) {
+  async failJob(jobId, deviceId, errorMessage, leaseToken, retryDelayMs = 2_000, terminal = false) {
     return withTransaction(async (client) => {
       const job = await selectJobForUpdate(client, jobId);
-      if (job.status === "completed") return job;
       if (job.lease_owner_id !== deviceId) throw new Error("job lease owner mismatch");
+      if (!job.lease_token || job.lease_token !== leaseToken) throw new Error("job lease token mismatch");
+      if (job.status === "completed") return job;
       const shouldRetry = !terminal && job.attempts < job.max_attempts;
       const updated = await client.query(
         `UPDATE agent_jobs SET
@@ -607,7 +672,7 @@ export const postgresRuntimeRepository: RuntimeRepository = {
           ? storedDevice.capabilities as string[]
           : [];
         if (
-          !capabilities.includes(job.job_type) ||
+          !capabilities.includes(executorCapabilityForJobType(job.job_type)) ||
           job.attempts <= 0 ||
           !job.lease_token ||
           job.lease_token !== leaseToken ||
@@ -646,7 +711,7 @@ export const postgresRuntimeRepository: RuntimeRepository = {
         : [];
       if (
         (job.job_type !== "module_search" && job.job_type !== "add_to_cart") ||
-        !capabilities.includes(job.job_type) ||
+        !capabilities.includes(executorCapabilityForJobType(job.job_type)) ||
         job.attempts <= 0 ||
         !job.lease_token ||
         job.lease_token !== leaseToken ||
@@ -703,7 +768,7 @@ export const postgresRuntimeRepository: RuntimeRepository = {
         : [];
       if (
         (job.job_type !== "module_search" && job.job_type !== "add_to_cart") ||
-        !capabilities.includes(job.job_type) ||
+        !capabilities.includes(executorCapabilityForJobType(job.job_type)) ||
         job.attempts <= 0 ||
         !job.lease_token ||
         job.lease_token !== leaseToken ||

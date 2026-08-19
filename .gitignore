@@ -3,6 +3,7 @@ node_modules
 
 # build outputs
 .next
+.next-dev
 .next-verify
 .next-e2e
 .next-interview-demo

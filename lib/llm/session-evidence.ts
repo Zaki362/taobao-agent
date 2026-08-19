@@ -52,3 +52,38 @@ export function sessionLlmSummary(calls: SessionLlmCall[]) {
     latest: calls.at(-1)
   };
 }
+
+function percentile(values: number[], ratio: number) {
+  if (values.length === 0) return 0;
+  const sorted = [...values].sort((left, right) => left - right);
+  return sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * ratio))];
+}
+
+export function sessionLlmTelemetrySnapshot(calls: SessionLlmCall[]) {
+  const grouped = new Map<SessionLlmCall["task"], SessionLlmCall[]>();
+  for (const call of calls) {
+    grouped.set(call.task, [...(grouped.get(call.task) ?? []), call]);
+  }
+  const tasks = [...grouped.entries()].map(([task, taskCalls]) => {
+    const latest = taskCalls.at(-1)!;
+    const durations = taskCalls.map((call) => Math.max(0, call.duration_ms));
+    const totalDuration = durations.reduce((sum, duration) => sum + duration, 0);
+    return {
+      task,
+      model: latest.model,
+      calls: taskCalls.length,
+      connected: taskCalls.filter((call) => call.mode === "connected").length,
+      fallback: taskCalls.filter((call) => call.mode === "fallback").length,
+      average_duration_ms: Math.round(totalDuration / taskCalls.length),
+      p95_duration_ms: percentile(durations, 0.95),
+      last_reason: latest.reason,
+      last_called_at: latest.created_at
+    };
+  });
+  return {
+    calls: calls.length,
+    connected: calls.filter((call) => call.mode === "connected").length,
+    fallback: calls.filter((call) => call.mode === "fallback").length,
+    tasks
+  };
+}

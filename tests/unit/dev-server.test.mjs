@@ -1,7 +1,17 @@
 import { describe, expect, it } from "vitest";
-import { commandPort, localApiPort, resolveDevServer } from "../../scripts/dev-server.mjs";
+import {
+  commandPort,
+  localApiPort,
+  resolveDevDistDir,
+  resolveDevServer
+} from "../../scripts/dev-server.mjs";
 
 describe("SceneCart development server selection", () => {
+  it("isolates the development compiler from the production build directory", () => {
+    expect(resolveDevDistDir({})).toBe(".next-dev");
+    expect(resolveDevDistDir({ NEXT_DIST_DIR: " .next-custom " })).toBe(".next-custom");
+  });
+
   it("parses supported Next.js port arguments", () => {
     expect(commandPort(["-p", "3001"])).toBe(3001);
     expect(commandPort(["--port", "3100"])).toBe(3100);

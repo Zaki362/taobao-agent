@@ -58,6 +58,8 @@ npm run check
 npm run start
 ```
 
+仓库的 `npm run build` 由 `scripts/build.mjs` 驱动：检测到 `VERCEL_ENV=production` 时，先执行上述迁移与校验，任一步失败都会阻止部署；Preview 与本地构建只执行 Next.js 构建，不读取生产数据库。非 Vercel 发布仍需显式执行上述命令。
+
 `db/migrations/001_production_runtime.sql` 会创建：
 
 - `app_users`
@@ -67,9 +69,9 @@ npm run start
 - `agent_jobs`
 - `execution_events`
 
-`db/migrations/002_security_rate_limits.sql` 创建不保存邮箱或 IP 明文的认证限流表；`003_workflow_recovery_index.sql` 增加工作流恢复扫描索引；`004_runtime_service_heartbeats.sql` 保存恢复 Worker / Cron 心跳；`005_executor_authentication_state.sql` 增加登录暂停状态；`006_job_lease_token.sql` 增加租约代次保护；`007_executor_mcp_availability_state.sql` 增加 `mcp_unavailable` 设备状态。migration runner 会保存每个 SQL 文件的 SHA-256 checksum；已执行 migration 被修改时会拒绝继续，必须新增 migration。`db:check` 除了校验所有 migration checksum，还会直接检查包括 `runtime_service_heartbeats` 在内的运行时实体表，防止表被意外删除但 migration 记录仍存在时产生假健康。
+`db/migrations/002_security_rate_limits.sql` 创建不保存邮箱或 IP 明文的认证限流表；`003_workflow_recovery_index.sql` 增加工作流恢复扫描索引；`004_runtime_service_heartbeats.sql` 保存恢复 Worker / Cron 心跳；`005_executor_authentication_state.sql` 增加登录暂停状态；`006_job_lease_token.sql` 增加租约代次保护；`007_executor_mcp_availability_state.sql` 增加 `mcp_unavailable` 设备状态；`008_job_lease_protocol.sql` 记录每次 Job 领取时使用的执行器协议。migration runner 会保存每个 SQL 文件的 SHA-256 checksum；已执行 migration 被修改时会拒绝继续，必须新增 migration。`db:check` 除了校验所有 migration checksum，还会直接检查包括 `runtime_service_heartbeats` 在内的运行时实体表，防止表被意外删除但 migration 记录仍存在时产生假健康。
 
-当前执行器协议为 **v3**。发布顺序必须是：先对目标数据库执行包含 migration 007 的 `npm run db:migrate && npm run db:check`，再部署 v3 服务端，最后更新本机项目并重启 Worker。Worker、Doctor 与服务端版本不一致时，心跳、领取或回填会以 `426 executor_protocol_mismatch` 失败；不要在旧 schema 上启动 v3 Worker。
+当前执行器协议为 **v4**。发布顺序必须是：停止旧 Worker；由 Vercel Production 构建自动执行（或在其他平台手工执行）包含 migration 008 的 `npm run db:migrate && npm run db:check`；如需保护升级前在途搜索/加购，把 `SCENECART_EXECUTOR_V3_DRAIN_UNTIL` 临时设为未来不超过 2 小时的 ISO 时间；部署 v4 服务端；更新本机项目并重启 Worker；确认排空后删除该变量。v3 新任务领取始终返回 `426`，旧回填还必须同时匹配领取协议 `3`、原设备和原租约 token，且超过截止时间后自动关闭。兼容窗口不接收 `product_detail`。
 
 任务领取使用 PostgreSQL 事务和 `FOR UPDATE SKIP LOCKED`，支持多个执行器并发但不会重复领取同一任务。
 
@@ -131,11 +133,11 @@ npm run worker:local
 
 Worker 先检查服务端健康、设备令牌、持久失败回执和 `module_search` 能力，然后以 `mcp_unavailable` 心跳进入淘宝就绪检查。它会按指数退避重复执行无副作用的 MCP `tools/list`；在工具未就绪期间保持进程存活、停止领取 Job，网页和执行台明确显示“等待淘宝桌面版工具恢复”。搜索设备必须检测到 `search_products` 与 `get_current_tab`；启用真实加购的设备还必须检测到 `get_product_skus` 和 `add_to_cart`。全部通过后设备才切换为 `online` 并领取任务。因此“Worker 进程存在”“MCP 重连中”和“真实搜索可用”是三个可区分的状态。
 
-真实任务采用最小调用面：搜索使用淘宝 skill 默认的综合搜索路径 `all` 且每次用户确认只调用一次 `search_products`；加购先读取 `get_product_skus`，只有淘宝明确返回无规格或用户已完整选择有效规格时，才调用一次 `add_to_cart`。执行器不在搜索或加购前后调用 `get_current_tab`，因为淘宝桌面端在内部登录状态不同步时会让该工具主动跳转登录页；该工具只会在真实调用已经报告登录失败、Worker 进入鉴权暂停后用于低频检测登录是否恢复。Worker 在完整生命周期内复用同一个 Streamable HTTP `mcp-session-id`，仅在协议明确报告会话失效时重新初始化。退出时只清理本地会话引用，不向淘宝发送远端 `DELETE`；淘宝桌面端会按 TTL 回收旧会话，避免远端终止连带破坏购物 WebView 登录态。
+真实任务采用最小调用面：搜索使用淘宝桌面版官方 MCP 的综合搜索路径 `all`，每个搜索 Job 只调用一次 `search_products`；搜索候选完成重排后，只为当前首选调用一次 `navigate_to_url` 和一次 `read_page_content`，并且不持久化页面原始正文；加购先读取 `get_product_skus`，只有淘宝明确返回无规格或用户已完整选择有效规格时，才调用一次 `add_to_cart`。执行器不在搜索或加购前后调用 `get_current_tab`，因为淘宝桌面端在内部登录状态不同步时会让该工具主动跳转登录页；该工具只会在真实调用已经报告登录失败、Worker 进入鉴权暂停后用于低频检测登录是否恢复。Worker 在完整生命周期内复用同一个 Streamable HTTP `mcp-session-id`，仅在协议明确报告会话失效时重新初始化。退出时只清理本地会话引用，不向淘宝发送远端 `DELETE`；淘宝桌面端会按 TTL 回收旧会话，避免远端终止连带破坏购物 WebView 登录态。
 
 MCP 传输不可达、工具层未加载或必需工具缺失会打开就绪熔断：Worker 切换为 `mcp_unavailable`，不再领取任务，并在每次新探测前重建 MCP 会话。未领取搜索保持 `pending`、尝试次数不增加；连接恢复并通过工具检查后自动继续队列。若真实工具返回登录错误，则进入更严格的 `authentication_required`：用户完成淘宝登录后无需重启 Worker，但登录恢复不会自动重试失败动作；网页保留已回填候选，并要求用户明确选择继续失败搜索或使用部分结果。真实加购在 MCP、Worker 或登录恢复后都不会自动重放，用户必须先确认淘宝购物车实际状态，再重新发起一次显式确认。
 
-Worker、Doctor 和服务端使用统一的执行器协议版本。每次心跳、任务领取和结果回填都会携带协议版本；缺失或不兼容时服务端返回 `426 executor_protocol_mismatch`。升级网页服务后应同步更新本地项目并重启 Worker，旧进程不会继续领取新任务。
+Worker、Doctor 和服务端使用统一的执行器协议版本。每次心跳、任务领取和结果回填都会携带协议版本；缺失或不兼容时服务端返回 `426 executor_protocol_mismatch`。只有显式、短时、带领取协议与租约代次校验的 v3 排空窗口例外；平时不设置 `SCENECART_EXECUTOR_V3_DRAIN_UNTIL`。升级网页服务后应同步更新本地项目并重启 Worker，旧进程不会继续领取新任务。
 
 可选配置：
 

@@ -1,6 +1,10 @@
 import { advanceAgentWorkflow } from "@/lib/agent/workflow-runner";
 import { getRuntimeRepository } from "@/lib/runtime";
-import { reconcileCompletedRuntimeJob, reconcileTerminalRuntimeJob } from "@/lib/runtime/jobs";
+import {
+  isCurrentPreferredProductDetailJob,
+  reconcileCompletedRuntimeJob,
+  reconcileTerminalRuntimeJob
+} from "@/lib/runtime/jobs";
 import type { ExecutorDevice } from "@/lib/runtime/types";
 import type { SessionState } from "@/lib/session/types";
 
@@ -17,8 +21,50 @@ export interface WorkflowRecoveryScanResult {
   items: WorkflowRecoveryResult[];
 }
 
+async function hasDeferredProductDetail(
+  sessionId: string,
+  userId: string | undefined,
+  searchJobId: string
+) {
+  const repository = getRuntimeRepository();
+  const state = await repository.getSession(sessionId, userId);
+  if (!state) return false;
+  return (await repository.listJobs(sessionId, userId)).some((job) =>
+    job.job_type === "product_detail" &&
+    job.payload.search_job_id === searchJobId &&
+    isCurrentPreferredProductDetailJob(state, job) &&
+    (job.status === "pending" || job.status === "leased" || job.status === "running")
+  );
+}
+
 async function recoverSession(state: SessionState): Promise<WorkflowRecoveryResult> {
   const repository = getRuntimeRepository();
+  const workflowRunId = state.agent_runtime.workflow_run_id;
+  const detailJob = (await repository.listJobs(state.session_id, state.owner_id)).find((job) => {
+    if (!isCurrentPreferredProductDetailJob(state, job)) return false;
+    const moduleId = typeof job.payload.module_id === "string" ? job.payload.module_id : "";
+    const preferred = state.module_candidates[moduleId]?.[0];
+    return preferred?.detail_evidence?.job_id !== job.id;
+  });
+  if (detailJob) {
+    if (
+      detailJob.status === "pending" ||
+      detailJob.status === "leased" ||
+      detailJob.status === "running"
+    ) {
+      return { recovered: false, session_id: state.session_id };
+    }
+    if (detailJob.status === "completed") {
+      await reconcileCompletedRuntimeJob(detailJob.id);
+      await advanceAgentWorkflow(state.session_id, state.owner_id, { trigger: "recovery" });
+      return { recovered: true, session_id: state.session_id, reason: "completed_result" };
+    }
+    if (detailJob.status === "failed" || detailJob.status === "cancelled") {
+      await reconcileTerminalRuntimeJob(detailJob.id);
+      await advanceAgentWorkflow(state.session_id, state.owner_id, { trigger: "recovery" });
+      return { recovered: true, session_id: state.session_id, reason: "terminal_state" };
+    }
+  }
   const activeTask = state.hosted_tasks.find((task) =>
     task.task_type === "module_search" &&
     (task.status === "pending" || task.status === "running")
@@ -31,6 +77,9 @@ async function recoverSession(state: SessionState): Promise<WorkflowRecoveryResu
     }
     if (job.status === "completed") {
       await reconcileCompletedRuntimeJob(job.id);
+      if (await hasDeferredProductDetail(state.session_id, state.owner_id, job.id)) {
+        return { recovered: true, session_id: state.session_id, reason: "completed_result" };
+      }
       await advanceAgentWorkflow(state.session_id, state.owner_id, { trigger: "recovery" });
       return { recovered: true, session_id: state.session_id, reason: "completed_result" };
     }
@@ -48,7 +97,6 @@ async function recoverSession(state: SessionState): Promise<WorkflowRecoveryResu
     return { recovered: false, session_id: state.session_id };
   }
 
-  const workflowRunId = state.agent_runtime.workflow_run_id;
   if (workflowRunId) {
     const orphanedTerminalJob = (await repository.listJobs(state.session_id, state.owner_id)).find((job) =>
       job.job_type === "module_search" &&
@@ -59,6 +107,9 @@ async function recoverSession(state: SessionState): Promise<WorkflowRecoveryResu
 
     if (orphanedTerminalJob?.status === "completed") {
       await reconcileCompletedRuntimeJob(orphanedTerminalJob.id);
+      if (await hasDeferredProductDetail(state.session_id, state.owner_id, orphanedTerminalJob.id)) {
+        return { recovered: true, session_id: state.session_id, reason: "completed_result" };
+      }
       await advanceAgentWorkflow(state.session_id, state.owner_id, { trigger: "recovery" });
       return { recovered: true, session_id: state.session_id, reason: "completed_result" };
     }

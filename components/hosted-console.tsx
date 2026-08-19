@@ -4,7 +4,8 @@ import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Pause, Play, RefreshCcw } from "lucide-react";
 import { jsonFetch } from "@/components/dashboard-api";
-import { HostedWorkerStatus } from "@/components/dashboard-types";
+import type { HostedWorkerStatus, MpcStatus } from "@/components/dashboard-types";
+import { executionConsoleStatus } from "@/components/hosted-console-status";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -27,14 +28,25 @@ type RuntimeMetrics = {
     cancelled: number;
     oldest_pending_ms: number;
     average_duration_ms: number;
+    by_type: Record<"module_search" | "product_detail" | "add_to_cart", {
+      total: number;
+      pending: number;
+      active: number;
+      completed: number;
+      failed: number;
+      cancelled: number;
+    }>;
     pending_by_type: {
       module_search: number;
+      product_detail: number;
       add_to_cart: number;
     };
   };
   devices: {
     total: number;
     online: number;
+    mcp_unavailable: number;
+    authentication_required: number;
     last_heartbeat_at: string | null;
     capabilities: {
       module_search: { registered: number; online: number; available: boolean };
@@ -54,6 +66,13 @@ type RuntimeMetrics = {
     last_heartbeat_at: string | null;
     age_ms: number | null;
     stale_after_ms: number;
+  };
+  detail_evidence: {
+    total: number;
+    verified: number;
+    unavailable: number;
+    failed: number;
+    last_verified_at: string | null;
   };
   llm: {
     calls: number;
@@ -85,7 +104,7 @@ type RuntimeMetrics = {
 };
 
 function executionModeLabel(mode: SessionState["execution_mode"]) {
-  if (mode === "qoder_cli") return "Qoder CLI 直连";
+  if (mode === "qoder_cli") return "旧版 CLI 直连（仅兼容）";
   if (mode === "local_executor") return "本地执行器队列";
   if (mode === "codex_hosted") return "Codex 宿主代理";
   return "实验性本地桥接";
@@ -169,6 +188,7 @@ export function HostedConsole() {
   const [sessions, setSessions] = useState<SessionState[]>([]);
   const [selectedSessionId, setSelectedSessionId] = useState("");
   const [workerStatus, setWorkerStatus] = useState<HostedWorkerStatus | null>(null);
+  const [mcpStatus, setMcpStatus] = useState<MpcStatus | null>(null);
   const [runtimeMetrics, setRuntimeMetrics] = useState<RuntimeMetrics | null>(null);
   const [busy, setBusy] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
@@ -188,6 +208,12 @@ export function HostedConsole() {
   const activeTaskCount = selectedSession?.hosted_tasks.filter(
     (task) => task.status === "pending" || task.status === "running"
   ).length ?? 0;
+  const executionStatus = executionConsoleStatus({
+    executionMode: selectedSession?.execution_mode,
+    activeTaskCount,
+    mcpStatus,
+    workerStatus
+  });
   const sessionLlmStats = useMemo(() => {
     const calls = selectedSession?.llm_calls ?? [];
     return {
@@ -202,15 +228,17 @@ export function HostedConsole() {
     setBusy(true);
     setErrorMessage("");
     try {
-      const [sessionData, workerData] = await Promise.all([
+      const [sessionData, workerData, nextMcpStatus] = await Promise.all([
         jsonFetch<SessionListResponse>("/api/sessions"),
-        jsonFetch<HostedWorkerStatus>("/api/hosted/worker-status").catch(() => null)
+        jsonFetch<HostedWorkerStatus>("/api/hosted/worker-status").catch(() => null),
+        jsonFetch<MpcStatus>("/api/mcp/status").catch(() => null)
       ]);
       const nextSessions = Array.isArray(sessionData.sessions)
         ? sessionData.sessions.filter(isRenderableSessionState)
         : [];
       setSessions(nextSessions);
       setWorkerStatus(workerData);
+      setMcpStatus(nextMcpStatus);
       const metricsSessionId = nextSessions.some((session) => session.session_id === selectedSessionId)
         ? selectedSessionId
         : nextSessions[0]?.session_id;
@@ -365,31 +393,44 @@ export function HostedConsole() {
           <InfoBlock label="已入清单" value={`${summary.selectedCount} 件`} />
         </div>
 
-        <div className={`rounded-[24px] px-4 py-3 text-sm ${
-          activeTaskCount > 0 ? "border border-sky-200 bg-sky-50 text-sky-700" : "border border-emerald-200 bg-emerald-50 text-emerald-700"
+        <div className={`rounded-[24px] border px-4 py-3 text-sm ${
+          executionStatus.tone === "critical"
+            ? "border-red-200 bg-red-50 text-red-700"
+            : executionStatus.tone === "warning"
+              ? "border-amber-200 bg-amber-50 text-amber-800"
+              : executionStatus.tone === "healthy"
+                ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                : "border-border bg-secondary/40 text-muted-foreground"
         }`}>
-          {selectedSession?.execution_mode === "local_executor"
-            ? activeTaskCount > 0
-              ? `持久任务队列中有 ${activeTaskCount} 个任务等待或正在由本地执行器处理，完成后会通过 SSE 自动回填。`
-              : "本地执行器队列当前没有待处理任务；已完成结果均保存在当前会话。"
-            : workerStatus?.online
-              ? `兼容宿主 Worker 在线，状态：${workerStatus.state}，最近动作：${workerStatus.last_result ?? "暂无"}`
-              : "当前会话没有运行中的后台任务。"}
+          <p className="font-semibold">{executionStatus.title}</p>
+          <p className="mt-1 text-xs leading-5 opacity-90">{executionStatus.detail}</p>
         </div>
 
         {runtimeMetrics?.available ? (
-          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-7">
+          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-9">
             <InfoBlock label="队列积压" value={`${runtimeMetrics.jobs.pending} 个待领取`} />
             <InfoBlock label="执行中" value={`${runtimeMetrics.jobs.active} 个任务`} />
             <InfoBlock label="失败 / 取消" value={`${runtimeMetrics.jobs.failed} / ${runtimeMetrics.jobs.cancelled}`} />
             <InfoBlock label="最久等待" value={formatDuration(runtimeMetrics.jobs.oldest_pending_ms)} />
             <InfoBlock
               label="本地执行器"
-              value={`${runtimeMetrics.devices.online} / ${runtimeMetrics.devices.total} 在线`}
+              value={runtimeMetrics.devices.authentication_required > 0
+                ? `${runtimeMetrics.devices.authentication_required} 台等待淘宝登录`
+                : runtimeMetrics.devices.mcp_unavailable > 0
+                  ? `${runtimeMetrics.devices.mcp_unavailable} 台 MCP 重连中`
+                  : `${runtimeMetrics.devices.online} / ${runtimeMetrics.devices.total} 在线`}
             />
             <InfoBlock
               label="能力覆盖"
               value={`搜索 ${runtimeMetrics.devices.capabilities.module_search.online} · 加购 ${runtimeMetrics.devices.capabilities.add_to_cart.online}`}
+            />
+            <InfoBlock
+              label="淘宝搜索"
+              value={`${runtimeMetrics.jobs.by_type.module_search.completed} / ${runtimeMetrics.jobs.by_type.module_search.total} 完成 · ${runtimeMetrics.jobs.by_type.module_search.failed} 失败`}
+            />
+            <InfoBlock
+              label="首选详情"
+              value={`${runtimeMetrics.detail_evidence.verified} / ${runtimeMetrics.jobs.by_type.product_detail.total} 已验证 · ${runtimeMetrics.jobs.by_type.product_detail.pending + runtimeMetrics.jobs.by_type.product_detail.active} 进行中`}
             />
             <InfoBlock
               label="恢复调度"

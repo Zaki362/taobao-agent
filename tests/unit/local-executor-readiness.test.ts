@@ -11,6 +11,7 @@ const {
   MCP_READINESS_EXIT_CODE,
   mcpReadinessBackoffMs,
   missingTaobaoCartTools,
+  missingTaobaoDetailTools,
   missingTaobaoTools,
   requiredTaobaoTools
 } = readiness;
@@ -31,6 +32,12 @@ describe("local executor MCP readiness", () => {
       { name: "get_current_tab" }
     ]))
       .toEqual(["get_product_skus", "add_to_cart"]);
+    expect(missingTaobaoDetailTools([
+      { name: "navigate_to_url" },
+      { name: "read_page_content" }
+    ])).toEqual([]);
+    expect(missingTaobaoDetailTools([{ name: "navigate_to_url" }]))
+      .toEqual(["read_page_content"]);
   });
 
   it("opens readiness only for transport and tool-layer failures", () => {
@@ -90,6 +97,7 @@ describe("local executor MCP readiness", () => {
     expect(claimRequest).toBeGreaterThan(claimGate);
     expect(source).toContain('failureDisposition === "persist_authentication_failure"');
     expect(source).not.toContain('job.job_type === "module_search" &&\n          error instanceof ExecutorJobError');
-    expect(source).toContain("automatic replay is forbidden and the user must check Taobao cart manually");
+    expect(source).toContain("automatic replay is forbidden");
+    expect(source).toContain("retrying without repeating the Taobao action");
   });
 });

@@ -17,7 +17,8 @@ import {
   findCurrentTaobaoMcpEvidence,
   hasRealDetailUrl,
   isTaobaoCartAuthenticationPause,
-  isTaobaoAuthenticationPause
+  isTaobaoAuthenticationPause,
+  productDetailEvidencePresentation
 } from "@/components/dashboard-helpers";
 import { deriveShoppingListView } from "@/components/dashboard-shopping-list";
 import type {
@@ -74,6 +75,17 @@ function ShoppingItemImage({ item }: { item: DashboardShoppingListItem }) {
 function formatEvidenceTime(value: string) {
   return new Intl.DateTimeFormat("zh-CN", {
     timeZone: "Asia/Shanghai",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false
+  }).format(new Date(value));
+}
+
+function formatDetailEvidenceTime(value: string) {
+  return new Intl.DateTimeFormat("zh-CN", {
+    timeZone: "Asia/Shanghai",
+    month: "numeric",
+    day: "numeric",
     hour: "2-digit",
     minute: "2-digit",
     hour12: false
@@ -227,6 +239,13 @@ export function ResultsPage({
           >
         {selectedProducts.map((product, index) => {
           const shoppingItem = shoppingItemForProduct(product.product_id);
+          const detailEvidence = productDetailEvidencePresentation(product);
+          const supportsAiRecommendation = index === 0 &&
+            detailEvidence.state === "verified" &&
+            detailEvidence.supportsRecommendation;
+          const preferredLabel = detailEvidence.state === "verified"
+            ? detailEvidence.supportsRecommendation ? "AI 最推荐" : "搜索首选"
+            : "搜索摘要首选";
           const effectiveStatus = cartingProductId === product.product_id ? "queued" : shoppingItem?.status;
           const productCartAuthenticationPaused = cartAuthenticationPaused;
           const added = effectiveStatus === "added";
@@ -236,14 +255,19 @@ export function ResultsPage({
           const awaiting = effectiveStatus === "awaiting_confirmation";
 
           return (
-            <article key={product.product_id} className={`product-result-card ${index === 0 ? "product-result-card-featured" : ""}`}>
+            <article key={product.product_id} className={`product-result-card ${supportsAiRecommendation ? "product-result-card-featured" : index === 0 ? "product-result-card-summary-pick" : ""}`}>
               <div className="product-image-frame">
-                {index === 0 ? <span className="product-ai-pick"><Sparkles className="h-3 w-3" />Agent 首选</span> : null}
+                {index === 0 ? (
+                  <span className={supportsAiRecommendation ? "product-ai-pick" : "product-summary-pick"}>
+                    {supportsAiRecommendation ? <Sparkles className="h-3 w-3" /> : <Search className="h-3 w-3" />}
+                    {preferredLabel}
+                  </span>
+                ) : null}
                 <ProductImage product={product} />
               </div>
               <div className="flex flex-1 flex-col p-4">
                 <div className="flex flex-wrap items-center gap-1.5">
-                  <Badge variant={index === 0 ? "default" : "secondary"}>{product.recommendation_type}</Badge>
+                  <Badge variant={supportsAiRecommendation ? "default" : "secondary"}>{product.recommendation_type}</Badge>
                   {shoppingItem?.origin === "bundle" ? <ShoppingStatusBadge item={shoppingItem} /> : null}
                 </div>
                 <h2 className="mt-3 line-clamp-2 text-[15px] font-semibold leading-6 text-foreground">{product.title}</h2>
@@ -254,7 +278,40 @@ export function ResultsPage({
                     {product.highlights.slice(0, 2).map((item) => <span key={item} className="product-highlight">{item}</span>)}
                   </div>
                 ) : null}
-                <div className="product-fit-note hidden sm:flex"><Sparkles className="mt-0.5 h-3.5 w-3.5 shrink-0" /><p className="line-clamp-2"><span>适合你的原因</span>{product.fit_reason}</p></div>
+                <div
+                  role="note"
+                  aria-label={`${product.title}推荐证据`}
+                  className={`mt-3 rounded-[14px] border px-3 py-2.5 text-xs leading-5 ${
+                    detailEvidence.state === "verified"
+                      ? "border-emerald-200 bg-emerald-50 text-emerald-900"
+                      : "border-amber-200 bg-amber-50 text-amber-900"
+                  }`}
+                >
+                  <div className="flex flex-wrap items-center gap-x-2 gap-y-1 font-medium">
+                    {detailEvidence.state === "verified"
+                      ? <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-emerald-700" />
+                      : <Search className="h-3.5 w-3.5 shrink-0 text-amber-700" />}
+                    <span>{detailEvidence.label}</span>
+                    {detailEvidence.state === "verified" ? (
+                      <time
+                        dateTime={detailEvidence.capturedAt}
+                        className="font-normal text-emerald-700"
+                        title={detailEvidence.capturedAt}
+                      >
+                        提取于 {formatDetailEvidenceTime(detailEvidence.capturedAt)}
+                      </time>
+                    ) : null}
+                  </div>
+                  <p className="mt-1.5 line-clamp-3">
+                    <span className="mr-1 font-medium">
+                      {detailEvidence.state === "verified" ? "基于详情页：" : "搜索摘要判断："}
+                    </span>
+                    {detailEvidence.state === "verified" ? detailEvidence.reason : detailEvidence.summaryReason}
+                  </p>
+                  {detailEvidence.state === "unavailable" ? (
+                    <p className="mt-1 text-[11px] text-amber-800">读取状态：{detailEvidence.unavailableReason}</p>
+                  ) : null}
+                </div>
                 <details className="mt-2 hidden text-[11px] leading-5 text-muted-foreground sm:block">
                   <summary className="cursor-pointer font-medium text-foreground/70">购买前确认</summary>
                   <p className="mt-1">{product.risk_notes[0] ?? scenario.product_risk_style}</p>

@@ -14,6 +14,7 @@ SceneCart AI 是一个正在按正式产品架构推进的“场景化购物 Age
 - Agent 方案自检：规划生成后会产出 `plan_review`，在用户确认前检查预算分配、模块覆盖、关键词差异化和风险点
 - AI 执行档位：用户可在规划确认页选择保守 / 平衡 / 探索，服务端会写回 `agent_directives`，影响后续搜索深度、补搜策略和恢复边界
 - AI 搜索策略 + 增量候选排序：搜索结果会经过 Candidate Ranker，根据 AI 生成的主搜索词、备用搜索词、包含词、排除词、排序关注点、验收信号、拒绝信号、预算、偏好、已有/排除项和店铺信号选出稳妥 / 性价比 / 升级三档；Agent 补搜时会按商品 ID 合并新旧证据并重新分档，不会用第二轮结果覆盖首轮有效候选。规划词、候选复盘建议、运行时改写和用户手动编辑统一经过模块语义与指令安全校验，旧会话异常词安全回退，新提交异常词返回明确 400
+- 首选商品真实详情证据：每个模块完成候选重排与 AI 复盘后，只为最终第一名创建只读 `product_detail` Job；v4 Worker 打开其可信淘宝/天猫链接并读取可见详情，服务端校验 search Job、workflow、模块、商品 ID、URL 和采集时间后生成简短依据。页面原始正文不落盘，只保存正文哈希和在服务端白名单中实际命中的少量事实；读取失败会明确降级为搜索摘要判断，绝不伪造“详情已验证”，也不会触发加购
 - 搜索后 Agent 复盘：每个模块搜索后会生成 `module_reviews`，并在同一次短超时 DeepSeek 调用中批量生成最多三条、与候选商品一一对应的适配理由；商品 ID 和理由长度经过严格校验，无 key、超时或结构异常时完整保留启发式评估与规则理由，不增加逐商品模型请求
 - Agent 搜索决策轨迹：每个模块搜索会写入 `module_search_traces`，记录首轮词、备用词、补搜原因、每次返回数、候选池复盘和下一步建议，让 AI 的执行判断可解释、可恢复
 - Agent 完成报告：自动搜索结束时基于必需模块覆盖、候选质量、真实价格压力、容错跳过和最终停止决策生成方案级验收结论；推荐页与执行台都能查看为什么停止、当前缺口和下一步，用户还可显式授权补齐空白模块或增量优化候选偏薄模块
@@ -97,7 +98,7 @@ npm run dev
 
 启动器会同时检查 IPv4 loopback 和 Next.js 的 IPv6 默认监听地址。若 3000 被其他应用占用，会自动选择下一个真正可用的端口，并在终端打印准确的首页与执行器设置地址；不要继续使用旧的固定书签。需要固定端口时设置 `SCENECART_DEV_PORT`，或运行 `npm run dev -- --port 3001`。
 
-`npm run dev` 现在是一命令开发入口：它先启动网页；如果 `.env.local` 已配置 `SCENECART_DEVICE_TOKEN`，会在网页健康后自动启动正式 `worker:local`。首次使用时可以保持该命令运行，完成设备注册和 `executor:configure` 后，启动器会热发现新令牌并自动接入 Worker，不需要重启网页或再开第二个终端。Worker 异常退出时，启动器会按 1 秒起、最多 30 秒的指数退避自动重启；同一时间只保留一个 Worker，令牌更新时会安全切换。淘宝 MCP 尚未就绪不会让搜索被错误领取：Worker 会保持运行并持续探测，网页显示恢复状态，MCP 恢复后自动消费原有搜索队列。`npm run dev:web` 只启动 Next.js，供 E2E、纯 UI 调试或需要手动管理 Worker 时使用；`dev:auto` 保留为 `dev` 的兼容别名。若 `3000` 已被其他应用占用，启动器会选择下一个可用端口并在终端打印准确地址；配置脚本和 Doctor 会自动识别该 SceneCart 实例。
+`npm run dev` 现在是一命令开发入口：它先启动网页；如果 `.env.local` 已配置 `SCENECART_DEVICE_TOKEN`，会在网页健康后自动启动正式 `worker:local`。首次使用时可以保持该命令运行，完成设备注册和 `executor:configure` 后，启动器会热发现新令牌并自动接入 Worker，不需要重启网页或再开第二个终端。Worker 异常退出时，启动器会按 1 秒起、最多 30 秒的指数退避自动重启；同一时间只保留一个 Worker，令牌更新时会安全切换。淘宝 MCP 尚未就绪不会让搜索被错误领取：Worker 会保持运行并持续探测，网页显示恢复状态，MCP 恢复后自动消费原有搜索队列。开发编译默认写入独立的 `.next-dev`，因此运行中的本地演示不会再与 `npm run build` 的 `.next` 产物互相覆盖。`npm run dev:web` 只启动 Next.js，供 E2E、纯 UI 调试或需要手动管理 Worker 时使用；`dev:auto` 保留为 `dev` 的兼容别名。若 `3000` 已被其他应用占用，启动器会选择下一个可用端口并在终端打印准确地址；配置脚本和 Doctor 会自动识别该 SceneCart 实例。
 
 网页部署在 Vercel、运行时使用 Neon PostgreSQL，而淘宝仍由面试电脑执行时，使用云端面试启动器：
 
@@ -330,7 +331,9 @@ npm run build
 npm run start
 ```
 
-当前执行器协议为 **v3**。部署 v3 服务端前必须对目标数据库执行包含 `db/migrations/007_executor_mcp_availability_state.sql` 的 `npm run db:migrate`，再运行 `npm run db:check`；服务端与本机项目随后都要更新到同一版本并重启 Worker。migration 007 为设备状态增加 `mcp_unavailable`，缺失它会导致新 Worker 的就绪心跳无法写入 PostgreSQL。
+Vercel Production 构建会通过 `scripts/build.mjs` 自动执行 `db:migrate` 与 `db:check`，只有两步都成功才继续 Next.js 构建；Preview 和本地构建不会连接生产数据库。手工部署或其他平台仍需显式执行上述命令。
+
+当前执行器协议为 **v4**。v4 增加搜索完成后的只读 `product_detail` 证据任务。发布前先停止旧 Worker；Vercel Production 构建会自动执行包含 migration 008 的迁移与校验，其他发布方式需手工执行；若确有升级前已领取的搜索/加购需要回填，可临时把 `SCENECART_EXECUTOR_V3_DRAIN_UNTIL` 设为未来不超过 2 小时的 ISO 时间，再部署 v4 服务端并立即更新本机 Worker。旧 v3 Worker始终不能领取新任务；排空接口还会核对 Job 领取时记录的协议版本、设备和租约代次。截止时间到达或变量留空后，所有 v3 请求都会收到 `426 executor_protocol_mismatch`，也绝不会领取或误解释 `product_detail`。migration 007 增加 `mcp_unavailable` 设备状态，migration 008 增加领取协议标记。
 
 实例启动并收到恢复 Worker 心跳后，用一条命令完成静态配置、数据库、health 与只读 readiness 验证：
 

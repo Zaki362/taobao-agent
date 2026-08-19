@@ -15,6 +15,7 @@ import {
   SelectedItem,
   SessionLlmCall,
   SessionState,
+  TaobaoMcpProductDetailEvidence,
   TaobaoMcpSearchEvidence
 } from "@/lib/session/types";
 
@@ -48,6 +49,45 @@ export function isTaobaoMcpSearchEvidence(value: unknown): value is TaobaoMcpSea
     typeof value.raw_result_count === "number" &&
     Number.isInteger(value.raw_result_count) &&
     value.raw_result_count >= 0
+  );
+}
+
+export function isTaobaoMcpProductDetailEvidence(
+  value: unknown
+): value is TaobaoMcpProductDetailEvidence {
+  if (!isRecord(value)) return false;
+  const validTools = Array.isArray(value.tools_used) && value.tools_used.every(
+    (tool) => tool === "navigate_to_url" || tool === "read_page_content"
+  );
+  const validSummary = value.summary === undefined || (
+    isRecord(value.summary) &&
+    typeof value.summary.page_title === "string" &&
+    typeof value.summary.page_url === "string" &&
+    typeof value.summary.visible_text_sha256 === "string" &&
+    isStringArray(value.summary.matched_facts) &&
+    isStringArray(value.summary.displayed_price_texts)
+  );
+  return (
+    value.schema === "scenecart.taobao-mcp-product-detail-evidence/v1" &&
+    value.source === "taobao-mcp" &&
+    (value.status === "verified" || value.status === "unavailable") &&
+    value.tool === "navigate_to_url+read_page_content" &&
+    validTools &&
+    typeof value.source_app === "string" && value.source_app.trim().length > 0 &&
+    typeof value.job_id === "string" && value.job_id.trim().length > 0 &&
+    typeof value.search_job_id === "string" && value.search_job_id.trim().length > 0 &&
+    typeof value.module_id === "string" && value.module_id.trim().length > 0 &&
+    typeof value.workflow_run_id === "string" && value.workflow_run_id.trim().length > 0 &&
+    typeof value.product_id === "string" && value.product_id.trim().length > 0 &&
+    typeof value.detail_url === "string" && value.detail_url.trim().length > 0 &&
+    typeof value.captured_at === "string" && Number.isFinite(Date.parse(value.captured_at)) &&
+    validSummary &&
+    (value.unavailable_reason === undefined || typeof value.unavailable_reason === "string") &&
+    (value.recommendation_reason === undefined || typeof value.recommendation_reason === "string") &&
+    (value.status !== "verified" || value.summary !== undefined) &&
+    (value.status !== "unavailable" || (
+      typeof value.unavailable_reason === "string" && value.unavailable_reason.trim().length > 0
+    ))
   );
 }
 
@@ -669,7 +709,8 @@ export function isProductCandidate(value: unknown): value is ProductCandidate {
     typeof value.fit_reason === "string" &&
     validRecommendationType &&
     typeof value.module_id === "string" &&
-    value.module_id.trim().length > 0
+    value.module_id.trim().length > 0 &&
+    (value.detail_evidence === undefined || isTaobaoMcpProductDetailEvidence(value.detail_evidence))
   );
 }
 

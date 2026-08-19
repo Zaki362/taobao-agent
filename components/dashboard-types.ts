@@ -88,3 +88,23 @@ export type DashboardShoppingListView = {
   addedTotal: number;
   realAddedTotal: number;
 };
+
+export type ProductDetailEvidencePresentation =
+  | {
+      state: "verified";
+      label: "本机 Worker 已读取淘宝详情页";
+      reason: string;
+      capturedAt: string;
+      supportsRecommendation: boolean;
+    }
+  | {
+      state: "unavailable";
+      label: "仅基于搜索摘要，淘宝详情页暂不可读";
+      summaryReason: string;
+      unavailableReason: string;
+    }
+  | {
+      state: "missing";
+      label: "仅基于搜索摘要，详情读取待完成";
+      summaryReason: string;
+    };
