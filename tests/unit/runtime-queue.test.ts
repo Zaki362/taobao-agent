@@ -4,15 +4,16 @@ import fsSync from "node:fs";
 import path from "node:path";
 import { localRuntimeRepository, resetLocalRuntimeForTests } from "@/lib/runtime/local-repository";
 import {
-  applyCompletedRuntimeJob,
-  applyFailedRuntimeJob,
+  applyCompletedRuntimeJob as applyCompletedRuntimeJobRaw,
+  applyFailedRuntimeJob as applyFailedRuntimeJobRaw,
   authenticateExecutorToken,
   enqueueAddToCartJob,
   enqueueModuleSearchJob,
   reconcileAuthenticationFailureHoldsForDevice,
   reconcileCompletedRuntimeJob,
   releaseAuthenticationFailureHoldForUser,
-  registerExecutorDevice
+  registerExecutorDevice,
+  shouldContinueWorkflowAfterCompletion
 } from "@/lib/runtime/jobs";
 import { decideNextAgentAction } from "@/lib/agent/decision-engine";
 import { createSessionFixture } from "@/tests/fixtures/session";
@@ -28,6 +29,29 @@ const device: ExecutorDevice = {
   created_at: new Date().toISOString(),
   updated_at: new Date().toISOString()
 };
+
+async function applyCompletedRuntimeJob(
+  jobId: string,
+  executorDevice: ExecutorDevice,
+  result: Record<string, unknown>,
+  leaseToken?: string
+) {
+  const job = await localRuntimeRepository.getJob(jobId);
+  return applyCompletedRuntimeJobRaw(jobId, executorDevice, result, leaseToken ?? job?.lease_token ?? "");
+}
+
+async function applyFailedRuntimeJob(
+  jobId: string,
+  executorDevice: ExecutorDevice,
+  errorMessage: string,
+  options: Parameters<typeof applyFailedRuntimeJobRaw>[3] = {}
+) {
+  const job = await localRuntimeRepository.getJob(jobId);
+  return applyFailedRuntimeJobRaw(jobId, executorDevice, errorMessage, {
+    ...options,
+    leaseToken: options.leaseToken ?? job?.lease_token
+  });
+}
 
 function liveTaobaoSearchResult(input: {
   jobId: string;
@@ -47,7 +71,13 @@ function liveTaobaoSearchResult(input: {
       image_url: "https://img.alicdn.com/item.jpg",
       detail_url: "https://click.simba.taobao.com/cc_im?id=843402079981",
       shop_badges: ["旗舰店"],
-      highlights: ["来自淘宝实时搜索"],
+      highlights: [
+        "来自淘宝实时搜索",
+        "匹配模块搜索意图",
+        "命中AI检索重点",
+        "价格更贴近模块预算",
+        "稳固夹持"
+      ],
       risk_notes: ["请打开详情页确认规格"],
       fit_reason: "来自本次淘宝搜索",
       recommendation_type: "稳妥推荐" as const,
@@ -67,6 +97,80 @@ function liveTaobaoSearchResult(input: {
       raw_result_count: 48
     }
   };
+}
+
+function liveTaobaoDetailResult(input: {
+  jobId: string;
+  searchJobId: string;
+  moduleId: string;
+  workflowRunId: string;
+  productId?: string;
+  detailUrl?: string;
+  capturedAt?: string;
+  status?: "verified" | "unavailable";
+}) {
+  const productId = input.productId ?? "843402079981";
+  const detailUrl = input.detailUrl ?? `https://item.taobao.com/item.htm?id=${productId}`;
+  const base = {
+    schema: "scenecart.taobao-mcp-product-detail-evidence/v1",
+    source: "taobao-mcp",
+    status: input.status ?? "verified",
+    tool: "navigate_to_url+read_page_content",
+    tools_used: input.status === "unavailable" ? [] : ["navigate_to_url", "read_page_content"],
+    source_app: "SceneCartAI",
+    job_id: input.jobId,
+    search_job_id: input.searchJobId,
+    module_id: input.moduleId,
+    workflow_run_id: input.workflowRunId,
+    product_id: productId,
+    detail_url: detailUrl,
+    captured_at: input.capturedAt ?? new Date().toISOString()
+  };
+  return {
+    detail_evidence: input.status === "unavailable"
+      ? { ...base, unavailable_reason: "淘宝桌面版缺少 read_page_content 工具" }
+      : {
+          ...base,
+          summary: {
+            page_title: "车载手机支架 - 淘宝网",
+            page_url: `https://item.taobao.com/item.htm?id=${productId}`,
+            visible_text_sha256: "a".repeat(64),
+            matched_facts: ["稳固夹持"],
+            displayed_price_texts: ["￥73.80"]
+          }
+        }
+  };
+}
+
+async function preparePreferredDetailJob(
+  label: string,
+  options: { claimDetail?: boolean } = {}
+) {
+  await localRuntimeRepository.createDevice(device);
+  const sessionId = `session-detail-${label}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  const state = createSessionFixture({ session_id: sessionId, owner_id: device.user_id });
+  const workflowRunId = `workflow-detail-${label}`;
+  state.agent_runtime.workflow_run_id = workflowRunId;
+  const module = state.shopping_plan.modules[0];
+  const keyword = module.search_strategy!.primary_keyword;
+  const searchJob = await enqueueModuleSearchJob(state, {
+    moduleId: module.module_id,
+    moduleName: module.module_name,
+    keyword
+  });
+  await localRuntimeRepository.saveSession(state);
+  await localRuntimeRepository.claimJob(device, 30_000);
+  const searchCompletion = await applyCompletedRuntimeJob(searchJob.id, device, liveTaobaoSearchResult({
+    jobId: searchJob.id,
+    moduleId: module.module_id,
+    workflowRunId,
+    keyword
+  }));
+  const detailJob = await localRuntimeRepository.getJob(searchCompletion.follow_up_job_id!);
+  if (options.claimDetail !== false) {
+    await localRuntimeRepository.claimJob(device, 30_000);
+  }
+  return { sessionId, module, workflowRunId, searchJob, detailJob: detailJob! };
 }
 
 describe("durable job queue contract", () => {
@@ -90,16 +194,190 @@ describe("durable job queue contract", () => {
 
     const claimed = await localRuntimeRepository.claimJob(device, 30_000);
     expect(claimed?.status).toBe("leased");
-    const running = await localRuntimeRepository.renewJobLease(first.id, device.id, 30_000);
+    const running = await localRuntimeRepository.renewJobLease(
+      first.id,
+      device.id,
+      claimed!.lease_token!,
+      30_000
+    );
     expect(running?.status).toBe("running");
 
-    const completed = await localRuntimeRepository.completeJob(first.id, device.id, { results: [] });
-    const replay = await localRuntimeRepository.completeJob(first.id, device.id, { results: [] });
+    const completed = await localRuntimeRepository.completeJob(first.id, device.id, { results: [] }, running!.lease_token!);
+    const replay = await localRuntimeRepository.completeJob(first.id, device.id, { results: [] }, running!.lease_token!);
     const duplicateAfterCompletion = await localRuntimeRepository.createJob({ ...input, id: "job-after-completion" });
     expect(completed.alreadyCompleted).toBe(false);
     expect(replay.alreadyCompleted).toBe(true);
     expect(duplicateAfterCompletion.id).toBe(first.id);
     expect(duplicateAfterCompletion.status).toBe("completed");
+  });
+
+  it("does not disclose a completed job result to another executor device", async () => {
+    const otherDevice = { ...device, id: "device-result-intruder", token_hash: "digest-intruder" };
+    await localRuntimeRepository.createDevice(device);
+    await localRuntimeRepository.createDevice(otherDevice);
+    const created = await localRuntimeRepository.createJob({
+      id: "job-private-completed-result",
+      user_id: device.user_id,
+      session_id: "session-private-completed-result",
+      job_type: "module_search",
+      idempotency_key: "private-completed-result",
+      payload: {}
+    });
+    const claimed = await localRuntimeRepository.claimJob(device, 30_000);
+    await localRuntimeRepository.completeJob(
+      created.id,
+      device.id,
+      { secret_result: "owner-only" },
+      claimed!.lease_token!
+    );
+
+    await expect(localRuntimeRepository.completeJob(created.id, otherDevice.id, {}, claimed!.lease_token!))
+      .rejects.toThrow("job lease owner mismatch");
+    await expect(localRuntimeRepository.failJob(created.id, otherDevice.id, "replay", claimed!.lease_token!))
+      .rejects.toThrow("job lease owner mismatch");
+  });
+
+  it("does not let active product detail jobs consume workflow recovery slots", async () => {
+    const nonce = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const blockedId = `session-detail-recovery-blocked-${nonce}`;
+    const recoverableId = `session-recovery-behind-detail-${nonce}`;
+    const blocked = createSessionFixture({
+      session_id: blockedId,
+      owner_id: device.user_id
+    });
+    const recoverable = createSessionFixture({
+      session_id: recoverableId,
+      owner_id: device.user_id
+    });
+    try {
+      blocked.agent_runtime.auto_continue = true;
+      blocked.agent_runtime.workflow_status = "waiting_for_tools";
+      blocked.agent_runtime.workflow_run_id = `workflow-detail-recovery-blocked-${nonce}`;
+      blocked.agent_runtime.last_transition_at = "2020-01-01T00:00:00.000Z";
+      const blockedModule = blocked.shopping_plan.modules[0];
+      const blockedCandidate = liveTaobaoSearchResult({
+        jobId: `search-detail-recovery-blocked-${nonce}`,
+        moduleId: blockedModule.module_id,
+        workflowRunId: blocked.agent_runtime.workflow_run_id,
+        keyword: blockedModule.search_strategy!.primary_keyword
+      }).candidates[0];
+      blocked.module_candidates[blockedModule.module_id] = [blockedCandidate];
+      const blockedSearchJobId = `search-detail-recovery-blocked-${nonce}`;
+      const blockedDetailJobId = `job-detail-recovery-blocked-${nonce}`;
+      const blockedTaskAt = new Date().toISOString();
+      blocked.hosted_tasks.unshift({
+        task_id: blockedSearchJobId,
+        runtime_job_id: blockedSearchJobId,
+        executor: "local_executor",
+        task_type: "module_search",
+        session_id: blocked.session_id,
+        status: "completed",
+        title: "已完成恢复测试搜索",
+        description: "为当前首选商品创建精确详情来源链。",
+        module_id: blockedModule.module_id,
+        module_name: blockedModule.module_name,
+        created_at: blockedTaskAt,
+        updated_at: blockedTaskAt,
+        payload: {
+          keyword: blockedModule.search_strategy!.primary_keyword,
+          workflow_run_id: blocked.agent_runtime.workflow_run_id,
+          preferred_product_detail_job_id: blockedDetailJobId,
+          preferred_product_id: blockedCandidate.product_id
+        }
+      });
+      await localRuntimeRepository.saveSession(blocked);
+      await localRuntimeRepository.createJob({
+        id: blockedDetailJobId,
+        user_id: device.user_id,
+        session_id: blocked.session_id,
+        job_type: "product_detail",
+        idempotency_key: `detail-recovery-blocked-${nonce}`,
+        payload: {
+          search_job_id: blockedSearchJobId,
+          workflow_run_id: blocked.agent_runtime.workflow_run_id,
+          module_id: blockedModule.module_id,
+          product_id: blockedCandidate.product_id,
+          detail_url: blockedCandidate.detail_url
+        }
+      });
+
+      recoverable.agent_runtime.auto_continue = true;
+      recoverable.agent_runtime.workflow_status = "running";
+      recoverable.agent_runtime.last_transition_at = "2021-01-01T00:00:00.000Z";
+      await localRuntimeRepository.saveSession(recoverable);
+
+      expect((await localRuntimeRepository.listWorkflowRecoveryCandidates(device.user_id, 1))
+        .map((state) => state.session_id)).toEqual([recoverable.session_id]);
+    } finally {
+      await Promise.all([blockedId, recoverableId].map((sessionId) =>
+        fs.unlink(path.join(process.cwd(), ".data", "sessions", `${sessionId}.json`)).catch(() => undefined)
+      ));
+    }
+  });
+
+  it("does not let a stale same-product detail job block recovery for the latest search", async () => {
+    const nonce = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const sessionId = `session-stale-detail-recovery-${nonce}`;
+    const state = createSessionFixture({ session_id: sessionId, owner_id: device.user_id });
+    try {
+      state.agent_runtime.auto_continue = true;
+      state.agent_runtime.workflow_status = "waiting_for_tools";
+      state.agent_runtime.workflow_run_id = `workflow-stale-detail-recovery-${nonce}`;
+      state.agent_runtime.last_transition_at = "2020-06-01T00:00:00.000Z";
+      const module = state.shopping_plan.modules[0];
+      const candidate = liveTaobaoSearchResult({
+        jobId: `search-current-${nonce}`,
+        moduleId: module.module_id,
+        workflowRunId: state.agent_runtime.workflow_run_id,
+        keyword: module.search_strategy!.primary_keyword
+      }).candidates[0];
+      const currentSearchJobId = `search-current-${nonce}`;
+      const currentDetailJobId = `detail-current-${nonce}`;
+      const staleSearchJobId = `search-stale-${nonce}`;
+      const staleDetailJobId = `detail-stale-${nonce}`;
+      const taskAt = new Date().toISOString();
+      state.module_candidates[module.module_id] = [candidate];
+      state.hosted_tasks.unshift({
+        task_id: currentSearchJobId,
+        runtime_job_id: currentSearchJobId,
+        executor: "local_executor",
+        task_type: "module_search",
+        session_id: state.session_id,
+        status: "completed",
+        title: "最新同商品搜索",
+        description: "恢复必须绑定最新搜索来源。",
+        module_id: module.module_id,
+        module_name: module.module_name,
+        created_at: taskAt,
+        updated_at: taskAt,
+        payload: {
+          keyword: module.search_strategy!.primary_keyword,
+          workflow_run_id: state.agent_runtime.workflow_run_id,
+          preferred_product_detail_job_id: currentDetailJobId,
+          preferred_product_id: candidate.product_id
+        }
+      });
+      await localRuntimeRepository.saveSession(state);
+      await localRuntimeRepository.createJob({
+        id: staleDetailJobId,
+        user_id: device.user_id,
+        session_id: state.session_id,
+        job_type: "product_detail",
+        idempotency_key: `stale-detail-recovery-${nonce}`,
+        payload: {
+          search_job_id: staleSearchJobId,
+          workflow_run_id: state.agent_runtime.workflow_run_id,
+          module_id: module.module_id,
+          product_id: candidate.product_id,
+          detail_url: candidate.detail_url
+        }
+      });
+
+      expect((await localRuntimeRepository.listWorkflowRecoveryCandidates(device.user_id, 100))
+        .map((candidateState) => candidateState.session_id)).toContain(sessionId);
+    } finally {
+      await fs.unlink(path.join(process.cwd(), ".data", "sessions", `${sessionId}.json`)).catch(() => undefined);
+    }
   });
 
   it("keeps queued jobs untouched while the responsive worker is waiting for Taobao MCP", async () => {
@@ -140,12 +418,51 @@ describe("durable job queue contract", () => {
     await localRuntimeRepository.saveSession(state);
     await localRuntimeRepository.claimJob(device, 30_000);
 
-    await applyCompletedRuntimeJob(job.id, device, liveTaobaoSearchResult({
+    const searchCompletion = await applyCompletedRuntimeJob(job.id, device, liveTaobaoSearchResult({
       jobId: job.id,
       moduleId: module.module_id,
       workflowRunId: "workflow-live-evidence",
       keyword
     }));
+    expect(searchCompletion.follow_up_job_id).toBeTruthy();
+    expect(await shouldContinueWorkflowAfterCompletion({
+      job: searchCompletion.job,
+      alreadyCompleted: searchCompletion.alreadyCompleted,
+      followUpJobId: searchCompletion.follow_up_job_id
+    })).toBe(false);
+
+    const detailJob = await localRuntimeRepository.getJob(searchCompletion.follow_up_job_id!);
+    expect(detailJob).toMatchObject({
+      job_type: "product_detail",
+      payload: {
+        search_job_id: job.id,
+        module_id: module.module_id,
+        workflow_run_id: "workflow-live-evidence",
+        product_id: "843402079981"
+      }
+    });
+    const factTerms = detailJob?.payload.fact_terms as string[];
+    expect(factTerms[0]).toBe(keyword);
+    expect(factTerms).toContain("稳固夹持");
+    expect(factTerms).not.toEqual(expect.arrayContaining([
+      "来自淘宝实时搜索",
+      "匹配模块搜索意图",
+      "命中AI检索重点",
+      "价格更贴近模块预算"
+    ]));
+    expect(await localRuntimeRepository.claimJob(device, 30_000)).toMatchObject({ id: detailJob!.id });
+    const detailCompletion = await applyCompletedRuntimeJob(detailJob!.id, device, liveTaobaoDetailResult({
+      jobId: detailJob!.id,
+      searchJobId: job.id,
+      moduleId: module.module_id,
+      workflowRunId: "workflow-live-evidence",
+      detailUrl: String(detailJob!.payload.detail_url)
+    }));
+    expect(await shouldContinueWorkflowAfterCompletion({
+      job: detailCompletion.job,
+      alreadyCompleted: detailCompletion.alreadyCompleted,
+      followUpJobId: detailCompletion.follow_up_job_id
+    })).toBe(true);
 
     const restored = await localRuntimeRepository.getSession(sessionId, device.user_id);
     const task = restored?.hosted_tasks.find((entry) => entry.task_id === job.id);
@@ -161,14 +478,320 @@ describe("durable job queue contract", () => {
       raw_result_count: 48
     });
     expect(restored?.module_candidates[module.module_id]).toHaveLength(1);
+    expect(restored?.module_candidates[module.module_id][0].detail_evidence).toMatchObject({
+      status: "verified",
+      job_id: detailJob!.id,
+      search_job_id: job.id,
+      product_id: "843402079981",
+      recommendation_reason: expect.stringContaining("页面可见信号")
+    });
     const events = await localRuntimeRepository.listEvents(sessionId, 0, device.user_id);
-    expect(events.find((event) => event.event_type === "job.completed")?.payload.evidence).toMatchObject({
+    expect(events.find((event) => event.event_type === "job.completed" && event.job_id === job.id)?.payload.evidence).toMatchObject({
       job_id: job.id,
       source: "taobao-mcp",
       raw_result_count: 48
     });
 
     await fs.unlink(path.join(process.cwd(), ".data", "sessions", `${sessionId}.json`)).catch(() => undefined);
+  });
+
+  it("keeps search candidates and continues when preferred detail evidence is unavailable", async () => {
+    const prepared = await preparePreferredDetailJob("unavailable");
+    const completion = await applyCompletedRuntimeJob(
+      prepared.detailJob.id,
+      device,
+      liveTaobaoDetailResult({
+        jobId: prepared.detailJob.id,
+        searchJobId: prepared.searchJob.id,
+        moduleId: prepared.module.module_id,
+        workflowRunId: prepared.workflowRunId,
+        detailUrl: String(prepared.detailJob.payload.detail_url),
+        status: "unavailable"
+      })
+    );
+    const restored = await localRuntimeRepository.getSession(prepared.sessionId, device.user_id);
+    expect(restored?.module_candidates[prepared.module.module_id]).toHaveLength(1);
+    expect(restored?.module_candidates[prepared.module.module_id][0].detail_evidence).toMatchObject({
+      status: "unavailable",
+      unavailable_reason: "详情页内容暂未完整返回",
+      recommendation_reason: expect.stringContaining("真实淘宝搜索摘要")
+    });
+    expect(await shouldContinueWorkflowAfterCompletion({
+      job: completion.job,
+      alreadyCompleted: completion.alreadyCompleted,
+      followUpJobId: completion.follow_up_job_id
+    })).toBe(true);
+  });
+
+  it("projects product-detail evidence to a strict safe DTO before persisting it", async () => {
+    const prepared = await preparePreferredDetailJob("privacy-projection");
+    const sentinel = "PRIVATE-RAW-PAGE-CONTENT-MUST-NOT-PERSIST";
+    const result = liveTaobaoDetailResult({
+      jobId: prepared.detailJob.id,
+      searchJobId: prepared.searchJob.id,
+      moduleId: prepared.module.module_id,
+      workflowRunId: prepared.workflowRunId,
+      detailUrl: String(prepared.detailJob.payload.detail_url)
+    }) as ReturnType<typeof liveTaobaoDetailResult> & Record<string, unknown>;
+    result.raw_page_content = sentinel;
+    Object.assign(result.detail_evidence, { raw_page_content: sentinel });
+    if ("summary" in result.detail_evidence && result.detail_evidence.summary) {
+      Object.assign(result.detail_evidence.summary, { visible_text_excerpt: sentinel });
+    }
+
+    await applyCompletedRuntimeJob(prepared.detailJob.id, device, result);
+
+    const storedJob = await localRuntimeRepository.getJob(prepared.detailJob.id);
+    const storedSession = await localRuntimeRepository.getSession(prepared.sessionId, device.user_id);
+    expect(JSON.stringify(storedJob)).not.toContain(sentinel);
+    expect(JSON.stringify(storedSession)).not.toContain(sentinel);
+    expect(storedJob?.result).toEqual({
+      detail_evidence: expect.objectContaining({ status: "verified" })
+    });
+  });
+
+  it("cancels an unclaimed preferred-detail job when the module is searched again", async () => {
+    const prepared = await preparePreferredDetailJob("pending-supersede", { claimDetail: false });
+    const state = await localRuntimeRepository.getSession(prepared.sessionId, device.user_id);
+    expect(state).not.toBeNull();
+
+    const nextSearch = await enqueueModuleSearchJob(state!, {
+      moduleId: prepared.module.module_id,
+      moduleName: prepared.module.module_name,
+      keyword: `${prepared.module.search_strategy!.primary_keyword} 补搜`
+    });
+    await localRuntimeRepository.saveSession(state!);
+
+    expect(nextSearch.id).not.toBe(prepared.searchJob.id);
+    expect(await localRuntimeRepository.getJob(prepared.detailJob.id)).toMatchObject({
+      status: "cancelled"
+    });
+    const oldSearchTask = state!.hosted_tasks.find((task) => task.task_id === prepared.searchJob.id);
+    expect(oldSearchTask?.payload.preferred_product_detail_job_id).toBeUndefined();
+    expect(oldSearchTask?.payload.preferred_product_id).toBeUndefined();
+    expect((await localRuntimeRepository.listEvents(prepared.sessionId, 0, device.user_id)).find((event) =>
+      event.event_type === "job.product_detail_superseded" && event.job_id === prepared.detailJob.id
+    )?.payload).toMatchObject({
+      cancelled: true,
+      superseding_search_job_id: nextSearch.id
+    });
+  });
+
+  it("binds same-product detail evidence to the exact latest search and detail jobs", async () => {
+    const prepared = await preparePreferredDetailJob("same-product-research");
+    const state = await localRuntimeRepository.getSession(prepared.sessionId, device.user_id);
+    expect(state).not.toBeNull();
+    const nextKeyword = `${prepared.module.search_strategy!.primary_keyword} 补搜`;
+    const nextSearch = await enqueueModuleSearchJob(state!, {
+      moduleId: prepared.module.module_id,
+      moduleName: prepared.module.module_name,
+      keyword: nextKeyword
+    });
+    await localRuntimeRepository.saveSession(state!);
+
+    expect(await localRuntimeRepository.getJob(prepared.detailJob.id)).toMatchObject({ status: "leased" });
+    expect(await localRuntimeRepository.claimJob(device, 30_000)).toMatchObject({ id: nextSearch.id });
+    const nextSearchCompletion = await applyCompletedRuntimeJob(nextSearch.id, device, liveTaobaoSearchResult({
+      jobId: nextSearch.id,
+      moduleId: prepared.module.module_id,
+      workflowRunId: prepared.workflowRunId,
+      keyword: nextKeyword
+    }));
+    const nextDetail = await localRuntimeRepository.getJob(nextSearchCompletion.follow_up_job_id!);
+    expect(nextDetail).toMatchObject({
+      job_type: "product_detail",
+      status: "pending",
+      payload: {
+        search_job_id: nextSearch.id,
+        product_id: prepared.detailJob.payload.product_id,
+        detail_url: prepared.detailJob.payload.detail_url
+      }
+    });
+    expect(nextDetail?.id).not.toBe(prepared.detailJob.id);
+
+    const rebound = await localRuntimeRepository.getSession(prepared.sessionId, device.user_id);
+    const currentTask = rebound?.hosted_tasks.find((task) => task.task_id === nextSearch.id);
+    const oldTask = rebound?.hosted_tasks.find((task) => task.task_id === prepared.searchJob.id);
+    expect(currentTask?.payload).toMatchObject({
+      preferred_product_detail_job_id: nextDetail!.id,
+      preferred_product_id: prepared.detailJob.payload.product_id
+    });
+    expect(oldTask?.payload.preferred_product_detail_job_id).toBeUndefined();
+    expect(await shouldContinueWorkflowAfterCompletion({
+      job: prepared.detailJob,
+      alreadyCompleted: false
+    })).toBe(false);
+
+    await expect(applyCompletedRuntimeJob(
+      prepared.detailJob.id,
+      device,
+      liveTaobaoDetailResult({
+        jobId: prepared.detailJob.id,
+        searchJobId: prepared.searchJob.id,
+        moduleId: prepared.module.module_id,
+        workflowRunId: prepared.workflowRunId,
+        detailUrl: String(prepared.detailJob.payload.detail_url)
+      })
+    )).rejects.toThrow("当前搜索任务");
+    await expect(applyFailedRuntimeJob(
+      prepared.detailJob.id,
+      device,
+      "late detail failure",
+      { retryable: false }
+    )).rejects.toThrow("stale product detail callback");
+    expect(await localRuntimeRepository.getJob(prepared.detailJob.id)).toMatchObject({ status: "leased" });
+
+    expect(await localRuntimeRepository.claimJob(device, 30_000)).toMatchObject({ id: nextDetail!.id });
+    const currentCompletion = await applyCompletedRuntimeJob(nextDetail!.id, device, liveTaobaoDetailResult({
+      jobId: nextDetail!.id,
+      searchJobId: nextSearch.id,
+      moduleId: prepared.module.module_id,
+      workflowRunId: prepared.workflowRunId,
+      detailUrl: String(nextDetail!.payload.detail_url)
+    }));
+    expect(await shouldContinueWorkflowAfterCompletion({
+      job: currentCompletion.job,
+      alreadyCompleted: currentCompletion.alreadyCompleted
+    })).toBe(true);
+    expect((await localRuntimeRepository.getSession(prepared.sessionId, device.user_id))
+      ?.module_candidates[prepared.module.module_id][0].detail_evidence).toMatchObject({
+      job_id: nextDetail!.id,
+      search_job_id: nextSearch.id,
+      product_id: prepared.detailJob.payload.product_id
+    });
+  });
+
+  it("rejects a stale detail failure callback without changing job or workflow state", async () => {
+    const prepared = await preparePreferredDetailJob("stale-failure");
+    const state = await localRuntimeRepository.getSession(prepared.sessionId, device.user_id);
+    expect(state).not.toBeNull();
+    state!.module_candidates[prepared.module.module_id][0] = {
+      ...state!.module_candidates[prepared.module.module_id][0],
+      product_id: "new-preferred-product",
+      detail_url: "https://item.taobao.com/item.htm?id=new-preferred-product"
+    };
+    await localRuntimeRepository.saveSession(state!);
+
+    await expect(applyFailedRuntimeJob(
+      prepared.detailJob.id,
+      device,
+      "read_page_content failed",
+      { retryable: false }
+    )).rejects.toThrow("stale product detail callback");
+    expect(await localRuntimeRepository.getJob(prepared.detailJob.id)).toMatchObject({
+      status: "leased"
+    });
+    const restored = await localRuntimeRepository.getSession(prepared.sessionId, device.user_id);
+    expect(restored?.module_candidates[prepared.module.module_id][0].product_id).toBe("new-preferred-product");
+    expect(restored?.module_candidates[prepared.module.module_id][0].detail_evidence).toBeUndefined();
+  });
+
+  it.each([
+    {
+      name: "lookalike detail domain",
+      mutate: (result: ReturnType<typeof liveTaobaoDetailResult>) => {
+        result.detail_evidence.detail_url = "https://item.taobao.com.evil.example/item.htm?id=843402079981";
+      },
+      error: "Job 上下文不一致"
+    },
+    {
+      name: "lookalike page domain",
+      mutate: (result: ReturnType<typeof liveTaobaoDetailResult>) => {
+        if ("summary" in result.detail_evidence) {
+          result.detail_evidence.summary.page_url = "https://item.taobao.com.evil.example/item.htm?id=843402079981";
+        }
+      },
+      error: "字段摘要无效"
+    },
+    {
+      name: "wrong product",
+      mutate: (result: ReturnType<typeof liveTaobaoDetailResult>) => {
+        result.detail_evidence.product_id = "another-product";
+      },
+      error: "Job 上下文不一致"
+    },
+    {
+      name: "wrong module",
+      mutate: (result: ReturnType<typeof liveTaobaoDetailResult>) => {
+        result.detail_evidence.module_id = "another-module";
+      },
+      error: "Job 上下文不一致"
+    },
+    {
+      name: "wrong workflow",
+      mutate: (result: ReturnType<typeof liveTaobaoDetailResult>) => {
+        result.detail_evidence.workflow_run_id = "another-workflow";
+      },
+      error: "Job 上下文不一致"
+    },
+    {
+      name: "wrong parent search job",
+      mutate: (result: ReturnType<typeof liveTaobaoDetailResult>) => {
+        result.detail_evidence.search_job_id = "another-search-job";
+      },
+      error: "Job 上下文不一致"
+    },
+    {
+      name: "expired capture time",
+      mutate: (result: ReturnType<typeof liveTaobaoDetailResult>) => {
+        result.detail_evidence.captured_at = "2000-01-01T00:00:00.000Z";
+      },
+      error: "证据时间无效"
+    },
+    {
+      name: "oversized page summary",
+      mutate: (result: ReturnType<typeof liveTaobaoDetailResult>) => {
+        if ("summary" in result.detail_evidence) {
+          result.detail_evidence.summary.page_title = "x".repeat(301);
+        }
+      },
+      error: "字段摘要无效"
+    },
+    {
+      name: "fact not bounded by server payload",
+      mutate: (result: ReturnType<typeof liveTaobaoDetailResult>) => {
+        if ("summary" in result.detail_evidence) {
+          result.detail_evidence.summary.matched_facts = ["伪造的顶级适配结论"];
+        }
+      },
+      error: "字段摘要无效"
+    }
+  ])("rejects forged preferred detail evidence with $name", async ({ mutate, error }) => {
+    const prepared = await preparePreferredDetailJob(`invalid-${Math.random().toString(36).slice(2)}`);
+    const result = liveTaobaoDetailResult({
+      jobId: prepared.detailJob.id,
+      searchJobId: prepared.searchJob.id,
+      moduleId: prepared.module.module_id,
+      workflowRunId: prepared.workflowRunId,
+      detailUrl: String(prepared.detailJob.payload.detail_url)
+    });
+    mutate(result);
+    await expect(applyCompletedRuntimeJob(prepared.detailJob.id, device, result)).rejects.toThrow(error);
+    expect(await localRuntimeRepository.getJob(prepared.detailJob.id)).toMatchObject({ status: "leased" });
+  });
+
+  it("rejects a late detail callback after a re-search changes the current preferred product", async () => {
+    const prepared = await preparePreferredDetailJob("stale-preferred");
+    const state = await localRuntimeRepository.getSession(prepared.sessionId, device.user_id);
+    state!.module_candidates[prepared.module.module_id][0] = {
+      ...state!.module_candidates[prepared.module.module_id][0],
+      product_id: "new-preferred-product",
+      detail_url: "https://item.taobao.com/item.htm?id=new-preferred-product"
+    };
+    await localRuntimeRepository.saveSession(state!);
+    await expect(applyCompletedRuntimeJob(
+      prepared.detailJob.id,
+      device,
+      liveTaobaoDetailResult({
+        jobId: prepared.detailJob.id,
+        searchJobId: prepared.searchJob.id,
+        moduleId: prepared.module.module_id,
+        workflowRunId: prepared.workflowRunId,
+        detailUrl: String(prepared.detailJob.payload.detail_url)
+      })
+    )).rejects.toThrow("不再匹配当前 AI 首选");
+    const restored = await localRuntimeRepository.getSession(prepared.sessionId, device.user_id);
+    expect(restored?.module_candidates[prepared.module.module_id][0].detail_evidence).toBeUndefined();
   });
 
   it.each([
@@ -1015,16 +1638,80 @@ describe("durable job queue contract", () => {
       max_attempts: 3
     });
 
-    await localRuntimeRepository.claimJob(device, 1);
+    const originalLease = await localRuntimeRepository.claimJob(device, 1);
     await new Promise((resolve) => setTimeout(resolve, 5));
     const reassigned = await localRuntimeRepository.claimJob(replacementDevice, 30_000);
 
     expect(reassigned?.id).toBe("job-reassigned");
-    expect(await localRuntimeRepository.renewJobLease("job-reassigned", device.id, 30_000)).toBeNull();
-    await expect(localRuntimeRepository.completeJob("job-reassigned", device.id, { results: [] }))
+    expect(await localRuntimeRepository.renewJobLease(
+      "job-reassigned",
+      device.id,
+      originalLease!.lease_token!,
+      30_000
+    )).toBeNull();
+    await expect(localRuntimeRepository.completeJob(
+      "job-reassigned",
+      device.id,
+      { results: [] },
+      originalLease!.lease_token!
+    ))
       .rejects.toThrow("job lease owner mismatch");
-    await expect(localRuntimeRepository.completeJob("job-reassigned", replacementDevice.id, { results: [] }))
+    await expect(localRuntimeRepository.completeJob(
+      "job-reassigned",
+      replacementDevice.id,
+      { results: [] },
+      reassigned!.lease_token!
+    ))
       .resolves.toMatchObject({ alreadyCompleted: false });
+  });
+
+  it("rejects a stale callback from an earlier lease generation on the same device", async () => {
+    await localRuntimeRepository.createDevice(device);
+    await localRuntimeRepository.createJob({
+      id: "job-same-device-new-lease",
+      user_id: device.user_id,
+      session_id: "session-same-device-new-lease",
+      job_type: "module_search",
+      idempotency_key: "same-device-new-lease",
+      payload: {},
+      max_attempts: 3
+    });
+    const oldLease = await localRuntimeRepository.claimJob(device, 1);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    const newLease = await localRuntimeRepository.claimJob(device, 30_000);
+
+    expect(newLease?.id).toBe(oldLease?.id);
+    expect(newLease?.lease_token).not.toBe(oldLease?.lease_token);
+    expect(await localRuntimeRepository.renewJobLease(
+      newLease!.id,
+      device.id,
+      oldLease!.lease_token!,
+      30_000
+    )).toBeNull();
+    expect(await localRuntimeRepository.renewJobLease(
+      newLease!.id,
+      device.id,
+      newLease!.lease_token!,
+      30_000
+    )).toMatchObject({ status: "running" });
+    await expect(localRuntimeRepository.completeJob(
+      newLease!.id,
+      device.id,
+      { stale: true },
+      oldLease!.lease_token!
+    )).rejects.toThrow("job lease token mismatch");
+    await expect(localRuntimeRepository.failJob(
+      newLease!.id,
+      device.id,
+      "stale failure",
+      oldLease!.lease_token!
+    )).rejects.toThrow("job lease token mismatch");
+    await expect(localRuntimeRepository.completeJob(
+      newLease!.id,
+      device.id,
+      { current: true },
+      newLease!.lease_token!
+    )).resolves.toMatchObject({ alreadyCompleted: false });
   });
 
   it("only cancels work before an executor has claimed it", async () => {
@@ -1162,11 +1849,11 @@ describe("durable job queue contract", () => {
       keyword: module.search_strategy!.primary_keyword
     });
     await localRuntimeRepository.saveSession(state);
-    await localRuntimeRepository.claimJob(device, 30_000);
+    const claimed = await localRuntimeRepository.claimJob(device, 30_000);
     await localRuntimeRepository.completeJob(job.id, device.id, {
       summary: "协议升级前已经完成的空搜索",
       candidates: []
-    });
+    }, claimed!.lease_token!);
 
     expect(await reconcileCompletedRuntimeJob(job.id)).toBe(true);
     expect(await reconcileCompletedRuntimeJob(job.id)).toBe(false);

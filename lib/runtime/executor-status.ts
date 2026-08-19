@@ -1,7 +1,7 @@
-import type { ExecutorDevice, RuntimeJobType } from "@/lib/runtime/types";
+import type { ExecutorCapability, ExecutorDevice } from "@/lib/runtime/types";
 
 export const EXECUTOR_ONLINE_WINDOW_MS = 45_000;
-export const EXECUTOR_CAPABILITIES: RuntimeJobType[] = ["module_search", "add_to_cart"];
+export const EXECUTOR_CAPABILITIES: ExecutorCapability[] = ["module_search", "add_to_cart"];
 
 export interface ExecutorCapabilitySummary {
   registered: number;
@@ -14,7 +14,7 @@ export interface ExecutorDeviceSummary {
   online: number;
   mcp_unavailable: number;
   authentication_required: number;
-  capabilities: Record<RuntimeJobType, ExecutorCapabilitySummary>;
+  capabilities: Record<ExecutorCapability, ExecutorCapabilitySummary>;
 }
 
 export function isExecutorDeviceResponsive(device: ExecutorDevice, now = Date.now()) {
@@ -45,7 +45,7 @@ export function summarizeExecutorDevices(
       const online = onlineDevices.filter((device) => device.capabilities.includes(capability)).length;
       return [capability, { registered, online, available: online > 0 }];
     })
-  ) as Record<RuntimeJobType, ExecutorCapabilitySummary>;
+  ) as Record<ExecutorCapability, ExecutorCapabilitySummary>;
 
   return {
     registered: registeredDevices.length,

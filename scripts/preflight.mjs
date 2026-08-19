@@ -230,6 +230,7 @@ function assertDevelopmentLauncher() {
     !launcher.includes('probeAddress(port, "127.0.0.1")') ||
     !launcher.includes('probeAddress(port, "::", true)') ||
     !launcher.includes("SCENECART_DEV_PORT") ||
+    !launcher.includes("NEXT_DIST_DIR: resolveDevDistDir(runtimeEnv)") ||
     !autoLauncher.includes('from "./dev-server.mjs"') ||
     !autoLauncher.includes("runtimeEnv.SCENECART_API_URL = apiBaseUrl") ||
     !autoLauncher.includes("resolveExecutorEnvironment") ||
@@ -241,7 +242,7 @@ function assertDevelopmentLauncher() {
     !workerSupervisor.includes("WORKER_RESTART_MAX_MS") ||
     !workerSupervisor.includes('child.kill("SIGTERM")')
   ) {
-    fail("默认开发启动器必须检测双栈端口冲突、热发现设备令牌、监督单一 Worker，并让网页与本地执行器共享同一个实际 API 地址");
+    fail("默认开发启动器必须检测双栈端口冲突、隔离开发构建缓存、热发现设备令牌、监督单一 Worker，并让网页与本地执行器共享同一个实际 API 地址");
   }
 }
 

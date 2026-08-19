@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { evaluateRuntimeHealth } from "@/lib/runtime/monitoring";
+import { evaluateRuntimeHealth, summarizeRuntimeJobTypes } from "@/lib/runtime/monitoring";
 import { createSessionFixture } from "@/tests/fixtures/session";
 
 function input(): Parameters<typeof evaluateRuntimeHealth>[0] {
@@ -10,16 +10,19 @@ function input(): Parameters<typeof evaluateRuntimeHealth>[0] {
       completed: 0,
       failed: 0,
       oldest_pending_ms: 0,
-      pending_by_type: { module_search: 0, add_to_cart: 0 }
+      pending_by_type: { module_search: 0, product_detail: 0, add_to_cart: 0 }
     },
     devices: {
       online: 0,
+      mcp_unavailable: 0,
+      authentication_required: 0,
       capabilities: {
         module_search: { online: 0 },
         add_to_cart: { online: 0 }
       }
     },
     llm: { calls: 0, connected: 0, fallback: 0 },
+    detailEvidence: { total: 0, verified: 0, unavailable: 0, failed: 0, last_verified_at: null },
     agentRuntime: createSessionFixture().agent_runtime
   };
 }
@@ -43,6 +46,42 @@ describe("runtime monitoring", () => {
     );
   });
 
+  it("distinguishes a responsive login pause from an offline Worker", () => {
+    const state = input();
+    state.jobs.pending = 1;
+    state.devices.authentication_required = 1;
+
+    const health = evaluateRuntimeHealth(state);
+    expect(health.status).toBe("critical");
+    expect(health.incidents.map((item) => item.code)).toContain("executor_authentication_required");
+    expect(health.incidents.map((item) => item.code)).not.toContain("executor_offline_with_work");
+  });
+
+  it("distinguishes a responsive MCP reconnect from an offline Worker", () => {
+    const state = input();
+    state.jobs.pending = 1;
+    state.devices.mcp_unavailable = 1;
+
+    const health = evaluateRuntimeHealth(state);
+    expect(health.status).toBe("warning");
+    expect(health.incidents.map((item) => item.code)).toContain("executor_mcp_unavailable");
+    expect(health.incidents.map((item) => item.code)).not.toContain("executor_offline_with_work");
+  });
+
+  it("summarizes search and preferred-detail execution separately", () => {
+    const summary = summarizeRuntimeJobTypes([
+      { job_type: "module_search", status: "completed" },
+      { job_type: "module_search", status: "failed" },
+      { job_type: "product_detail", status: "pending" },
+      { job_type: "product_detail", status: "running" },
+      { job_type: "product_detail", status: "completed" }
+    ]);
+
+    expect(summary.module_search).toMatchObject({ total: 2, completed: 1, failed: 1 });
+    expect(summary.product_detail).toMatchObject({ total: 3, pending: 1, active: 1, completed: 1 });
+    expect(summary.add_to_cart.total).toBe(0);
+  });
+
   it("reports an online executor that cannot claim the queued job type", () => {
     const state = input();
     state.devices.online = 1;
@@ -54,6 +93,39 @@ describe("runtime monitoring", () => {
     expect(health.status).toBe("critical");
     expect(health.incidents.map((item) => item.code)).toContain("cart_capability_unavailable");
     expect(health.incidents.map((item) => item.code)).not.toContain("executor_offline_with_work");
+  });
+
+  it("counts preferred-product detail work against the search capability", () => {
+    const state = input();
+    state.devices.online = 1;
+    state.jobs.pending = 1;
+    state.jobs.pending_by_type!.product_detail = 1;
+
+    const health = evaluateRuntimeHealth(state);
+    expect(health.status).toBe("critical");
+    expect(health.incidents).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        code: "search_capability_unavailable",
+        detail: expect.stringContaining("首选详情读取任务")
+      })
+    ]));
+  });
+
+  it("reports repeated unavailable preferred-product detail evidence", () => {
+    const state = input();
+    state.detailEvidence = {
+      total: 3,
+      verified: 0,
+      unavailable: 2,
+      failed: 1,
+      last_verified_at: null
+    };
+
+    const health = evaluateRuntimeHealth(state);
+    expect(health.status).toBe("critical");
+    expect(health.incidents).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: "product_detail_unavailable" })
+    ]));
   });
 
   it("waits for enough samples before reporting failure and fallback rates", () => {

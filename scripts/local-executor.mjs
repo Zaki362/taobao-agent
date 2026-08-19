@@ -8,20 +8,26 @@ import {
   isMcpReadinessError,
   mcpReadinessBackoffMs,
   missingTaobaoCartTools,
+  missingTaobaoDetailTools,
   missingTaobaoTools
 } from "./local-executor-readiness.mjs";
 import { TaobaoMcpClient } from "./taobao-mcp-client.mjs";
 import {
   buildTaobaoMcpSearchEvidence,
-  cacheResultForAcknowledgement,
+  buildUnavailableTaobaoMcpProductDetailEvidence,
   classifyTaobaoAuthentication,
   createPendingAuthenticationFailure,
+  createPendingResultAcknowledgement,
   executorFailureDisposition,
   isTaobaoLoginError,
+  isTrustedTaobaoDetailUrl,
   normalizeTaobaoCartResult,
+  normalizeTaobaoMcpProductDetailEvidence,
   normalizeTaobaoSearchEvidence,
   PendingAuthenticationFailureCoordinator,
   PendingAuthenticationFailureStore,
+  PendingResultAcknowledgementCoordinator,
+  PendingResultAcknowledgementStore,
   prepareTaobaoCartAction
 } from "./local-executor-utils.mjs";
 
@@ -42,13 +48,23 @@ const taobaoReadinessBackoffMaxMs = Math.max(Number(process.env.EXECUTOR_TAOBAO_
 const taobaoSourceApp = process.env.TAOBAO_SOURCE_APP || "SceneCartAI";
 const apiTimeoutMs = Math.max(Number(process.env.EXECUTOR_API_TIMEOUT_MS || 20000), 5000);
 const resolveTimeoutMs = Math.max(Number(process.env.EXECUTOR_RESOLVE_TIMEOUT_MS || 60000), apiTimeoutMs);
+const resolveRetryBaseMs = Math.max(Number(process.env.EXECUTOR_RESOLVE_RETRY_BASE_MS || 750), 50);
+const resultAcknowledgementRetryMs = Math.max(
+  Number(process.env.EXECUTOR_RESULT_ACK_RETRY_MS || 3000),
+  250
+);
 const leaseFailureLimit = Math.max(Number(process.env.EXECUTOR_LEASE_FAILURE_LIMIT || 3), 1);
-const resultDir = path.join(process.cwd(), ".data", "local-executor", "results");
+const executorStateDir = process.env.EXECUTOR_STATE_DIR
+  ? path.resolve(process.env.EXECUTOR_STATE_DIR)
+  : path.join(process.cwd(), ".data", "local-executor");
+const resultDir = path.join(executorStateDir, "results");
 const pendingAuthFailurePath = path.join(
-  process.cwd(),
-  ".data",
-  "local-executor",
+  executorStateDir,
   "pending-auth-failure.json"
+);
+const pendingResultAcknowledgementPath = path.join(
+  executorStateDir,
+  "pending-result-acknowledgement.json"
 );
 const executorProtocolVersion = protocol.version;
 if (!deviceToken) {
@@ -61,6 +77,7 @@ let authenticationPaused = false;
 let mcpUnavailable = true;
 let mcpReadinessAttempt = 0;
 let executorCapabilities = [];
+let availableTaobaoToolNames = new Set();
 let fatalApiError = null;
 let lastAuthenticationProbeAt = 0;
 let lastTaobaoSearchFinishedAt = 0;
@@ -72,6 +89,12 @@ const leaseGuard = new ExecutorLeaseGuard({
 });
 const pendingAuthFailureStore = new PendingAuthenticationFailureStore(pendingAuthFailurePath);
 const pendingAuthFailureCoordinator = new PendingAuthenticationFailureCoordinator(pendingAuthFailureStore);
+const pendingResultAcknowledgementStore = new PendingResultAcknowledgementStore(
+  pendingResultAcknowledgementPath
+);
+const pendingResultAcknowledgementCoordinator = new PendingResultAcknowledgementCoordinator(
+  pendingResultAcknowledgementStore
+);
 
 class ExecutorJobError extends Error {
   constructor(message, retryable = true, code = "operation_failed") {
@@ -82,12 +105,26 @@ class ExecutorJobError extends Error {
   }
 }
 
-class FatalExecutorApiError extends Error {
-  constructor(message, status) {
+class ExecutorApiError extends Error {
+  constructor(message, status, code = "api_error") {
     super(message);
-    this.name = "FatalExecutorApiError";
+    this.name = "ExecutorApiError";
     this.status = status;
+    this.code = code;
   }
+}
+
+class FatalExecutorApiError extends ExecutorApiError {
+  constructor(message, status, code) {
+    super(message, status, code);
+    this.name = "FatalExecutorApiError";
+  }
+}
+
+function isDiscardableResultAcknowledgementError(error) {
+  return error instanceof ExecutorApiError &&
+    error.status === 409 &&
+    ["job_lease_lost", "job_superseded", "stale_job_result"].includes(error.code);
 }
 
 function sleep(ms) {
@@ -109,9 +146,9 @@ async function api(path, options = {}) {
   if (!response.ok) {
     const message = payload.error || `${path} failed with ${response.status}`;
     if (response.status === 401 || response.status === 426) {
-      throw new FatalExecutorApiError(message, response.status);
+      throw new FatalExecutorApiError(message, response.status, payload.code);
     }
-    throw new Error(message);
+    throw new ExecutorApiError(message, response.status, payload.code);
   }
   return payload;
 }
@@ -229,6 +266,13 @@ async function waitForMcpReadiness() {
           `[local-executor] search is ready; optional cart tools are unavailable: ${missingCartTools.join(",")}\n`
         );
       }
+      availableTaobaoToolNames = new Set(tools.map((tool) => tool?.name).filter(Boolean));
+      const missingDetailTools = missingTaobaoDetailTools(tools);
+      if (missingDetailTools.length > 0) {
+        process.stderr.write(
+          `[local-executor] search is ready; preferred-product detail evidence will be unavailable (missing ${missingDetailTools.join(",")})\n`
+        );
+      }
 
       const onlineHeartbeat = await heartbeat({ executorState: "online", force: true });
       if (fatalApiError) return false;
@@ -285,14 +329,6 @@ async function readCachedResult(job) {
   }
 }
 
-async function cacheResult(jobId, result) {
-  await fs.mkdir(resultDir, { recursive: true });
-  const target = path.join(resultDir, `${jobId}.json`);
-  const temporary = `${target}.${process.pid}.tmp`;
-  await fs.writeFile(temporary, JSON.stringify(result), "utf-8");
-  await fs.rename(temporary, target);
-}
-
 async function reportResult(jobId, payload) {
   let lastError;
   for (let attempt = 1; attempt <= 3; attempt += 1) {
@@ -304,10 +340,75 @@ async function reportResult(jobId, payload) {
       });
     } catch (error) {
       lastError = error;
-      await sleep(attempt * 750);
+      if (
+        error instanceof FatalExecutorApiError ||
+        isDiscardableResultAcknowledgementError(error)
+      ) throw error;
+      await sleep(attempt * resolveRetryBaseMs);
     }
   }
   throw lastError;
+}
+
+async function flushPendingResultAcknowledgement() {
+  const pending = await pendingResultAcknowledgementCoordinator.current();
+  if (!pending) return true;
+  if (
+    leaseGuard.currentJobId !== pending.job_id ||
+    leaseGuard.currentLeaseToken !== pending.lease_token
+  ) {
+    leaseGuard.start(pending.job_id, pending.lease_token);
+  }
+
+  let outcome;
+  try {
+    outcome = await pendingResultAcknowledgementCoordinator.deliver(
+      (callback) => reportResult(callback.job_id, {
+        status: "completed",
+        result: callback.result,
+        lease_token: callback.lease_token
+      }),
+      {
+        isDiscardableError: isDiscardableResultAcknowledgementError,
+        isFatalError: (error) => error instanceof FatalExecutorApiError
+      }
+    );
+  } catch (error) {
+    if (error instanceof FatalExecutorApiError) {
+      fatalApiError = error;
+      stopped = true;
+      leaseGuard.stop(`fatal API ${error.status}`);
+      process.stderr.write(
+        `[local-executor] fatal result acknowledgement response ${error.status}; handing restart to supervisor: ${error.message}\n`
+      );
+      return false;
+    }
+    throw error;
+  }
+
+  if (outcome.state === "confirmed" || outcome.state === "discarded") {
+    leaseGuard.clear(pending.job_id);
+    if (outcome.state === "discarded") {
+      process.stderr.write(
+        `[local-executor] discarded stale or superseded result acknowledgement for ${pending.job_id}\n`
+      );
+    } else {
+      process.stdout.write(
+        `[local-executor] server confirmed durable result acknowledgement for ${pending.job_id}\n`
+      );
+    }
+    if (outcome.cleanup_error) {
+      process.stderr.write(
+        `[local-executor] confirmed ${pending.job_id}, but its local acknowledgement ledger cleanup will be retried after restart: ${outcome.cleanup_error}\n`
+      );
+    }
+    return true;
+  }
+
+  process.stderr.write(
+    `[local-executor] result acknowledgement for ${pending.job_id} remains pending; no new Taobao action will be claimed: ${outcome.error || "server did not confirm completed"}\n`
+  );
+  return false;
 }
 
 async function flushPendingAuthenticationFailure() {
@@ -391,6 +492,85 @@ async function probeTaobaoAuthentication() {
 
 async function executeJob(job, signal) {
   const payload = job.payload || {};
+  if (job.job_type === "product_detail") {
+    const context = {
+      sourceApp: taobaoSourceApp,
+      jobId: job.id,
+      searchJobId: String(payload.search_job_id ?? "").trim(),
+      moduleId: String(payload.module_id ?? "").trim(),
+      workflowRunId: String(payload.workflow_run_id ?? "").trim(),
+      productId: String(payload.product_id ?? "").trim(),
+      detailUrl: String(payload.detail_url ?? "").trim(),
+      factTerms: Array.isArray(payload.fact_terms)
+        ? payload.fact_terms.filter((term) => typeof term === "string")
+        : []
+    };
+    if (
+      !context.searchJobId || !context.moduleId || !context.workflowRunId ||
+      !context.productId || !isTrustedTaobaoDetailUrl(context.detailUrl)
+    ) {
+      throw new ExecutorJobError("详情任务上下文或淘宝详情链接无效。", false);
+    }
+    const toolList = [...availableTaobaoToolNames].map((name) => ({ name }));
+    const missingTools = missingTaobaoDetailTools(toolList);
+    if (missingTools.length > 0) {
+      return {
+        detail_evidence: buildUnavailableTaobaoMcpProductDetailEvidence(
+          context,
+          `淘宝桌面版未提供详情读取工具：${missingTools.join("、")}`
+        )
+      };
+    }
+
+    const toolsUsed = [];
+    try {
+      const navigation = await taobaoClient.callTool(
+        "navigate_to_url",
+        { url: context.detailUrl },
+        operationSignal(signal, taobaoSearchTimeoutMs)
+      );
+      toolsUsed.push("navigate_to_url");
+      if (isTaobaoLoginError(errorOutput(navigation))) {
+        return {
+          detail_evidence: buildUnavailableTaobaoMcpProductDetailEvidence(
+            context,
+            "淘宝详情读取时登录态不可用；搜索结果已保留，不会自动重放。",
+            toolsUsed
+          )
+        };
+      }
+      const pageContent = await taobaoClient.callTool(
+        "read_page_content",
+        { maxLength: 5000 },
+        operationSignal(signal, taobaoSearchTimeoutMs)
+      );
+      toolsUsed.push("read_page_content");
+      if (isTaobaoLoginError(errorOutput(pageContent))) {
+        return {
+          detail_evidence: buildUnavailableTaobaoMcpProductDetailEvidence(
+            context,
+            "淘宝详情读取时登录态不可用；搜索结果已保留，不会自动重放。",
+            toolsUsed
+          )
+        };
+      }
+      return {
+        detail_evidence: normalizeTaobaoMcpProductDetailEvidence(pageContent, {
+          ...context,
+          capturedAt: new Date().toISOString()
+        })
+      };
+    } catch (error) {
+      if (isMcpReadinessError(error)) enterMcpUnavailable(error);
+      return {
+        detail_evidence: buildUnavailableTaobaoMcpProductDetailEvidence(
+          { ...context, capturedAt: new Date().toISOString() },
+          error instanceof Error ? error.message : String(error),
+          toolsUsed
+        )
+      };
+    }
+  }
   if (job.job_type === "module_search") {
     const keyword = String(payload.keyword ?? "").trim();
     const moduleId = String(payload.module_id ?? "").trim();
@@ -474,6 +654,7 @@ async function heartbeat(options = {}) {
     await heartbeatInFlight.catch(() => undefined);
   }
   const jobId = leaseGuard.currentJobId;
+  const leaseToken = leaseGuard.currentLeaseToken;
   const executorState = options.executorState ?? (
     authenticationPaused
       ? "authentication_required"
@@ -483,6 +664,7 @@ async function heartbeat(options = {}) {
   );
   const requestBody = {
     current_job_id: jobId,
+    ...(jobId ? { lease_token: leaseToken } : {}),
     executor_state: executorState,
     ...(options.authenticationFailure
       ? {
@@ -503,11 +685,11 @@ async function heartbeat(options = {}) {
         method: "POST",
         body: JSON.stringify(requestBody)
       });
-      if (jobId) leaseGuard.acceptHeartbeat(jobId, payload.lease_renewed === true);
+      if (jobId) leaseGuard.acceptHeartbeat(jobId, leaseToken, payload.lease_renewed === true);
       return payload;
     } catch (error) {
       process.stderr.write(`[local-executor] heartbeat failed: ${error.message}\n`);
-      if (jobId) leaseGuard.rejectHeartbeat(jobId);
+      if (jobId) leaseGuard.rejectHeartbeat(jobId, leaseToken);
       if (error instanceof FatalExecutorApiError) {
         fatalApiError = error;
         stopped = true;
@@ -556,6 +738,7 @@ async function recoverTaobaoAuthentication() {
     if (missingTools.length > 0) {
       throw new Error(`淘宝桌面版 MCP 缺少必需工具：${missingTools.join("、")}`);
     }
+    availableTaobaoToolNames = new Set(tools.map((tool) => tool?.name).filter(Boolean));
   } catch (error) {
     enterMcpUnavailable(error);
     process.stderr.write(
@@ -582,6 +765,16 @@ async function recoverTaobaoAuthentication() {
 }
 
 try {
+  const pendingResultAcknowledgement = await pendingResultAcknowledgementCoordinator.restore();
+  if (pendingResultAcknowledgement) {
+    leaseGuard.start(
+      pendingResultAcknowledgement.job_id,
+      pendingResultAcknowledgement.lease_token
+    );
+    process.stderr.write(
+      `[local-executor] restored pending result acknowledgement for ${pendingResultAcknowledgement.job_id}; no Taobao action will run before it is terminally acknowledged\n`
+    );
+  }
   const pendingAuthenticationFailure = await pendingAuthFailureCoordinator.restore();
   if (pendingAuthenticationFailure) {
     authenticationPaused = true;
@@ -602,6 +795,20 @@ async function loop() {
   process.stdout.write(`[local-executor] connected to ${apiBaseUrl}; polling every ${pollMs}ms\n`);
   await heartbeat();
   while (!stopped) {
+    try {
+      if (!await flushPendingResultAcknowledgement()) {
+        if (stopped) break;
+        await heartbeat({ force: true });
+        await sleep(resultAcknowledgementRetryMs);
+        continue;
+      }
+    } catch (error) {
+      process.stderr.write(
+        `[local-executor] result acknowledgement recovery failed closed: ${error instanceof Error ? error.message : String(error)}\n`
+      );
+      await sleep(resultAcknowledgementRetryMs);
+      continue;
+    }
     if (authenticationPaused) {
       await recoverTaobaoAuthentication();
       await sleep(Math.max(pollMs, 5000));
@@ -617,35 +824,16 @@ async function loop() {
         await sleep(pollMs);
         continue;
       }
-      const jobSignal = leaseGuard.start(job.id);
+      const jobSignal = leaseGuard.start(job.id, job.lease_token);
       process.stdout.write(`[local-executor] claimed ${job.job_type} ${job.id} (attempt ${job.attempts}/${job.max_attempts})\n`);
       let result;
       let resultCached = false;
-      let nonReplayableCacheFailure = "";
       try {
         await heartbeat();
         if (leaseGuard.lossReason) throw new Error(leaseGuard.lossReason);
         const cached = await readCachedResult(job);
         resultCached = Boolean(cached);
         result = cached ?? await executeJob(job, jobSignal);
-        if (!cached) {
-          const cacheOutcome = await cacheResultForAcknowledgement(
-            job,
-            result,
-            () => cacheResult(job.id, result)
-          );
-          if (!cacheOutcome.cached) {
-            nonReplayableCacheFailure = cacheOutcome.error || "unknown cache failure";
-            // The cart mutation already succeeded. Keep the in-memory result and
-            // resolve it directly; max_attempts=1 makes any lost acknowledgement
-            // terminal instead of ever executing add_to_cart again.
-            process.stderr.write(
-              `[local-executor] add-to-cart result cache failed for ${job.id}; resolving the successful in-memory result without replay: ${cacheOutcome.error}\n`
-            );
-          } else {
-            resultCached = true;
-          }
-        }
       } catch (error) {
         const authenticationRequired = error instanceof ExecutorJobError && error.code === "auth_required";
         const readinessFailure =
@@ -729,7 +917,8 @@ async function loop() {
             error: error instanceof ExecutorJobError
               ? `[${error.code}] ${error.message}`
               : error.message,
-            retryable: error instanceof ExecutorJobError ? error.retryable : true
+            retryable: error instanceof ExecutorJobError ? error.retryable : true,
+            lease_token: job.lease_token
           }).catch((resolveError) => {
             process.stderr.write(`[local-executor] failed to report ${job.id}: ${resolveError.message}\n`);
           });
@@ -747,38 +936,39 @@ async function loop() {
         continue;
       }
 
-      // From this point the local operation is immutable and cached. Result
-      // acknowledgement no longer needs to keep the execution lease alive.
-      leaseGuard.clear(job.id);
       if (result?.success === false) {
+        leaseGuard.clear(job.id);
         const resultError = result.code
           ? `[${result.code}] ${result.message || "淘宝工具返回失败"}`
           : result.message || "淘宝工具返回失败";
         await reportResult(job.id, {
           status: "failed",
           error: resultError,
-          retryable: result.retryable !== false
+          retryable: result.retryable !== false,
+          lease_token: job.lease_token
         }).catch((error) => {
           process.stderr.write(`[local-executor] failed to report ${job.id}: ${error.message}\n`);
         });
         process.stderr.write(`[local-executor] job ${job.id} returned a failed result\n`);
       } else {
-        try {
-          await reportResult(job.id, { status: "completed", result });
+        const callback = pendingResultAcknowledgementCoordinator.hold(
+          createPendingResultAcknowledgement(job, result)
+        );
+        const persistence = await pendingResultAcknowledgementCoordinator.persistHeld();
+        if (!persistence.persisted) {
+          process.stderr.write(
+            `[local-executor] successful ${job.job_type} result for ${job.id} remains fail-closed in memory because its acknowledgement WAL could not be written; automatic replay is forbidden: ${persistence.error}\n`
+          );
+        }
+        const acknowledged = await flushPendingResultAcknowledgement();
+        if (acknowledged) {
           process.stdout.write(`[local-executor] completed ${job.id}\n`);
-        } catch (error) {
-          if (job.job_type === "add_to_cart" && nonReplayableCacheFailure) {
-            process.stderr.write(
-              `[local-executor] add-to-cart may already have succeeded for ${job.id}, but neither local cache nor server acknowledgement is available; automatic replay is forbidden and the user must check Taobao cart manually: ${error.message}\n`
-            );
-          } else {
-            process.stderr.write(
-              `[local-executor] result for ${job.id} ${resultCached ? "is cached" : "remains in memory"}; server acknowledgement failed: ${error.message}\n`
-            );
-          }
+        } else {
+          process.stderr.write(
+            `[local-executor] successful result for ${callback.job_id} ${resultCached ? "was restored from the legacy cache" : "is stored in the acknowledgement WAL"}; retrying without repeating the Taobao action\n`
+          );
         }
       }
-      // Keep the result ledger: an expired lease can replay acknowledgement without repeating Taobao actions.
     } catch (error) {
       if (error instanceof FatalExecutorApiError) {
         fatalApiError = error;

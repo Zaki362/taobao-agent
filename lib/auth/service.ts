@@ -12,6 +12,7 @@ import { getRuntimeRepository } from "@/lib/runtime";
 import { ApiRouteError } from "@/lib/api/responses";
 
 const DEFAULT_SESSION_DAYS = 30;
+export const AUTH_SESSION_TOUCH_INTERVAL_MS = 10 * 60 * 1000;
 
 function sessionTtlMs() {
   const days = Number(process.env.AUTH_SESSION_TTL_DAYS ?? DEFAULT_SESSION_DAYS);
@@ -85,7 +86,10 @@ export async function authenticateToken(token: string) {
   if (!session) return null;
   const user = await repository.findUserById(session.user_id);
   if (!user) return null;
-  await repository.touchAuthSession(tokenHash);
+  const lastSeenAt = Date.parse(session.last_seen_at);
+  if (!Number.isFinite(lastSeenAt) || Date.now() - lastSeenAt >= AUTH_SESSION_TOUCH_INTERVAL_MS) {
+    await repository.touchAuthSession(tokenHash, AUTH_SESSION_TOUCH_INTERVAL_MS);
+  }
   return { user, session };
 }
 

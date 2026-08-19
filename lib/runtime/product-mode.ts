@@ -8,6 +8,10 @@ export function isFormalProductMode() {
   return getProductMode() === "production";
 }
 
+export function allowUnownedRuntimeJobs() {
+  return process.env.NODE_ENV !== "production" && !isFormalProductMode();
+}
+
 export function allowDemoCartFallback() {
   if (isFormalProductMode()) {
     return false;

@@ -708,7 +708,7 @@ DeepSeek 可参与该自检；无 key、超时或结构不合法时，系统回�
 - `suggested_keyword`：必要时给出可直接补搜的关键词
 - `source`：标记本次评估来自启发式规则还是 DeepSeek 复盘
 
-淘宝桌面版官方 HTTP MCP 搜索结果经本地执行器回填后，会优先尝试一次 DeepSeek 候选池复盘。该调用同时返回候选池质量判断和最多三条与 `product_id` 一一对应的商品适配理由，避免逐商品调用导致延迟线性增长。服务端要求理由覆盖且仅覆盖当前候选 ID，并限制文本长度；无 key、超时、遗漏、重复 ID 或结构不合法时，自动回退到启发式评估和原有规则理由。这样 AI 可以参与“看完商品后怎么判断”，但不会让搜索主链路被模型调用拖垮或把编造商品写入 Session。
+淘宝桌面版官方 HTTP MCP 搜索结果经本地执行器回填后，会优先尝试一次 DeepSeek 候选池复盘。该调用同时返回候选池质量判断和最多三条与 `product_id` 一一对应的搜索摘要级适配理由，避免逐商品调用导致延迟线性增长。服务端要求理由覆盖且仅覆盖当前候选 ID，并限制文本长度；无 key、超时、遗漏、重复 ID 或结构不合法时，自动回退到启发式评估和原有规则理由。复盘后排在第一位的商品会再经过独立 `product_detail` Job 读取真实详情链接，只有服务端验证通过的页面证据才会在 UI 中显示为“已读取淘宝详情页”；其余理由始终标明来自搜索摘要。这样既保留 AI 对候选的判断空间，也不会把模型根据标题推断的内容冒充详情事实。
 
 #### Module Search Traces
 
@@ -969,11 +969,12 @@ DeepSeek 目前承担六类结构化任务：
 
 ### 5.1 MCP 工具层如何抽象
 
-系统逻辑上定义了统一工具接口：
+正式本地执行器直接使用淘宝桌面版官方 HTTP MCP 的工具：
 
-- `search_taobao_products`
-- `open_product_detail`
-- `extract_product_info`
+- `search_products`
+- `navigate_to_url`
+- `read_page_content`
+- `get_product_skus`
 - `add_to_cart`
 
 这些工具不直接暴露给前端，而由后端通过 executor 调用。
@@ -1002,9 +1003,13 @@ executor 不只负责转发工具调用，也负责把 adapter 输出归一化�
 
 这里的 Candidate Ranker 不额外调用慢模型，而是把 DeepSeek 在规划阶段产出的策略信号落到商品层，避免推荐页退化成“淘宝搜索前三条”。
 
-#### open detail / extract info
+#### preferred product detail evidence
 
-这部分能力逻辑上存在，但目前为了稳定性，在搜索阶段默认不自动进入详情页，只返回搜索摘要。
+每个模块的真实搜索完成后，服务端先完成候选合并、规则重排和 DeepSeek 候选池复盘，确定最终首选商品；随后创建一个只读 `product_detail` Job，并暂停该工作流的下一模块推进。具备 `module_search` 能力的 v4 Worker 会依次调用 `navigate_to_url` 与 `read_page_content`，读取首选商品的可信淘宝/天猫详情链接。详情任务无论形成 `verified` 证据还是明确的 `unavailable` 结果，都会终态落盘后再继续下一模块，因此最终推荐页不会把尚未完成的详情读取冒充成已验证理由。
+
+详情证据绑定 search Job、detail Job、workflow、module、product ID、可信详情 URL 与采集时间。服务端只接受当前候选池第一名的回填；补搜改变首选后到达的旧回调会被拒绝。Worker 不上传页面原始正文，只返回页面标题、URL、正文 SHA-256、页面中逐字命中的服务端白名单事实，以及明确标为“非 SKU 权威价格”的可见价格字符串。服务端据此生成简短推荐理由；若详情工具缺失、登录态不可用或页面读取失败，仍保留真实搜索候选，但页面明确标为搜索摘要级判断。
+
+`product_detail` 是只读任务，不调用 `get_product_skus` 或 `add_to_cart`，也不会因为详情失败而自动重放任何交易动作。该新任务类型使执行器协议升级为 v4；服务端严格拒绝 v3 领取新 Job。只有显式配置未来不超过两小时的 `SCENECART_EXECUTOR_V3_DRAIN_UNTIL` 时，升级前由同一设备、以 v3 和同一租约代次领取的旧搜索/加购才可继续 heartbeat / resolve；超时自动关闭，避免旧分支误解释详情 Job，也避免把迟到回调写进新的租约。
 
 #### add to cart
 

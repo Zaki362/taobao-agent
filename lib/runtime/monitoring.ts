@@ -1,4 +1,5 @@
 import type { AgentRuntimeState } from "@/lib/session/types";
+import type { RuntimeJob, RuntimeJobType } from "@/lib/runtime/types";
 
 export type RuntimeHealthStatus = "healthy" | "warning" | "critical";
 export type RuntimeIncidentSeverity = "warning" | "critical";
@@ -11,6 +12,33 @@ export interface RuntimeIncident {
   recommendation: string;
 }
 
+export interface RuntimeJobTypeMetric {
+  total: number;
+  pending: number;
+  active: number;
+  completed: number;
+  failed: number;
+  cancelled: number;
+}
+
+const MONITORED_JOB_TYPES: RuntimeJobType[] = ["module_search", "product_detail", "add_to_cart"];
+
+export function summarizeRuntimeJobTypes(
+  jobs: Array<Pick<RuntimeJob, "job_type" | "status">>
+): Record<RuntimeJobType, RuntimeJobTypeMetric> {
+  return Object.fromEntries(MONITORED_JOB_TYPES.map((jobType) => {
+    const matching = jobs.filter((job) => job.job_type === jobType);
+    return [jobType, {
+      total: matching.length,
+      pending: matching.filter((job) => job.status === "pending").length,
+      active: matching.filter((job) => job.status === "leased" || job.status === "running").length,
+      completed: matching.filter((job) => job.status === "completed").length,
+      failed: matching.filter((job) => job.status === "failed").length,
+      cancelled: matching.filter((job) => job.status === "cancelled").length
+    }];
+  })) as Record<RuntimeJobType, RuntimeJobTypeMetric>;
+}
+
 interface RuntimeHealthInput {
   jobs: {
     pending: number;
@@ -20,15 +48,25 @@ interface RuntimeHealthInput {
     oldest_pending_ms: number;
     pending_by_type?: {
       module_search: number;
+      product_detail?: number;
       add_to_cart: number;
     };
   };
   devices: {
     online: number;
+    mcp_unavailable?: number;
+    authentication_required?: number;
     capabilities?: {
       module_search: { online: number };
       add_to_cart: { online: number };
     };
+  };
+  detailEvidence?: {
+    total: number;
+    verified: number;
+    unavailable: number;
+    failed: number;
+    last_verified_at: string | null;
   };
   llm: {
     calls: number;
@@ -94,24 +132,43 @@ export function evaluateRuntimeHealth(input: RuntimeHealthInput) {
   }
 
   if (queuedWork > 0 && input.devices.online === 0) {
-    incidents.push(incident(
-      "executor_offline_with_work",
-      "critical",
-      "有任务等待，但本地执行器离线",
-      `当前有 ${queuedWork} 个待执行或执行中任务，没有在线设备领取。`,
-      "在淘宝与 Qoder 所在电脑运行 executor:doctor，确认全部通过后启动 worker:local。"
-    ));
+    if ((input.devices.authentication_required ?? 0) > 0) {
+      incidents.push(incident(
+        "executor_authentication_required",
+        "critical",
+        "本地执行器有响应，淘宝账号需要重新登录",
+        `当前有 ${queuedWork} 个任务等待；Worker 心跳正常，但已暂停领取新任务。`,
+        "在淘宝桌面版完成登录后回到页面确认继续搜索，或直接使用已有结果进入选购。"
+      ));
+    } else if ((input.devices.mcp_unavailable ?? 0) > 0) {
+      incidents.push(incident(
+        "executor_mcp_unavailable",
+        "warning",
+        "本地执行器有响应，淘宝 MCP 正在重连",
+        `当前有 ${queuedWork} 个任务安全排队；Worker 并未断线，但淘宝桌面版工具暂不可用。`,
+        "保持本地 Worker 运行并检查淘宝桌面版；MCP 恢复后未完成任务会继续领取。"
+      ));
+    } else {
+      incidents.push(incident(
+        "executor_offline_with_work",
+        "critical",
+        "有任务等待，但本地执行器离线",
+        `当前有 ${queuedWork} 个待执行或执行中任务，没有响应设备领取。`,
+        "在淘宝桌面版所在电脑运行 executor:doctor，确认官方 HTTP MCP 与 SceneCart API 都通过后启动 worker:local。"
+      ));
+    }
   }
 
   if (input.devices.online > 0) {
-    const pendingSearch = input.jobs.pending_by_type?.module_search ?? 0;
+    const pendingSearch = (input.jobs.pending_by_type?.module_search ?? 0) +
+      (input.jobs.pending_by_type?.product_detail ?? 0);
     const pendingCart = input.jobs.pending_by_type?.add_to_cart ?? 0;
     if (pendingSearch > 0 && (input.devices.capabilities?.module_search.online ?? 0) === 0) {
       incidents.push(incident(
         "search_capability_unavailable",
         "critical",
         "搜索任务没有匹配的执行器",
-        `当前有 ${pendingSearch} 个淘宝搜索任务等待，但在线设备均未声明 module_search 能力。`,
+        `当前有 ${pendingSearch} 个淘宝搜索或首选详情读取任务等待，但在线设备均未声明 module_search 能力。`,
         "在执行器设置页注册搜索能力，或启动具备 module_search 能力的本地 Worker。"
       ));
     }
@@ -132,7 +189,7 @@ export function evaluateRuntimeHealth(input: RuntimeHealthInput) {
       "critical",
       "任务队列长时间未推进",
       `最久等待任务已超过 ${Math.round(input.jobs.oldest_pending_ms / 60_000)} 分钟。`,
-      "检查执行器登录状态、任务租约和 Qoder 输出；必要时取消尚未领取的任务后重试。"
+      "检查淘宝桌面版登录状态、官方 MCP、Worker 日志和任务租约；必要时取消尚未领取的任务后重试。"
     ));
   } else if (input.jobs.oldest_pending_ms >= 60_000) {
     incidents.push(incident(
@@ -144,6 +201,29 @@ export function evaluateRuntimeHealth(input: RuntimeHealthInput) {
     ));
   }
 
+  const detailTerminal = (input.detailEvidence?.verified ?? 0) +
+    (input.detailEvidence?.unavailable ?? 0) +
+    (input.detailEvidence?.failed ?? 0);
+  const detailUnavailable = (input.detailEvidence?.unavailable ?? 0) +
+    (input.detailEvidence?.failed ?? 0);
+  if (detailTerminal >= 3 && (input.detailEvidence?.verified ?? 0) === 0) {
+    incidents.push(incident(
+      "product_detail_unavailable",
+      "critical",
+      "首选商品详情连续不可用",
+      `最近会话已有 ${detailUnavailable} 个详情读取失败或不可用，没有形成可展示的详情证据。`,
+      "检查淘宝桌面版登录状态、navigate_to_url/read_page_content 工具，以及 Worker 的详情任务日志。"
+    ));
+  } else if (detailTerminal >= 4 && detailUnavailable / detailTerminal >= 0.5) {
+    incidents.push(incident(
+      "product_detail_degraded",
+      "warning",
+      "首选商品详情读取成功率偏低",
+      `${detailTerminal} 个终态详情任务中有 ${detailUnavailable} 个失败或不可用。`,
+      "检查淘宝详情页可访问性与 Worker 工具状态，确认页面读取不是持续超时。"
+    ));
+  }
+
   const terminalJobs = input.jobs.completed + input.jobs.failed;
   const failureRate = terminalJobs > 0 ? input.jobs.failed / terminalJobs : 0;
   if (terminalJobs >= 3 && failureRate >= 0.5) {
@@ -152,7 +232,7 @@ export function evaluateRuntimeHealth(input: RuntimeHealthInput) {
       "critical",
       "真实执行失败率过高",
       `${terminalJobs} 个已结束任务中有 ${input.jobs.failed} 个失败。`,
-      "暂停继续派发任务，先检查 Qoder 登录、淘宝 skill 和失败日志中的首个根因。"
+      "暂停继续派发任务，先检查淘宝桌面版登录、官方 MCP、Worker 版本和失败日志中的首个根因。"
     ));
   } else if (terminalJobs >= 3 && failureRate >= 0.25) {
     incidents.push(incident(

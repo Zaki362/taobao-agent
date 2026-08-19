@@ -145,6 +145,34 @@ export interface ProductCandidate {
   fit_reason: string;
   recommendation_type: RecommendationType;
   module_id: string;
+  detail_evidence?: TaobaoMcpProductDetailEvidence;
+}
+
+export interface TaobaoMcpProductDetailSummary {
+  page_title: string;
+  page_url: string;
+  visible_text_sha256: string;
+  matched_facts: string[];
+  displayed_price_texts: string[];
+}
+
+export interface TaobaoMcpProductDetailEvidence {
+  schema: "scenecart.taobao-mcp-product-detail-evidence/v1";
+  source: "taobao-mcp";
+  status: "verified" | "unavailable";
+  tool: "navigate_to_url+read_page_content";
+  tools_used: Array<"navigate_to_url" | "read_page_content">;
+  source_app: string;
+  job_id: string;
+  search_job_id: string;
+  module_id: string;
+  workflow_run_id: string;
+  product_id: string;
+  detail_url: string;
+  captured_at: string;
+  summary?: TaobaoMcpProductDetailSummary;
+  unavailable_reason?: string;
+  recommendation_reason?: string;
 }
 
 export interface TaobaoMcpSearchEvidence {

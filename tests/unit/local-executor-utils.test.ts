@@ -7,35 +7,39 @@ import path from "node:path";
 import * as executorUtils from "../../scripts/local-executor-utils.mjs";
 
 const {
+  buildUnavailableTaobaoMcpProductDetailEvidence,
   buildTaobaoMcpSearchEvidence,
-  cacheResultForAcknowledgement,
-  canAcknowledgeResultWithoutCache,
   classifyTaobaoAuthentication,
   createPendingAuthenticationFailure,
+  createPendingResultAcknowledgement,
   deliverPendingAuthenticationFailure,
   executorFailureDisposition,
   isTaobaoLoginError,
   normalizeTaobaoCartResult,
+  normalizeTaobaoMcpProductDetailEvidence,
   normalizeTaobaoSearchEvidence,
   PendingAuthenticationFailureCoordinator,
   PendingAuthenticationFailureStore,
+  PendingResultAcknowledgementCoordinator,
+  PendingResultAcknowledgementStore,
   prepareTaobaoCartAction,
   taobaoCurrentTabUrl
 } = executorUtils as {
+  buildUnavailableTaobaoMcpProductDetailEvidence: (
+    context: Record<string, unknown>,
+    reason: string,
+    toolsUsed?: string[]
+  ) => Record<string, unknown>;
   buildTaobaoMcpSearchEvidence: (context: Record<string, unknown>) => Record<string, unknown>;
-  canAcknowledgeResultWithoutCache: (
-    job: Record<string, unknown>,
-    result: Record<string, unknown>
-  ) => boolean;
-  cacheResultForAcknowledgement: (
-    job: Record<string, unknown>,
-    result: Record<string, unknown>,
-    writeCache: () => Promise<void>
-  ) => Promise<{ cached: boolean; error?: string }>;
   classifyTaobaoAuthentication: (value: unknown) => "authenticated" | "authentication_required" | "unknown";
   createPendingAuthenticationFailure: (
     job: Record<string, unknown>,
     error: string,
+    createdAt?: string
+  ) => Record<string, unknown>;
+  createPendingResultAcknowledgement: (
+    job: Record<string, unknown>,
+    result: Record<string, unknown>,
     createdAt?: string
   ) => Record<string, unknown>;
   deliverPendingAuthenticationFailure: (
@@ -48,6 +52,10 @@ const {
   }) => "persist_authentication_failure" | "abandon_lost_lease" | "report_failure";
   isTaobaoLoginError: (value: unknown) => boolean;
   normalizeTaobaoCartResult: (raw: unknown, productId: string) => Record<string, unknown>;
+  normalizeTaobaoMcpProductDetailEvidence: (
+    raw: unknown,
+    context: Record<string, unknown>
+  ) => Record<string, unknown>;
   normalizeTaobaoSearchEvidence: (
     raw: unknown,
     context: { keyword: string; moduleId: string }
@@ -78,10 +86,91 @@ const {
       report: (callback: Record<string, unknown>) => Promise<Record<string, unknown>>
     ) => Promise<{ state: "empty" | "pending" | "confirmed" }>;
   };
+  PendingResultAcknowledgementStore: new (filePath: string) => {
+    load: () => Promise<Record<string, unknown> | null>;
+    save: (callback: Record<string, unknown>) => Promise<Record<string, unknown>>;
+    clear: (expectedJobId: string, expectedLeaseToken: string) => Promise<boolean>;
+  };
+  PendingResultAcknowledgementCoordinator: new (store: {
+    load: () => Promise<Record<string, unknown> | null>;
+    save: (callback: Record<string, unknown>) => Promise<Record<string, unknown>>;
+    clear: (expectedJobId: string, expectedLeaseToken: string) => Promise<boolean>;
+  }) => {
+    restore: () => Promise<Record<string, unknown> | null>;
+    hold: (callback: Record<string, unknown>) => Record<string, unknown>;
+    current: () => Promise<Record<string, unknown> | null>;
+    persistHeld: () => Promise<{ persisted: boolean; callback: Record<string, unknown> | null }>;
+    deliver: (
+      report: (callback: Record<string, unknown>) => Promise<Record<string, unknown>>,
+      options?: {
+        isDiscardableError?: (error: unknown) => boolean;
+        isFatalError?: (error: unknown) => boolean;
+      }
+    ) => Promise<{
+      state: "empty" | "pending" | "confirmed" | "discarded";
+      callback: Record<string, unknown> | null;
+      error?: string;
+    }>;
+  };
   taobaoCurrentTabUrl: (raw: unknown) => string;
 };
 
 describe("local executor evidence boundary", () => {
+  const detailContext = {
+    sourceApp: "SceneCartAI",
+    jobId: "detail-job-1",
+    searchJobId: "search-job-1",
+    moduleId: "practical-interior",
+    workflowRunId: "workflow-live",
+    productId: "843402079981",
+    detailUrl: "https://item.taobao.com/item.htm?id=843402079981",
+    factTerms: ["稳固夹持", "旗舰店"],
+    capturedAt: "2026-08-18T12:34:56.000Z"
+  };
+
+  it("normalizes only visible detail fields without claiming a SKU price", () => {
+    expect(normalizeTaobaoMcpProductDetailEvidence({
+      result: {
+        title: "车载手机支架 - 淘宝网",
+        url: detailContext.detailUrl,
+        content: "测试旗舰店 稳固夹持 页面活动价 ￥73.80 另有配件 ¥9.9"
+      }
+    }, detailContext)).toMatchObject({
+      schema: "scenecart.taobao-mcp-product-detail-evidence/v1",
+      status: "verified",
+      tools_used: ["navigate_to_url", "read_page_content"],
+      summary: {
+        page_title: "车载手机支架 - 淘宝网",
+        page_url: detailContext.detailUrl,
+        matched_facts: ["稳固夹持", "旗舰店"],
+        displayed_price_texts: ["￥73.80", "¥9.9"]
+      }
+    });
+    const serialized = JSON.stringify(normalizeTaobaoMcpProductDetailEvidence({
+      result: {
+        title: "车载手机支架 - 淘宝网",
+        url: detailContext.detailUrl,
+        content: "账号昵称 小明 北京市朝阳区 稳固夹持"
+      }
+    }, detailContext));
+    expect(serialized).not.toContain("小明");
+    expect(serialized).not.toContain("北京市朝阳区");
+    expect(serialized).not.toContain("visible_text_excerpt");
+    expect(serialized).toContain("visible_text_sha256");
+  });
+
+  it("records missing detail tools as unavailable without inventing fields", () => {
+    expect(buildUnavailableTaobaoMcpProductDetailEvidence(
+      detailContext,
+      "缺少 read_page_content",
+      ["navigate_to_url"]
+    )).toMatchObject({
+      status: "unavailable",
+      tools_used: ["navigate_to_url"],
+      unavailable_reason: "缺少 read_page_content"
+    });
+  });
+
   it("builds a job-bound proof for one live Taobao MCP search", () => {
     expect(buildTaobaoMcpSearchEvidence({
       sourceApp: "SceneCartAI",
@@ -258,6 +347,93 @@ describe("local executor evidence boundary", () => {
     }
   });
 
+  it("persists a successful result callback and retries only its acknowledgement after restart", async () => {
+    const directory = await fs.mkdtemp(path.join(os.tmpdir(), "scenecart-result-ack-"));
+    const callbackPath = path.join(directory, "pending-result-acknowledgement.json");
+    const callback = createPendingResultAcknowledgement({
+      id: "job-result-search",
+      job_type: "module_search",
+      lease_token: "lease-token-result-search-123"
+    }, {
+      summary: "real Taobao result",
+      candidates: []
+    }, "2026-08-19T01:23:45.000Z");
+    const externalActionCalls = 1;
+    let acknowledgementCalls = 0;
+    try {
+      const firstWorker = new PendingResultAcknowledgementCoordinator(
+        new PendingResultAcknowledgementStore(callbackPath)
+      );
+      firstWorker.hold(callback);
+      await expect(firstWorker.persistHeld()).resolves.toMatchObject({ persisted: true });
+      expect((await fs.stat(callbackPath)).mode & 0o777).toBe(0o600);
+      const unavailable = await firstWorker.deliver(async () => {
+        acknowledgementCalls += 1;
+        throw new Error("resolve API unavailable");
+      });
+      expect(unavailable.state).toBe("pending");
+
+      const restartedWorker = new PendingResultAcknowledgementCoordinator(
+        new PendingResultAcknowledgementStore(callbackPath)
+      );
+      await expect(restartedWorker.restore()).resolves.toEqual(callback);
+      const confirmed = await restartedWorker.deliver(async (pending) => {
+        acknowledgementCalls += 1;
+        return { job: { id: pending.job_id, status: "completed" } };
+      });
+      expect(confirmed.state).toBe("confirmed");
+      expect(acknowledgementCalls).toBe(2);
+      expect(externalActionCalls).toBe(1);
+      await expect(restartedWorker.current()).resolves.toBeNull();
+      await expect(fs.stat(callbackPath)).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      await fs.rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("discards only an explicitly stale result callback and keeps fatal callbacks durable", async () => {
+    const directory = await fs.mkdtemp(path.join(os.tmpdir(), "scenecart-result-disposition-"));
+    const callbackPath = path.join(directory, "pending-result-acknowledgement.json");
+    const callback = createPendingResultAcknowledgement({
+      id: "job-result-detail",
+      job_type: "product_detail",
+      lease_token: "lease-token-result-detail-123"
+    }, { detail_evidence: { status: "verified" } });
+    try {
+      const staleWorker = new PendingResultAcknowledgementCoordinator(
+        new PendingResultAcknowledgementStore(callbackPath)
+      );
+      staleWorker.hold(callback);
+      const staleError = Object.assign(new Error("superseded"), {
+        status: 409,
+        code: "job_superseded"
+      });
+      const discarded = await staleWorker.deliver(async () => {
+        throw staleError;
+      }, {
+        isDiscardableError: (error) => error === staleError
+      });
+      expect(discarded.state).toBe("discarded");
+      await expect(staleWorker.current()).resolves.toBeNull();
+
+      const fatalWorker = new PendingResultAcknowledgementCoordinator(
+        new PendingResultAcknowledgementStore(callbackPath)
+      );
+      fatalWorker.hold(callback);
+      const fatalError = Object.assign(new Error("invalid token"), { status: 401 });
+      await expect(fatalWorker.deliver(async () => {
+        throw fatalError;
+      }, {
+        isFatalError: (error) => error === fatalError
+      })).rejects.toBe(fatalError);
+      await expect(fatalWorker.current()).resolves.toEqual(callback);
+      await expect(new PendingResultAcknowledgementStore(callbackPath).load())
+        .resolves.toEqual(callback);
+    } finally {
+      await fs.rm(directory, { recursive: true, force: true });
+    }
+  });
+
   it("persists authentication failure even when lease loss is observed at the same time", () => {
     expect(executorFailureDisposition({
       authenticationRequired: true,
@@ -267,43 +443,6 @@ describe("local executor evidence boundary", () => {
       authenticationRequired: false,
       leaseLost: true
     })).toBe("abandon_lost_lease");
-  });
-
-  it("keeps only a confirmed cart success for direct acknowledgement after cache failure", () => {
-    expect(canAcknowledgeResultWithoutCache(
-      { job_type: "add_to_cart" },
-      { success: true, product_id: "item-1" }
-    )).toBe(true);
-    expect(canAcknowledgeResultWithoutCache(
-      { job_type: "add_to_cart" },
-      { success: false }
-    )).toBe(false);
-    expect(canAcknowledgeResultWithoutCache(
-      { job_type: "module_search" },
-      { success: true }
-    )).toBe(false);
-  });
-
-  it("keeps a successful add-to-cart result in memory when cache writing fails", async () => {
-    let cacheWrites = 0;
-    const outcome = await cacheResultForAcknowledgement(
-      { job_type: "add_to_cart" },
-      { success: true, product_id: "item-cache-failure" },
-      async () => {
-        cacheWrites += 1;
-        throw new Error("injected cache rename failure");
-      }
-    );
-    expect(outcome).toEqual({ cached: false, error: "injected cache rename failure" });
-    expect(cacheWrites).toBe(1);
-
-    await expect(cacheResultForAcknowledgement(
-      { job_type: "module_search" },
-      { success: true },
-      async () => {
-        throw new Error("injected search cache failure");
-      }
-    )).rejects.toThrow("injected search cache failure");
   });
 
   it("flushes a restored auth callback before Taobao startup tool discovery", async () => {
@@ -317,7 +456,8 @@ describe("local executor evidence boundary", () => {
     expect(verifyStart).toBeGreaterThanOrEqual(0);
     expect(callbackFlush).toBeGreaterThan(verifyStart);
     expect(taobaoToolDiscovery).toBeGreaterThan(callbackFlush);
-    expect(source).toContain("automatic replay is forbidden and the user must check Taobao cart manually");
+    expect(source).toContain("automatic replay is forbidden");
+    expect(source).toContain("retrying without repeating the Taobao action");
   });
 
   it("stays fail-closed in memory when the auth callback ledger cannot be written", async () => {

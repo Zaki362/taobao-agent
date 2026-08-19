@@ -1,17 +1,19 @@
-import { expect, test, type Request } from "@playwright/test";
+import { expect, test, type APIRequestContext, type Request } from "@playwright/test";
 import protocol from "../../lib/runtime/executor-protocol.json";
 
 const appOrigin = "http://127.0.0.1:3100";
 
 const executorHeaders = (token: string) => ({
   Authorization: `Bearer ${token}`,
-  "X-SceneCart-Executor-Protocol": protocol.version
+  "X-SceneCart-Executor-Protocol": protocol.version,
+  Origin: appOrigin
 });
 
 type ExecutorJob = {
   id: string;
-  job_type: "module_search" | "add_to_cart";
+  job_type: "module_search" | "product_detail" | "add_to_cart";
   payload: Record<string, unknown>;
+  lease_token: string;
 };
 
 function candidatesFor(job: ExecutorJob) {
@@ -56,6 +58,43 @@ function verifiedSearchResultFor(job: ExecutorJob, summary: string) {
   };
 }
 
+function unavailableDetailResultFor(job: ExecutorJob) {
+  return {
+    detail_evidence: {
+      schema: "scenecart.taobao-mcp-product-detail-evidence/v1",
+      source: "taobao-mcp",
+      status: "unavailable",
+      tool: "navigate_to_url+read_page_content",
+      tools_used: ["navigate_to_url"],
+      source_app: "SceneCartAuthResumeE2EFixture",
+      job_id: job.id,
+      search_job_id: String(job.payload.search_job_id ?? ""),
+      module_id: String(job.payload.module_id ?? ""),
+      workflow_run_id: String(job.payload.workflow_run_id ?? ""),
+      product_id: String(job.payload.product_id ?? ""),
+      detail_url: String(job.payload.detail_url ?? ""),
+      captured_at: new Date().toISOString(),
+      unavailable_reason: "登录恢复 E2E 不访问真实淘宝详情页"
+    }
+  };
+}
+
+async function resolveDetailFollowUp(api: APIRequestContext, headers: Record<string, string>) {
+  const claim = await api.post("/api/executor/jobs/claim", { headers, data: {} });
+  expect(claim.ok(), await claim.text()).toBe(true);
+  const { job } = await claim.json() as { job: ExecutorJob | null };
+  expect(job?.job_type).toBe("product_detail");
+  const resolved = await api.post(`/api/executor/jobs/${job!.id}/resolve`, {
+    headers,
+    data: {
+      status: "completed",
+      lease_token: job!.lease_token,
+      result: unavailableDetailResultFor(job!)
+    }
+  });
+  expect(resolved.ok(), await resolved.text()).toBe(true);
+}
+
 test("Taobao login loss pauses the page and resumes the same durable job atomically", async ({ page }) => {
   const email = `auth-resume-${Date.now()}@example.com`;
   const register = await page.request.post("/api/auth/register", {
@@ -97,10 +136,12 @@ test("Taobao login loss pauses the page and resumes the same durable job atomica
     headers,
     data: {
       status: "completed",
+      lease_token: firstJob!.lease_token,
       result: verifiedSearchResultFor(firstJob!, "登录失效前已完成一次真实搜索")
     }
   });
   expect(firstResolved.ok(), await firstResolved.text()).toBe(true);
+  await resolveDetailFollowUp(page.request, headers);
 
   const failedClaim = await page.request.post("/api/executor/jobs/claim", { headers, data: {} });
   const { job: failedJob } = await failedClaim.json() as { job: ExecutorJob | null };
@@ -109,6 +150,7 @@ test("Taobao login loss pauses the page and resumes the same durable job atomica
     headers,
     data: {
       status: "failed",
+      lease_token: failedJob!.lease_token,
       error: "[auth_required] 淘宝未登录，已打开登录页面，请先登录淘宝账号",
       retryable: false
     }
@@ -200,6 +242,7 @@ test("Taobao login loss pauses the page and resumes the same durable job atomica
     headers,
     data: {
       status: "completed",
+      lease_token: revivedJob!.lease_token,
       result: verifiedSearchResultFor(revivedJob!, "重新登录后恢复同一搜索")
     }
   });
@@ -207,8 +250,8 @@ test("Taobao login loss pauses the page and resumes the same durable job atomica
     continuation: { outcome: string; error: string | null } | null;
   };
   expect(revivedResolved.ok(), JSON.stringify(revivedPayload)).toBe(true);
-  expect(revivedPayload.continuation?.error).toBeNull();
-  expect(revivedPayload.continuation?.outcome).toBe("queued");
+  expect(revivedPayload.continuation).toBeNull();
+  await resolveDetailFollowUp(page.request, headers);
 
   const continuedClaim = await page.request.post("/api/executor/jobs/claim", { headers, data: {} });
   const { job: continuedJob } = await continuedClaim.json() as { job: ExecutorJob | null };
@@ -221,6 +264,7 @@ test("Taobao login loss pauses the page and resumes the same durable job atomica
     headers,
     data: {
       status: "failed",
+      lease_token: continuedJob!.lease_token,
       error: "[auth_required] 淘宝未登录，请先登录淘宝账号",
       retryable: false
     }

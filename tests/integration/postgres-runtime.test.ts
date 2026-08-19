@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createAgentDecision } from "@/lib/agent/decision-engine";
 import { addToCart } from "@/lib/agent/orchestrator";
 import { advanceAgentWorkflow } from "@/lib/agent/workflow-runner";
@@ -115,13 +115,22 @@ describeWithDatabase("PostgreSQL production runtime contract", () => {
     expect(claimed?.status).toBe("leased");
     expect(await postgresRuntimeRepository.claimJob(device, 30_000)).toBeNull();
 
-    const running = await postgresRuntimeRepository.renewJobLease(jobId, deviceId, 30_000);
+    const running = await postgresRuntimeRepository.renewJobLease(
+      jobId,
+      deviceId,
+      claimed!.lease_token!,
+      30_000
+    );
     expect(running?.status).toBe("running");
 
-    const completed = await postgresRuntimeRepository.completeJob(jobId, deviceId, { results: [] });
-    const replay = await postgresRuntimeRepository.completeJob(jobId, deviceId, { results: [] });
+    const completed = await postgresRuntimeRepository.completeJob(jobId, deviceId, { results: [] }, running!.lease_token!);
+    const replay = await postgresRuntimeRepository.completeJob(jobId, deviceId, { results: [] }, running!.lease_token!);
     expect(completed.alreadyCompleted).toBe(false);
     expect(replay.alreadyCompleted).toBe(true);
+    await expect(postgresRuntimeRepository.completeJob(jobId, randomUUID(), {}, running!.lease_token!))
+      .rejects.toThrow("job lease owner mismatch");
+    await expect(postgresRuntimeRepository.failJob(jobId, randomUUID(), "replay", running!.lease_token!))
+      .rejects.toThrow("job lease owner mismatch");
 
     const firstEvent = await postgresRuntimeRepository.appendEvent({
       user_id: userId,
@@ -140,6 +149,109 @@ describeWithDatabase("PostgreSQL production runtime contract", () => {
     const events = await postgresRuntimeRepository.listEvents(sessionId, firstEvent.id, userId);
     expect(events.map((event) => event.id)).toEqual([secondEvent.id]);
     expect(await postgresRuntimeRepository.listEvents(sessionId, 0, otherUserId)).toHaveLength(0);
+  });
+
+  it("atomically rejects a stale heartbeat token after the same device reclaims a job", async () => {
+    const leaseGenerationJobId = randomUUID();
+    await postgresRuntimeRepository.createJob({
+      id: leaseGenerationJobId,
+      user_id: userId,
+      session_id: sessionId,
+      job_type: "module_search",
+      idempotency_key: `integration:${sessionId}:heartbeat-lease-generation`,
+      payload: {},
+      max_attempts: 3
+    });
+    const oldLease = await postgresRuntimeRepository.claimJob(device, 30_000);
+    expect(oldLease?.id).toBe(leaseGenerationJobId);
+    await query(
+      "UPDATE agent_jobs SET lease_expires_at = NOW() - INTERVAL '1 second' WHERE id = $1",
+      [leaseGenerationJobId]
+    );
+    const currentLease = await postgresRuntimeRepository.claimJob(device, 30_000);
+    expect(currentLease?.id).toBe(leaseGenerationJobId);
+    expect(currentLease?.lease_token).not.toBe(oldLease?.lease_token);
+
+    expect(await postgresRuntimeRepository.renewJobLease(
+      leaseGenerationJobId,
+      device.id,
+      oldLease!.lease_token!,
+      30_000
+    )).toBeNull();
+    expect(await postgresRuntimeRepository.renewJobLease(
+      leaseGenerationJobId,
+      device.id,
+      currentLease!.lease_token!,
+      30_000
+    )).toMatchObject({ status: "running", lease_token: currentLease!.lease_token });
+    await postgresRuntimeRepository.completeJob(
+      leaseGenerationJobId,
+      device.id,
+      {},
+      currentLease!.lease_token!
+    );
+  });
+
+  it("claims unowned PostgreSQL jobs only outside production", async () => {
+    const unownedJobId = randomUUID();
+    await postgresRuntimeRepository.createJob({
+      id: unownedJobId,
+      session_id: `session-pg-unowned-${randomUUID()}`,
+      job_type: "module_search",
+      idempotency_key: `integration:${sessionId}:unowned-production-guard`,
+      payload: {}
+    });
+    try {
+      vi.stubEnv("NODE_ENV", "production");
+      expect(await postgresRuntimeRepository.claimJob(device, 30_000)).toBeNull();
+
+      vi.stubEnv("NODE_ENV", "test");
+      const claimed = await postgresRuntimeRepository.claimJob(device, 30_000);
+      expect(claimed?.id).toBe(unownedJobId);
+      await postgresRuntimeRepository.completeJob(
+        unownedJobId,
+        device.id,
+        {},
+        claimed!.lease_token!
+      );
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("lets a module-search executor claim the read-only preferred-product detail job type", async () => {
+    const detailSessionId = `session-pg-detail-capability-${randomUUID()}`;
+    const detailDevice: ExecutorDevice = {
+      ...device,
+      id: randomUUID(),
+      name: "PostgreSQL product detail executor",
+      token_hash: `token-${randomUUID()}`,
+      capabilities: ["module_search"]
+    };
+    await postgresRuntimeRepository.saveSession(createSessionFixture({
+      session_id: detailSessionId,
+      owner_id: userId
+    }));
+    await postgresRuntimeRepository.createDevice(detailDevice);
+    const detailJob = await postgresRuntimeRepository.createJob({
+      id: randomUUID(),
+      user_id: userId,
+      session_id: detailSessionId,
+      job_type: "product_detail",
+      idempotency_key: `integration:${detailSessionId}:product-detail`,
+      payload: {
+        product_id: "pg-detail-product",
+        detail_url: "https://item.taobao.com/item.htm?id=pg-detail-product"
+      }
+    });
+
+    const claimed = await postgresRuntimeRepository.claimJob(detailDevice, 30_000);
+    expect(claimed).toMatchObject({
+      id: detailJob.id,
+      job_type: "product_detail"
+    });
+    await expect(postgresRuntimeRepository.completeJob(detailJob.id, detailDevice.id, {}, claimed!.lease_token!))
+      .resolves.toMatchObject({ alreadyCompleted: false });
   });
 
   it("rejects the previous executor after an expired PostgreSQL lease is reassigned", async () => {
@@ -167,17 +279,34 @@ describeWithDatabase("PostgreSQL production runtime contract", () => {
       payload: {},
       max_attempts: 3
     });
-    expect((await postgresRuntimeRepository.claimJob(oldDevice, 30_000))?.id).toBe(reassignedJobId);
+    const originalLease = await postgresRuntimeRepository.claimJob(oldDevice, 30_000);
+    expect(originalLease?.id).toBe(reassignedJobId);
     await query(
       "UPDATE agent_jobs SET lease_expires_at = NOW() - INTERVAL '1 second' WHERE id = $1",
       [reassignedJobId]
     );
 
-    expect((await postgresRuntimeRepository.claimJob(replacementDevice, 30_000))?.id).toBe(reassignedJobId);
-    expect(await postgresRuntimeRepository.renewJobLease(reassignedJobId, oldDevice.id, 30_000)).toBeNull();
-    await expect(postgresRuntimeRepository.completeJob(reassignedJobId, oldDevice.id, { results: [] }))
+    const replacementLease = await postgresRuntimeRepository.claimJob(replacementDevice, 30_000);
+    expect(replacementLease?.id).toBe(reassignedJobId);
+    expect(await postgresRuntimeRepository.renewJobLease(
+      reassignedJobId,
+      oldDevice.id,
+      originalLease!.lease_token!,
+      30_000
+    )).toBeNull();
+    await expect(postgresRuntimeRepository.completeJob(
+      reassignedJobId,
+      oldDevice.id,
+      { results: [] },
+      originalLease!.lease_token!
+    ))
       .rejects.toThrow("job lease owner mismatch");
-    await expect(postgresRuntimeRepository.completeJob(reassignedJobId, replacementDevice.id, { results: [] }))
+    await expect(postgresRuntimeRepository.completeJob(
+      reassignedJobId,
+      replacementDevice.id,
+      { results: [] },
+      replacementLease!.lease_token!
+    ))
       .resolves.toMatchObject({ alreadyCompleted: false });
   });
 
@@ -256,6 +385,7 @@ describeWithDatabase("PostgreSQL production runtime contract", () => {
       terminalJobId,
       deviceId,
       "Qoder CLI 未登录",
+      claimed!.lease_token!,
       3_000,
       true
     );
@@ -276,7 +406,12 @@ describeWithDatabase("PostgreSQL production runtime contract", () => {
     expect(retried.attempts).toBe(0);
     const reclaimed = await postgresRuntimeRepository.claimJob(device, 30_000);
     expect(reclaimed?.id).toBe(terminalJobId);
-    await expect(postgresRuntimeRepository.completeJob(terminalJobId, deviceId, { results: [] }))
+    await expect(postgresRuntimeRepository.completeJob(
+      terminalJobId,
+      deviceId,
+      { results: [] },
+      reclaimed!.lease_token!
+    ))
       .resolves.toMatchObject({ alreadyCompleted: false });
   });
 
@@ -391,9 +526,13 @@ describeWithDatabase("PostgreSQL production runtime contract", () => {
     };
 
     const completions = await Promise.all([
-      applyCompletedRuntimeJob(queued.id, replayDevice, result),
-      applyCompletedRuntimeJob(queued.id, replayDevice, result)
+      applyCompletedRuntimeJob(queued.id, replayDevice, result, claimed!.lease_token!),
+      applyCompletedRuntimeJob(queued.id, replayDevice, result, claimed!.lease_token!)
     ]);
+    const detailJobId = completions.find((item) => item.follow_up_job_id)?.follow_up_job_id;
+    if (detailJobId) {
+      await postgresRuntimeRepository.cancelJob(detailJobId, userId);
+    }
     const restored = await postgresRuntimeRepository.getSession(replaySessionId, userId);
 
     expect(completions.filter((item) => item.alreadyCompleted)).toHaveLength(1);
@@ -503,7 +642,7 @@ describeWithDatabase("PostgreSQL production runtime contract", () => {
         recommendation_type: "性价比推荐",
         module_id: moduleId
       }]
-    });
+    }, firstJob!.lease_token!);
     const interrupted = await postgresRuntimeRepository.getSession(recoverySessionId, userId);
     interrupted!.hosted_tasks = interrupted!.hosted_tasks.filter((task) => task.task_id !== firstJob!.id);
     await postgresRuntimeRepository.saveSession(interrupted!);
@@ -544,5 +683,144 @@ describeWithDatabase("PostgreSQL production runtime contract", () => {
 
     const candidates = await postgresRuntimeRepository.listWorkflowRecoveryCandidates(userId, 1);
     expect(candidates.map((state) => state.session_id)).toEqual([candidateId]);
+  });
+
+  it("excludes sessions that are legitimately waiting on an active product detail job", async () => {
+    const blockedId = `session-pg-detail-blocked-${randomUUID()}`;
+    const blocked = createSessionFixture({ session_id: blockedId, owner_id: userId });
+    blocked.agent_runtime.auto_continue = true;
+    blocked.agent_runtime.workflow_status = "waiting_for_tools";
+    blocked.agent_runtime.workflow_run_id = `workflow-pg-detail-${randomUUID()}`;
+    blocked.agent_runtime.last_transition_at = "2018-01-01T00:00:00.000Z";
+    const blockedModule = blocked.shopping_plan.modules[0];
+    const blockedProductId = `pg-detail-blocked-${randomUUID()}`;
+    const blockedDetailUrl = `https://item.taobao.com/item.htm?id=${blockedProductId}`;
+    const blockedSearchJobId = randomUUID();
+    const blockedDetailJobId = randomUUID();
+    blocked.module_candidates[blockedModule.module_id] = [{
+      product_id: blockedProductId,
+      title: "PostgreSQL active detail candidate",
+      price: 99,
+      source: "淘宝",
+      shop_name: "详情恢复测试店",
+      image_url: "https://img.alicdn.com/item.jpg",
+      detail_url: blockedDetailUrl,
+      shop_badges: [],
+      highlights: [],
+      risk_notes: [],
+      fit_reason: "恢复过滤测试",
+      recommendation_type: "稳妥推荐",
+      module_id: blockedModule.module_id
+    }];
+    blocked.hosted_tasks.unshift({
+      task_id: blockedSearchJobId,
+      runtime_job_id: blockedSearchJobId,
+      executor: "local_executor",
+      task_type: "module_search",
+      session_id: blocked.session_id,
+      status: "completed",
+      title: "PostgreSQL active detail search",
+      description: "恢复过滤必须绑定当前搜索来源。",
+      module_id: blockedModule.module_id,
+      module_name: blockedModule.module_name,
+      created_at: now,
+      updated_at: now,
+      payload: {
+        workflow_run_id: blocked.agent_runtime.workflow_run_id,
+        preferred_product_detail_job_id: blockedDetailJobId,
+        preferred_product_id: blockedProductId
+      }
+    });
+    await postgresRuntimeRepository.saveSession(blocked);
+    await postgresRuntimeRepository.createJob({
+      id: blockedDetailJobId,
+      user_id: userId,
+      session_id: blockedId,
+      job_type: "product_detail",
+      idempotency_key: `detail-recovery-blocked:${blockedId}`,
+      payload: {
+        search_job_id: blockedSearchJobId,
+        workflow_run_id: blocked.agent_runtime.workflow_run_id,
+        module_id: blockedModule.module_id,
+        product_id: blockedProductId,
+        detail_url: blockedDetailUrl
+      }
+    });
+
+    const staleId = `session-pg-stale-detail-${randomUUID()}`;
+    const stale = createSessionFixture({ session_id: staleId, owner_id: userId });
+    stale.agent_runtime.auto_continue = true;
+    stale.agent_runtime.workflow_status = "waiting_for_tools";
+    stale.agent_runtime.workflow_run_id = blocked.agent_runtime.workflow_run_id;
+    stale.agent_runtime.last_transition_at = "2018-06-01T00:00:00.000Z";
+    const staleModule = stale.shopping_plan.modules[0];
+    const sameProductId = `pg-same-product-${randomUUID()}`;
+    const sameDetailUrl = `https://item.taobao.com/item.htm?id=${sameProductId}`;
+    const currentSearchJobId = randomUUID();
+    const currentDetailJobId = randomUUID();
+    const staleSearchJobId = randomUUID();
+    const staleDetailJobId = randomUUID();
+    stale.module_candidates[staleModule.module_id] = [{
+      product_id: sameProductId,
+      title: "PostgreSQL same product after re-search",
+      price: 99,
+      source: "淘宝",
+      shop_name: "详情恢复测试店",
+      image_url: "https://img.alicdn.com/item.jpg",
+      detail_url: sameDetailUrl,
+      shop_badges: [],
+      highlights: [],
+      risk_notes: [],
+      fit_reason: "同商品链接必须使用最新搜索来源",
+      recommendation_type: "稳妥推荐",
+      module_id: staleModule.module_id
+    }];
+    stale.hosted_tasks.unshift({
+      task_id: currentSearchJobId,
+      runtime_job_id: currentSearchJobId,
+      executor: "local_executor",
+      task_type: "module_search",
+      session_id: stale.session_id,
+      status: "completed",
+      title: "PostgreSQL latest same-product search",
+      description: "旧详情任务不可阻塞恢复。",
+      module_id: staleModule.module_id,
+      module_name: staleModule.module_name,
+      created_at: now,
+      updated_at: now,
+      payload: {
+        workflow_run_id: stale.agent_runtime.workflow_run_id,
+        preferred_product_detail_job_id: currentDetailJobId,
+        preferred_product_id: sameProductId
+      }
+    });
+    await postgresRuntimeRepository.saveSession(stale);
+    await postgresRuntimeRepository.createJob({
+      id: staleDetailJobId,
+      user_id: userId,
+      session_id: staleId,
+      job_type: "product_detail",
+      idempotency_key: `stale-same-product-detail:${staleId}`,
+      payload: {
+        search_job_id: staleSearchJobId,
+        workflow_run_id: stale.agent_runtime.workflow_run_id,
+        module_id: staleModule.module_id,
+        product_id: sameProductId,
+        detail_url: sameDetailUrl
+      }
+    });
+
+    const candidateId = `session-pg-recovery-after-detail-${randomUUID()}`;
+    const candidate = createSessionFixture({ session_id: candidateId, owner_id: userId });
+    candidate.agent_runtime.auto_continue = true;
+    candidate.agent_runtime.workflow_status = "running";
+    candidate.agent_runtime.last_transition_at = "2019-01-01T00:00:00.000Z";
+    await postgresRuntimeRepository.saveSession(candidate);
+
+    const recoveryIds = (await postgresRuntimeRepository.listWorkflowRecoveryCandidates(userId, 100))
+      .map((state) => state.session_id);
+    expect(recoveryIds).not.toContain(blockedId);
+    expect(recoveryIds).toContain(staleId);
+    expect(recoveryIds).toContain(candidateId);
   });
 });

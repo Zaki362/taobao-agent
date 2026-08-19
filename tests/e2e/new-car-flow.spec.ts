@@ -3,9 +3,11 @@ import protocol from "../../lib/runtime/executor-protocol.json";
 
 const recommendationTypes = ["稳妥推荐", "性价比推荐", "升级推荐"] as const;
 const recoverySecret = "playwright-recovery-secret-with-at-least-32-characters";
+const appOrigin = "http://127.0.0.1:3100";
 const executorHeaders = (token: string) => ({
   Authorization: `Bearer ${token}`,
-  "X-SceneCart-Executor-Protocol": protocol.version
+  "X-SceneCart-Executor-Protocol": protocol.version,
+  Origin: appOrigin
 });
 
 async function returnToLandingWithoutLocalSnapshot(page: Page) {
@@ -67,6 +69,27 @@ function verifiedSearchResultFor(job: { id: string; payload: Record<string, unkn
   };
 }
 
+function unavailableDetailResultFor(job: { id: string; payload: Record<string, unknown> }) {
+  return {
+    detail_evidence: {
+      schema: "scenecart.taobao-mcp-product-detail-evidence/v1",
+      source: "taobao-mcp",
+      status: "unavailable",
+      tool: "navigate_to_url+read_page_content",
+      tools_used: ["navigate_to_url"],
+      source_app: "SceneCartNewCarE2EFixture",
+      job_id: job.id,
+      search_job_id: String(job.payload.search_job_id ?? ""),
+      module_id: String(job.payload.module_id ?? ""),
+      workflow_run_id: String(job.payload.workflow_run_id ?? ""),
+      product_id: String(job.payload.product_id ?? ""),
+      detail_url: String(job.payload.detail_url ?? ""),
+      captured_at: new Date().toISOString(),
+      unavailable_reason: "新车 E2E 不访问真实淘宝详情页"
+    }
+  };
+}
+
 async function runExecutorUntilStopped(
   api: APIRequestContext,
   token: string,
@@ -92,8 +115,9 @@ async function runExecutorUntilStopped(
     const { job } = await claim.json() as {
       job: null | {
         id: string;
-        job_type: "module_search" | "add_to_cart";
+        job_type: "module_search" | "product_detail" | "add_to_cart";
         payload: Record<string, unknown>;
+        lease_token: string;
       };
     };
     if (!job) {
@@ -107,6 +131,7 @@ async function runExecutorUntilStopped(
         headers,
         data: {
           status: "failed",
+          lease_token: job.lease_token,
           error: "E2E 注入一次不可重试搜索失败",
           retryable: false
         }
@@ -117,14 +142,16 @@ async function runExecutorUntilStopped(
 
     const result = job.job_type === "module_search"
       ? verifiedSearchResultFor(job)
-      : {
+      : job.job_type === "product_detail"
+        ? unavailableDetailResultFor(job)
+        : {
           success: true,
           message: "E2E 本地执行器已完成加购",
           product_id: job.payload.product_id
         };
     const resolved = await api.post(`/api/executor/jobs/${job.id}/resolve`, {
       headers,
-      data: { status: "completed", result }
+      data: { status: "completed", lease_token: job.lease_token, result }
     });
     expect(resolved.ok()).toBeTruthy();
   }
@@ -206,7 +233,8 @@ test("authenticated new-car workflow reaches recommendations through the durable
   const outdatedHeartbeat = await page.request.post("/api/executor/heartbeat", {
     headers: {
       Authorization: `Bearer ${deviceToken}`,
-      "X-SceneCart-Executor-Protocol": "1"
+      "X-SceneCart-Executor-Protocol": "1",
+      Origin: appOrigin
     },
     data: {}
   });
@@ -683,11 +711,16 @@ test("authenticated new-car workflow reaches recommendations through the durable
       headers: executorHeaders(deviceToken),
       data: {}
     });
-    const { job: failedJob } = await failedClaim.json() as { job: { id: string } | null };
+    const { job: failedJob } = await failedClaim.json() as { job: { id: string; lease_token: string } | null };
     expect(failedJob).not.toBeNull();
     const failedResolution = await page.request.post(`/api/executor/jobs/${failedJob!.id}/resolve`, {
       headers: executorHeaders(deviceToken),
-      data: { status: "failed", error: "E2E terminal executor failure", retryable: false }
+      data: {
+        status: "failed",
+        lease_token: failedJob!.lease_token,
+        error: "E2E terminal executor failure",
+        retryable: false
+      }
     });
     expect(failedResolution.ok()).toBeTruthy();
 

@@ -2,26 +2,38 @@ import { createHash, randomUUID } from "node:crypto";
 import { createOpaqueToken, hashOpaqueToken } from "@/lib/auth/crypto";
 import { getRuntimeRepository } from "@/lib/runtime";
 import { withWorkflowSessionTransaction } from "@/lib/runtime/database";
+import { executorCapabilityForJobType } from "@/lib/runtime/types";
 import type {
   AuthenticationFailureHold,
+  ExecutorCapability,
   ExecutorDevice,
-  RuntimeJob,
-  RuntimeJobType
+  RuntimeJob
 } from "@/lib/runtime/types";
-import type { HostedExecutionTask, SessionState, TaobaoMcpSearchEvidence } from "@/lib/session/types";
+import type {
+  HostedExecutionTask,
+  ProductCandidate,
+  SessionState,
+  TaobaoMcpProductDetailEvidence,
+  TaobaoMcpSearchEvidence
+} from "@/lib/session/types";
 import {
   resolveHostedAddToCartTask,
   resolveHostedModuleSearchTask
 } from "@/lib/mcp/hosted";
 import { reviewModuleCandidatesWithAgent } from "@/lib/agent/candidate-reviewer";
 import { mergeAndRankModuleCandidates } from "@/lib/agent/candidate-ranker";
-import { isProductCandidate, isTaobaoMcpSearchEvidence } from "@/lib/session/guards";
+import {
+  isProductCandidate,
+  isTaobaoMcpProductDetailEvidence,
+  isTaobaoMcpSearchEvidence
+} from "@/lib/session/guards";
 import { persistSession } from "@/lib/session/repository";
 
-const ALLOWED_CAPABILITIES: RuntimeJobType[] = ["module_search", "add_to_cart"];
-const MINIMUM_CAPABILITIES: RuntimeJobType[] = ["module_search"];
+const ALLOWED_CAPABILITIES: ExecutorCapability[] = ["module_search", "add_to_cart"];
+const MINIMUM_CAPABILITIES: ExecutorCapability[] = ["module_search"];
 export const DEFAULT_JOB_LEASE_MS = 5 * 60 * 1000;
 const TAOBAO_MCP_SEARCH_EVIDENCE_SCHEMA = "scenecart.taobao-mcp-search-evidence/v1";
+const TAOBAO_MCP_PRODUCT_DETAIL_EVIDENCE_SCHEMA = "scenecart.taobao-mcp-product-detail-evidence/v1";
 const EVIDENCE_CLOCK_SKEW_MS = 5 * 60 * 1000;
 
 export function isExecutorAuthenticationError(message: string) {
@@ -62,7 +74,7 @@ function stableDigest(value: string) {
 
 function taskForJob(input: {
   id: string;
-  type: RuntimeJobType;
+  type: HostedExecutionTask["task_type"];
   state: SessionState;
   moduleId?: string;
   moduleName?: string;
@@ -93,6 +105,9 @@ function taskForJob(input: {
 function restoreTaskForJob(state: SessionState, job: RuntimeJob) {
   const existing = state.hosted_tasks.find((task) => task.task_id === job.id);
   if (existing) return existing;
+  if (job.job_type === "product_detail") {
+    throw new Error("product detail jobs do not create hosted shopping tasks");
+  }
 
   const moduleId = typeof job.payload.module_id === "string" ? job.payload.module_id : undefined;
   const moduleName = typeof job.payload.module_name === "string" ? job.payload.module_name : undefined;
@@ -141,7 +156,7 @@ function attachOrReviveTask(state: SessionState, nextTask: HostedExecutionTask, 
 export async function registerExecutorDevice(
   userId: string,
   name: string,
-  capabilities: RuntimeJobType[] = MINIMUM_CAPABILITIES
+  capabilities: ExecutorCapability[] = MINIMUM_CAPABILITIES
 ) {
   const repository = getRuntimeRepository();
   const token = createOpaqueToken();
@@ -233,6 +248,58 @@ export async function enqueueModuleSearchJob(
     description: `本地执行器将直接使用淘宝 Skill 搜索“${input.keyword}”，完成后自动回填候选商品与淘宝链接。`,
     payload
   }), job.status);
+  if (job.status === "pending") {
+    const supersededDetailJobIds = new Set<string>();
+    for (const task of state.hosted_tasks) {
+      if (task.task_type !== "module_search" || task.module_id !== input.moduleId) continue;
+      const detailJobId = typeof task.payload.preferred_product_detail_job_id === "string"
+        ? task.payload.preferred_product_detail_job_id
+        : "";
+      if (detailJobId) supersededDetailJobIds.add(detailJobId);
+      delete task.payload.preferred_product_detail_job_id;
+      delete task.payload.preferred_product_id;
+    }
+    const activeDetailJobs = (await repository.listJobs(state.session_id, state.owner_id)).filter((detailJob) =>
+      detailJob.job_type === "product_detail" &&
+      detailJob.payload.module_id === input.moduleId &&
+      detailJob.payload.workflow_run_id === workflowRunId &&
+      (detailJob.status === "pending" || detailJob.status === "leased" || detailJob.status === "running")
+    );
+    for (const detailJob of activeDetailJobs) {
+      supersededDetailJobIds.add(detailJob.id);
+      const cancelled = detailJob.status === "pending"
+        ? await repository.cancelJob(detailJob.id, state.owner_id)
+        : null;
+      await repository.appendEvent({
+        user_id: state.owner_id,
+        session_id: state.session_id,
+        job_id: detailJob.id,
+        event_type: "job.product_detail_superseded",
+        payload: {
+          job_type: "product_detail",
+          previous_status: detailJob.status,
+          cancelled: cancelled?.status === "cancelled",
+          superseding_search_job_id: job.id,
+          module_id: input.moduleId,
+          workflow_run_id: workflowRunId
+        }
+      });
+    }
+    if (supersededDetailJobIds.size > 0) {
+      await repository.appendEvent({
+        user_id: state.owner_id,
+        session_id: state.session_id,
+        job_id: job.id,
+        event_type: "job.product_detail_provenance_replaced",
+        payload: {
+          job_type: "module_search",
+          module_id: input.moduleId,
+          workflow_run_id: workflowRunId,
+          superseded_detail_job_ids: [...supersededDetailJobIds]
+        }
+      });
+    }
+  }
   state.execution_mode = "local_executor";
   state.mcp_status = "hosted";
   await repository.appendEvent({
@@ -296,6 +363,109 @@ export async function enqueueAddToCartJob(
   return job;
 }
 
+function currentPreferredProductDetailTask(state: SessionState, moduleId: string) {
+  return state.hosted_tasks.find((task) =>
+    task.task_type === "module_search" &&
+    task.module_id === moduleId &&
+    task.status === "completed" &&
+    typeof task.payload.preferred_product_detail_job_id === "string" &&
+    task.payload.preferred_product_detail_job_id.length > 0
+  );
+}
+
+export function isCurrentPreferredProductDetailJob(state: SessionState, job: RuntimeJob) {
+  if (job.job_type !== "product_detail") return false;
+  const moduleId = typeof job.payload.module_id === "string" ? job.payload.module_id : "";
+  const searchJobId = typeof job.payload.search_job_id === "string" ? job.payload.search_job_id : "";
+  const productId = typeof job.payload.product_id === "string" ? job.payload.product_id : "";
+  const detailUrl = typeof job.payload.detail_url === "string" ? job.payload.detail_url : "";
+  const workflowRunId = typeof job.payload.workflow_run_id === "string" ? job.payload.workflow_run_id : "";
+  const candidate = state.module_candidates[moduleId]?.[0];
+  const task = currentPreferredProductDetailTask(state, moduleId);
+  return Boolean(
+    moduleId &&
+    searchJobId &&
+    productId &&
+    detailUrl &&
+    workflowRunId &&
+    state.agent_runtime.workflow_run_id === workflowRunId &&
+    candidate?.product_id === productId &&
+    candidate.detail_url === detailUrl &&
+    task &&
+    (task.runtime_job_id ?? task.task_id) === searchJobId &&
+    task.payload.preferred_product_detail_job_id === job.id &&
+    task.payload.preferred_product_id === productId
+  );
+}
+
+const NON_DETAIL_FACT_PATTERNS = [
+  /^来自淘宝实时搜索$/,
+  /^匹配模块搜索意图$/,
+  /^命中AI检索重点$/i,
+  /^价格更贴近模块预算$/,
+  /^(?:符合|满足|命中|触及)AI(?:检索|排序|验收|质量|排除|拒绝)/i
+];
+
+function isDetailFactTerm(value: string) {
+  const term = value.trim();
+  return term.length >= 2 && term.length <= 40 &&
+    !NON_DETAIL_FACT_PATTERNS.some((pattern) => pattern.test(term));
+}
+
+async function enqueuePreferredProductDetailJob(
+  state: SessionState,
+  searchJob: RuntimeJob,
+  candidate: ProductCandidate
+) {
+  const workflowRunId = typeof searchJob.payload.workflow_run_id === "string"
+    ? searchJob.payload.workflow_run_id
+    : "";
+  const moduleId = typeof searchJob.payload.module_id === "string"
+    ? searchJob.payload.module_id
+    : "";
+  if (!workflowRunId || !moduleId || !isTrustedTaobaoDetailUrl(candidate.detail_url)) return null;
+  const module = state.shopping_plan.modules.find((item) => item.module_id === moduleId);
+  const factTerms = [...new Set([
+    typeof searchJob.payload.keyword === "string" ? searchJob.payload.keyword : "",
+    ...(module?.search_strategy?.must_have_signals ?? []),
+    ...(module?.search_strategy?.ranking_focus ?? []),
+    ...candidate.highlights
+  ].map((term) => term.trim()).filter(isDetailFactTerm))].slice(0, 12);
+  const repository = getRuntimeRepository();
+  const job = await repository.createJob({
+    id: randomUUID(),
+    user_id: state.owner_id,
+    session_id: state.session_id,
+    job_type: "product_detail",
+    idempotency_key: `product-detail:${searchJob.id}:${candidate.product_id}`,
+    payload: {
+      search_job_id: searchJob.id,
+      module_id: moduleId,
+      workflow_run_id: workflowRunId,
+      product_id: candidate.product_id,
+      detail_url: candidate.detail_url,
+      fact_terms: factTerms
+    },
+    priority: 130,
+    max_attempts: 2
+  });
+  await repository.appendEvent({
+    user_id: state.owner_id,
+    session_id: state.session_id,
+    job_id: job.id,
+    event_type: "job.created",
+    payload: {
+      job_type: "product_detail",
+      search_job_id: searchJob.id,
+      module_id: moduleId,
+      workflow_run_id: workflowRunId,
+      product_id: candidate.product_id,
+      mutation: false
+    }
+  });
+  return job;
+}
+
 function resultCandidates(result: Record<string, unknown>) {
   const candidates = Array.isArray(result.candidates)
     ? result.candidates.filter(isProductCandidate)
@@ -318,6 +488,232 @@ export function isTrustedTaobaoDetailUrl(value: string) {
   } catch {
     return false;
   }
+}
+
+function taobaoProductIdFromUrl(value: string) {
+  try {
+    const url = new URL(value);
+    return (url.searchParams.get("id") ?? url.searchParams.get("itemId") ?? "").trim();
+  } catch {
+    return "";
+  }
+}
+
+function detailEvidenceReason(
+  candidate: ProductCandidate,
+  evidence: TaobaoMcpProductDetailEvidence
+) {
+  if (evidence.status === "unavailable") {
+    return "详情证据暂不可用；当前推荐仍基于本次真实淘宝搜索摘要，购买前需人工确认详情。";
+  }
+  const pageTitle = evidence.summary?.page_title.trim() ?? "";
+  const matchedSignals = evidence.summary?.matched_facts.slice(0, 2) ?? [];
+  if (matchedSignals.length === 0) {
+    return `已读取淘宝详情页“${pageTitle.slice(0, 80)}”并确认商品身份；当前可见文本未证实模块适配信号，仍需人工核对。`;
+  }
+  return `已读取淘宝详情页“${pageTitle.slice(0, 80)}”，页面可见信号：${matchedSignals.join("、")}；具体 SKU 与成交价仍需购买前确认。`;
+}
+
+function safeProductDetailUnavailableReason(value: string) {
+  if (/(?:未登录|登录|auth|login)/i.test(value)) return "淘宝登录状态需要恢复";
+  if (/(?:超时|timeout|timed out)/i.test(value)) return "详情页读取超时";
+  if (/(?:navigate|导航|链接|url)/i.test(value)) return "详情页导航未完成";
+  if (/(?:read_page_content|正文|页面|内容|content|空白)/i.test(value)) {
+    return "详情页内容暂未完整返回";
+  }
+  if (/(?:mcp|工具|tool|连接|connect)/i.test(value)) return "淘宝详情读取工具暂不可用";
+  return "本次详情页读取未完成";
+}
+
+async function validateTaobaoMcpProductDetailResult(
+  job: RuntimeJob,
+  result: Record<string, unknown>,
+  state: SessionState,
+  options: { now?: number } = {}
+) {
+  const rawEvidence = isRecord(result.detail_evidence) ? result.detail_evidence : undefined;
+  if (
+    rawEvidence?.schema !== TAOBAO_MCP_PRODUCT_DETAIL_EVIDENCE_SCHEMA ||
+    !isTaobaoMcpProductDetailEvidence(rawEvidence)
+  ) {
+    throw new Error("淘宝 MCP 商品详情证据结构无效，已拒绝完成任务");
+  }
+  if (rawEvidence.recommendation_reason !== undefined) {
+    throw new Error("淘宝 MCP 商品详情证据不得伪造服务端推荐理由");
+  }
+
+  const payload = job.payload;
+  const searchJobId = typeof payload.search_job_id === "string" ? payload.search_job_id.trim() : "";
+  const moduleId = typeof payload.module_id === "string" ? payload.module_id.trim() : "";
+  const workflowRunId = typeof payload.workflow_run_id === "string" ? payload.workflow_run_id.trim() : "";
+  const productId = typeof payload.product_id === "string" ? payload.product_id.trim() : "";
+  const detailUrl = typeof payload.detail_url === "string" ? payload.detail_url.trim() : "";
+  const factTerms = Array.isArray(payload.fact_terms)
+    ? payload.fact_terms.filter((term): term is string => typeof term === "string")
+    : [];
+  if (
+    rawEvidence.job_id !== job.id ||
+    rawEvidence.search_job_id !== searchJobId ||
+    rawEvidence.module_id !== moduleId ||
+    rawEvidence.workflow_run_id !== workflowRunId ||
+    rawEvidence.product_id !== productId ||
+    rawEvidence.detail_url !== detailUrl
+  ) {
+    throw new Error("淘宝 MCP 商品详情证据与当前 Job 上下文不一致，已拒绝完成任务");
+  }
+  if (
+    !isTrustedTaobaoDetailUrl(detailUrl) ||
+    rawEvidence.source_app.length > 120 ||
+    rawEvidence.tool !== "navigate_to_url+read_page_content"
+  ) {
+    throw new Error("淘宝 MCP 商品详情工具或可信链接无效，已拒绝完成任务");
+  }
+
+  const capturedAt = Date.parse(rawEvidence.captured_at);
+  const jobCreatedAt = Date.parse(job.created_at);
+  if (
+    !Number.isFinite(jobCreatedAt) ||
+    capturedAt < jobCreatedAt - EVIDENCE_CLOCK_SKEW_MS ||
+    capturedAt > (options.now ?? Date.now()) + EVIDENCE_CLOCK_SKEW_MS
+  ) {
+    throw new Error("淘宝 MCP 商品详情证据时间无效，已拒绝完成任务");
+  }
+
+  const currentCandidate = state.module_candidates[moduleId]?.[0];
+  if (
+    !isCurrentPreferredProductDetailJob(state, job) ||
+    !currentCandidate
+  ) {
+    throw new Error("淘宝 MCP 商品详情证据不再匹配当前 AI 首选或当前搜索任务，已拒绝覆盖");
+  }
+  const searchJob = await getRuntimeRepository().getJob(searchJobId);
+  if (
+    !searchJob ||
+    searchJob.job_type !== "module_search" ||
+    searchJob.status !== "completed" ||
+    searchJob.session_id !== job.session_id ||
+    searchJob.user_id !== job.user_id ||
+    searchJob.payload.module_id !== moduleId ||
+    searchJob.payload.workflow_run_id !== workflowRunId
+  ) {
+    throw new Error("淘宝 MCP 商品详情证据关联的搜索 Job 无效，已拒绝完成任务");
+  }
+
+  if (rawEvidence.status === "verified") {
+    const summary = rawEvidence.summary!;
+    if (
+      rawEvidence.tools_used.length !== 2 ||
+      rawEvidence.tools_used[0] !== "navigate_to_url" ||
+      rawEvidence.tools_used[1] !== "read_page_content" ||
+      !isTrustedTaobaoDetailUrl(summary.page_url) ||
+      taobaoProductIdFromUrl(summary.page_url) !== productId ||
+      summary.page_title.length === 0 || summary.page_title.length > 300 ||
+      summary.page_url.length > 1000 ||
+      !/^[a-f0-9]{64}$/.test(summary.visible_text_sha256) ||
+      summary.matched_facts.length > 5 ||
+      summary.matched_facts.some((fact) =>
+        fact.length < 2 || fact.length > 40 || !factTerms.includes(fact)
+      ) ||
+      summary.displayed_price_texts.length > 5 ||
+      summary.displayed_price_texts.some((price) =>
+        price.length === 0 || price.length > 40 || !/^(?:¥|￥)\s*\d+(?:\.\d{1,2})?$/.test(price)
+      ) ||
+      rawEvidence.unavailable_reason !== undefined
+    ) {
+      throw new Error("淘宝 MCP 商品详情字段摘要无效，已拒绝完成任务");
+    }
+  } else if (
+    rawEvidence.summary !== undefined ||
+    !rawEvidence.unavailable_reason ||
+    rawEvidence.unavailable_reason.length > 300 ||
+    rawEvidence.tools_used.length > 2 ||
+    rawEvidence.tools_used.some((tool, index) =>
+      tool !== ["navigate_to_url", "read_page_content"][index]
+    )
+  ) {
+    throw new Error("淘宝 MCP 商品详情不可用证据无效，已拒绝完成任务");
+  }
+
+  const evidence: TaobaoMcpProductDetailEvidence = rawEvidence.status === "verified"
+    ? {
+        schema: TAOBAO_MCP_PRODUCT_DETAIL_EVIDENCE_SCHEMA,
+        source: "taobao-mcp",
+        status: "verified",
+        tool: "navigate_to_url+read_page_content",
+        tools_used: ["navigate_to_url", "read_page_content"],
+        source_app: rawEvidence.source_app,
+        job_id: rawEvidence.job_id,
+        search_job_id: rawEvidence.search_job_id,
+        module_id: rawEvidence.module_id,
+        workflow_run_id: rawEvidence.workflow_run_id,
+        product_id: rawEvidence.product_id,
+        detail_url: rawEvidence.detail_url,
+        captured_at: rawEvidence.captured_at,
+        summary: {
+          page_title: rawEvidence.summary!.page_title,
+          page_url: rawEvidence.summary!.page_url,
+          visible_text_sha256: rawEvidence.summary!.visible_text_sha256,
+          matched_facts: [...rawEvidence.summary!.matched_facts],
+          displayed_price_texts: [...rawEvidence.summary!.displayed_price_texts]
+        }
+      }
+    : {
+        schema: TAOBAO_MCP_PRODUCT_DETAIL_EVIDENCE_SCHEMA,
+        source: "taobao-mcp",
+        status: "unavailable",
+        tool: "navigate_to_url+read_page_content",
+        tools_used: [...rawEvidence.tools_used],
+        source_app: rawEvidence.source_app,
+        job_id: rawEvidence.job_id,
+        search_job_id: rawEvidence.search_job_id,
+        module_id: rawEvidence.module_id,
+        workflow_run_id: rawEvidence.workflow_run_id,
+        product_id: rawEvidence.product_id,
+        detail_url: rawEvidence.detail_url,
+        captured_at: rawEvidence.captured_at,
+        unavailable_reason: safeProductDetailUnavailableReason(rawEvidence.unavailable_reason ?? "")
+      };
+  evidence.recommendation_reason = detailEvidenceReason(currentCandidate, evidence);
+  return evidence;
+}
+
+function markUnavailableProductDetail(
+  state: SessionState,
+  job: RuntimeJob,
+  errorMessage: string
+) {
+  const moduleId = typeof job.payload.module_id === "string" ? job.payload.module_id : "";
+  const workflowRunId = typeof job.payload.workflow_run_id === "string" ? job.payload.workflow_run_id : "";
+  const productId = typeof job.payload.product_id === "string" ? job.payload.product_id : "";
+  const detailUrl = typeof job.payload.detail_url === "string" ? job.payload.detail_url : "";
+  const searchJobId = typeof job.payload.search_job_id === "string" ? job.payload.search_job_id : "";
+  const candidate = state.module_candidates[moduleId]?.[0];
+  if (
+    !candidate ||
+    !isCurrentPreferredProductDetailJob(state, job) ||
+    !isTrustedTaobaoDetailUrl(detailUrl)
+  ) {
+    return false;
+  }
+  const evidence: TaobaoMcpProductDetailEvidence = {
+    schema: TAOBAO_MCP_PRODUCT_DETAIL_EVIDENCE_SCHEMA,
+    source: "taobao-mcp",
+    status: "unavailable",
+    tool: "navigate_to_url+read_page_content",
+    tools_used: [],
+    source_app: "SceneCartAI",
+    job_id: job.id,
+    search_job_id: searchJobId,
+    module_id: moduleId,
+    workflow_run_id: workflowRunId,
+    product_id: productId,
+    detail_url: detailUrl,
+    captured_at: new Date().toISOString(),
+    unavailable_reason: safeProductDetailUnavailableReason(errorMessage),
+    recommendation_reason: "详情证据暂不可用；当前推荐仍基于本次真实淘宝搜索摘要，购买前需人工确认详情。"
+  };
+  candidate.detail_evidence = evidence;
+  return true;
 }
 
 function strictTaobaoMcpEvidence(result: Record<string, unknown>) {
@@ -524,23 +920,64 @@ function markRuntimeSearchFailure(state: SessionState, job: { payload: Record<st
 async function persistCompletedRuntimeJobResult(
   job: RuntimeJob,
   result: Record<string, unknown>,
-  recovered: boolean
+  recovered: boolean,
+  validatedDetailEvidence?: TaobaoMcpProductDetailEvidence
 ) {
   const repository = getRuntimeRepository();
   const state = await repository.getSession(job.session_id, job.user_id);
   if (!state) throw new Error("session not found for completed job");
+  if (job.job_type === "product_detail") {
+    const evidence = validatedDetailEvidence ??
+      await validateTaobaoMcpProductDetailResult(job, result, state);
+    const candidate = state.module_candidates[evidence.module_id]?.[0];
+    if (!candidate) throw new Error("preferred candidate not found for completed detail job");
+    if (candidate.detail_evidence?.job_id === job.id) {
+      return { persisted: false, followUpJobId: undefined };
+    }
+    candidate.detail_evidence = evidence;
+    await persistSession(state);
+    await repository.appendEvent({
+      user_id: job.user_id,
+      session_id: job.session_id,
+      job_id: job.id,
+      event_type: recovered ? "job.result_reconciled" : "job.completed",
+      payload: {
+        job_type: job.job_type,
+        recovered,
+        evidence: {
+          status: evidence.status,
+          source: evidence.source,
+          tool: evidence.tool,
+          tools_used: evidence.tools_used,
+          source_app: evidence.source_app,
+          job_id: evidence.job_id,
+          search_job_id: evidence.search_job_id,
+          module_id: evidence.module_id,
+          workflow_run_id: evidence.workflow_run_id,
+          product_id: evidence.product_id,
+          detail_url: evidence.detail_url,
+          captured_at: evidence.captured_at,
+          recommendation_reason: evidence.recommendation_reason
+        }
+      }
+    });
+    return { persisted: true, followUpJobId: undefined };
+  }
   const task = state.hosted_tasks.find((item) => item.task_id === job.id) ??
     (recovered ? restoreTaskForJob(state, job) : undefined);
   if (!task) throw new Error("execution task not found for completed job");
   const expectedTaskStatus = job.job_type === "add_to_cart" && result.success === false
     ? "failed"
     : "completed";
-  if (task.status === expectedTaskStatus) return false;
+  if (task.status === expectedTaskStatus) {
+    return { persisted: false, followUpJobId: undefined };
+  }
 
   const taobaoMcpEvidence = job.job_type === "module_search" && !isIsolatedInterviewDemoSearch(result)
     ? validateTaobaoMcpSearchResult(job, result)
     : undefined;
 
+  let followUpJobId: string | undefined;
   if (job.job_type === "module_search") {
     const incomingCandidates = resultCandidates(result);
     let candidates = incomingCandidates;
@@ -565,6 +1002,12 @@ async function persistCompletedRuntimeJobResult(
     if (assessment) {
       candidates = assessment.candidates;
     }
+    if (taobaoMcpEvidence) {
+      candidates = candidates.map((candidate) => {
+        const { detail_evidence: _supersededEvidence, ...currentCandidate } = candidate;
+        return currentCandidate;
+      });
+    }
     resolveHostedModuleSearchTask(state, {
       task_id: task.task_id,
       status: "completed",
@@ -583,6 +1026,27 @@ async function persistCompletedRuntimeJobResult(
       };
     }
     updateRuntimeSearchTrace(state, job, incomingCandidates.length, previousCandidateCount, candidates);
+    if (candidates[0] && taobaoMcpEvidence) {
+      const detailJob = await enqueuePreferredProductDetailJob(state, job, candidates[0]);
+      if (detailJob) {
+        followUpJobId = detailJob.id;
+        for (const moduleTask of state.hosted_tasks) {
+          if (
+            moduleTask.task_type === "module_search" &&
+            moduleTask.module_id === moduleId &&
+            moduleTask.task_id !== task.task_id
+          ) {
+            delete moduleTask.payload.preferred_product_detail_job_id;
+            delete moduleTask.payload.preferred_product_id;
+          }
+        }
+        task.payload = {
+          ...task.payload,
+          preferred_product_detail_job_id: detailJob.id,
+          preferred_product_id: candidates[0].product_id
+        };
+      }
+    }
   } else {
     const isInterviewDemoCart =
       process.env.SCENECART_INTERVIEW_DEMO === "true" &&
@@ -613,6 +1077,7 @@ async function persistCompletedRuntimeJobResult(
       job_type: job.job_type,
       result_summary: task.result_summary ?? "执行完成",
       recovered,
+      ...(followUpJobId ? { follow_up_job_id: followUpJobId } : {}),
       ...(taobaoMcpEvidence
         ? {
             evidence: {
@@ -631,47 +1096,97 @@ async function persistCompletedRuntimeJobResult(
         : {})
     }
   });
-  return true;
+  return { persisted: true, followUpJobId };
 }
 
 async function applyCompletedRuntimeJobLocked(
   jobId: string,
   device: ExecutorDevice,
-  result: Record<string, unknown>
+  result: Record<string, unknown>,
+  leaseToken: string
 ) {
   const repository = getRuntimeRepository();
   const pendingJob = await repository.getJob(jobId);
   if (!pendingJob) throw new Error("job not found");
+  let validatedDetailEvidence: TaobaoMcpProductDetailEvidence | undefined;
   if (pendingJob.status !== "completed") {
     const pendingState = await repository.getSession(pendingJob.session_id, pendingJob.user_id);
     if (!pendingState) throw new Error("session not found for completed job");
-    if (!pendingState.hosted_tasks.some((item) => item.task_id === pendingJob.id)) {
+    if (
+      pendingJob.job_type !== "product_detail" &&
+      !pendingState.hosted_tasks.some((item) => item.task_id === pendingJob.id)
+    ) {
       throw new Error("execution task not found for completed job");
     }
     if (pendingJob.job_type === "module_search") {
       if (!isIsolatedInterviewDemoSearch(result)) {
         validateTaobaoMcpSearchResult(pendingJob, result, { required: true });
       }
+    } else if (pendingJob.job_type === "product_detail") {
+      validatedDetailEvidence = await validateTaobaoMcpProductDetailResult(
+        pendingJob,
+        result,
+        pendingState
+      );
     }
   }
-  const completion = await repository.completeJob(jobId, device.id, result);
+  const persistedResult = validatedDetailEvidence
+    ? { detail_evidence: validatedDetailEvidence }
+    : result;
+  const completion = await repository.completeJob(jobId, device.id, persistedResult, leaseToken);
   const effectiveResult = completion.alreadyCompleted && completion.job.result
     ? completion.job.result
     : result;
-  await persistCompletedRuntimeJobResult(
+  const persistence = await persistCompletedRuntimeJobResult(
     completion.job,
     effectiveResult,
-    completion.alreadyCompleted
+    completion.alreadyCompleted,
+    validatedDetailEvidence
   );
-  return completion;
+  return {
+    ...completion,
+    follow_up_job_id: persistence.followUpJobId
+  };
 }
 
-export async function applyCompletedRuntimeJob(jobId: string, device: ExecutorDevice, result: Record<string, unknown>) {
+export async function applyCompletedRuntimeJob(
+  jobId: string,
+  device: ExecutorDevice,
+  result: Record<string, unknown>,
+  leaseToken: string
+) {
   const job = await getRuntimeRepository().getJob(jobId);
   if (!job) throw new Error("job not found");
   return withWorkflowSessionTransaction(
     job.session_id,
-    () => applyCompletedRuntimeJobLocked(jobId, device, result)
+    () => applyCompletedRuntimeJobLocked(jobId, device, result, leaseToken)
+  );
+}
+
+export async function shouldContinueWorkflowAfterCompletion(input: {
+  job: RuntimeJob;
+  alreadyCompleted: boolean;
+  followUpJobId?: string;
+}) {
+  if (input.alreadyCompleted) return false;
+  if (input.job.job_type === "module_search") return !input.followUpJobId;
+  if (input.job.job_type !== "product_detail") return false;
+  const state = await getRuntimeRepository().getSession(input.job.session_id, input.job.user_id);
+  return Boolean(state && isCurrentPreferredProductDetailJob(state, input.job));
+}
+
+export async function shouldContinueWorkflowAfterFailure(job: RuntimeJob) {
+  if (job.status !== "failed") return false;
+  if (job.job_type === "module_search") return true;
+  if (job.job_type !== "product_detail") return false;
+  const state = await getRuntimeRepository().getSession(job.session_id, job.user_id);
+  const moduleId = typeof job.payload.module_id === "string" ? job.payload.module_id : "";
+  const evidence = state?.module_candidates[moduleId]?.[0]?.detail_evidence;
+  return Boolean(
+    state &&
+    isCurrentPreferredProductDetailJob(state, job) &&
+    evidence?.status === "unavailable" &&
+    evidence.job_id === job.id
   );
 }
 
@@ -683,7 +1198,8 @@ export async function reconcileCompletedRuntimeJob(jobId: string) {
     async () => {
       const current = await getRuntimeRepository().getJob(jobId);
       if (!current || current.status !== "completed") return false;
-      return persistCompletedRuntimeJobResult(current, current.result ?? {}, true);
+      const persistence = await persistCompletedRuntimeJobResult(current, current.result ?? {}, true);
+      return persistence.persisted;
     }
   );
 }
@@ -697,6 +1213,15 @@ async function reconcileTerminalRuntimeJobLocked(
   if (!job || (job.status !== "failed" && job.status !== "cancelled")) return false;
   const state = await repository.getSession(job.session_id, job.user_id);
   if (!state) return false;
+  if (job.job_type === "product_detail") {
+    const changed = markUnavailableProductDetail(
+      state,
+      job,
+      job.error_message || (job.status === "cancelled" ? "详情读取任务已取消" : "详情读取未完成")
+    );
+    if (changed || options.forcePersist) await persistSession(state);
+    return changed;
+  }
   const task = state.hosted_tasks.find((item) => item.task_id === job.id) ?? restoreTaskForJob(state, job);
   const message = job.error_message || (job.status === "cancelled" ? "用户已取消任务" : "本地执行器执行失败");
   const moduleId = typeof job.payload.module_id === "string" ? job.payload.module_id : "";
@@ -806,7 +1331,7 @@ export async function establishAuthenticationFailureHold(
       !isExecutorAuthenticationError(errorMessage) ||
       leaseToken.length < 16 ||
       leaseToken.length > 200 ||
-      !device.capabilities.includes(current.job_type) ||
+      !device.capabilities.includes(executorCapabilityForJobType(current.job_type)) ||
       (current.user_id !== undefined && current.user_id !== device.user_id)
     ) {
       throw new Error("invalid authentication failure hold");
@@ -890,6 +1415,18 @@ async function applyFailedRuntimeJobLocked(
   const existing = await repository.getJob(jobId);
   if (!existing) throw new Error("job not found");
   const authenticationFailureCallback = options.authenticationFailureCallback === true;
+  if (
+    !authenticationFailureCallback &&
+    (
+      typeof options.leaseToken !== "string" ||
+      options.leaseToken !== existing.lease_token ||
+      existing.lease_owner_id !== device.id ||
+      (existing.user_id !== undefined && existing.user_id !== device.user_id) ||
+      !device.capabilities.includes(executorCapabilityForJobType(existing.job_type))
+    )
+  ) {
+    throw new Error("invalid job lease callback");
+  }
   const authenticationFailureAlreadyAcknowledged =
     authenticationFailureCallback &&
     typeof options.leaseToken === "string" &&
@@ -907,10 +1444,19 @@ async function applyFailedRuntimeJobLocked(
       options.leaseToken.length < 16 ||
       options.leaseToken.length > 200 ||
       (!authenticationFailureAlreadyAcknowledged && existing.lease_token !== options.leaseToken) ||
-      !device.capabilities.includes(existing.job_type) ||
+      !device.capabilities.includes(executorCapabilityForJobType(existing.job_type)) ||
       (existing.user_id !== undefined && existing.user_id !== device.user_id)
     ) {
       throw new Error("invalid authentication failure callback");
+    }
+  }
+  if (
+    existing.job_type === "product_detail" &&
+    (existing.status === "leased" || existing.status === "running")
+  ) {
+    const currentState = await repository.getSession(existing.session_id, existing.user_id);
+    if (!currentState || !isCurrentPreferredProductDetailJob(currentState, existing)) {
+      throw new Error("stale product detail callback");
     }
   }
   if (authenticationFailureAlreadyAcknowledged && existing.status !== "failed") {
@@ -988,6 +1534,9 @@ async function applyFailedRuntimeJobLocked(
     );
     return acknowledgedJob;
   }
+  const persistedErrorMessage = existing.job_type === "product_detail"
+    ? safeProductDetailUnavailableReason(errorMessage)
+    : errorMessage;
   const job = authenticationFailureCallback
     ? await repository.failAuthenticationJob(
         jobId,
@@ -999,13 +1548,19 @@ async function applyFailedRuntimeJobLocked(
     : await repository.failJob(
         jobId,
         device.id,
-        errorMessage,
+        persistedErrorMessage,
+        options.leaseToken!,
         3_000,
         options.retryable === false
       );
   const state = await repository.getSession(job.session_id, job.user_id);
   const task = state?.hosted_tasks.find((item) => item.task_id === job.id);
-  if (state && task) {
+  if (state && job.job_type === "product_detail") {
+    if (job.status === "failed") {
+      markUnavailableProductDetail(state, job, persistedErrorMessage);
+      await persistSession(state);
+    }
+  } else if (state && task) {
     if (job.status === "failed") {
       if (job.job_type === "module_search") {
         resolveHostedModuleSearchTask(state, {

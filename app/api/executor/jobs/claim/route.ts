@@ -34,7 +34,7 @@ export async function POST(request: NextRequest) {
     }
     const activeDevice = await repository.heartbeatDevice(device.id, "online");
     if (!activeDevice) throw new ApiRouteError("executor device unavailable", 401, "invalid_executor_token");
-    let job = await repository.claimJob(activeDevice, DEFAULT_JOB_LEASE_MS);
+    let job = await repository.claimJob(activeDevice, DEFAULT_JOB_LEASE_MS, EXECUTOR_PROTOCOL_VERSION);
     let recovery: WorkflowRecoveryResult = { recovered: false };
     if (!job) {
       try {
@@ -48,7 +48,7 @@ export async function POST(request: NextRequest) {
       }
     }
     if (!job && recovery.recovered) {
-      job = await repository.claimJob(activeDevice, DEFAULT_JOB_LEASE_MS);
+      job = await repository.claimJob(activeDevice, DEFAULT_JOB_LEASE_MS, EXECUTOR_PROTOCOL_VERSION);
     }
     if (job) {
       await repository.appendEvent({
@@ -60,7 +60,8 @@ export async function POST(request: NextRequest) {
           device_id: activeDevice.id,
           device_name: activeDevice.name,
           attempt: job.attempts,
-          lease_token: job.lease_token
+          lease_token: job.lease_token,
+          protocol_version: EXECUTOR_PROTOCOL_VERSION
         }
       });
     }

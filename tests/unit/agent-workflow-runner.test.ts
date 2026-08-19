@@ -15,8 +15,8 @@ import {
 } from "@/lib/agent/workflow-runner";
 import { recoverAgentWorkflowForExecutor, recoverAgentWorkflows } from "@/lib/agent/workflow-recovery";
 import {
-  applyCompletedRuntimeJob,
-  applyFailedRuntimeJob,
+  applyCompletedRuntimeJob as applyCompletedRuntimeJobRaw,
+  applyFailedRuntimeJob as applyFailedRuntimeJobRaw,
   enqueueModuleSearchJob,
   establishAuthenticationFailureHold
 } from "@/lib/runtime/jobs";
@@ -76,6 +76,60 @@ function verifiedSearchResult(
       raw_result_count: result.candidates.length
     }
   };
+}
+
+async function applyCompletedRuntimeJob(
+  jobId: string,
+  executorDevice: ExecutorDevice,
+  result: Record<string, unknown>
+) {
+  const currentJob = await localRuntimeRepository.getJob(jobId);
+  const completion = await applyCompletedRuntimeJobRaw(
+    jobId,
+    executorDevice,
+    result,
+    currentJob?.lease_token ?? ""
+  );
+  if (completion.job.job_type !== "module_search" || !completion.follow_up_job_id) {
+    return completion;
+  }
+  const detailJob = await localRuntimeRepository.claimJob(executorDevice, 30_000);
+  expect(detailJob).toMatchObject({
+    id: completion.follow_up_job_id,
+    job_type: "product_detail"
+  });
+  await applyCompletedRuntimeJobRaw(detailJob!.id, executorDevice, {
+    detail_evidence: {
+      schema: "scenecart.taobao-mcp-product-detail-evidence/v1",
+      source: "taobao-mcp",
+      status: "unavailable",
+      tool: "navigate_to_url+read_page_content",
+      tools_used: [],
+      source_app: "SceneCartWorkflowUnit",
+      job_id: detailJob!.id,
+      search_job_id: jobId,
+      module_id: String(detailJob!.payload.module_id),
+      workflow_run_id: String(detailJob!.payload.workflow_run_id),
+      product_id: String(detailJob!.payload.product_id),
+      detail_url: String(detailJob!.payload.detail_url),
+      captured_at: new Date().toISOString(),
+      unavailable_reason: "单元测试未启动淘宝详情读取工具"
+    }
+  }, detailJob!.lease_token ?? "");
+  return completion;
+}
+
+async function applyFailedRuntimeJob(
+  jobId: string,
+  executorDevice: ExecutorDevice,
+  errorMessage: string,
+  options: Parameters<typeof applyFailedRuntimeJobRaw>[3] = {}
+) {
+  const currentJob = await localRuntimeRepository.getJob(jobId);
+  return applyFailedRuntimeJobRaw(jobId, executorDevice, errorMessage, {
+    ...options,
+    leaseToken: options.leaseToken ?? currentJob?.lease_token
+  });
 }
 
 async function removeSessionFile(sessionId: string) {
@@ -1186,7 +1240,7 @@ describe("server-managed Agent workflow", () => {
     await localRuntimeRepository.completeJob(firstJob!.id, device.id, {
       summary: "持久化结果等待恢复",
       candidates: candidates(firstModuleId, firstModuleName)
-    });
+    }, firstJob!.lease_token!);
 
     const recovery = await recoverAgentWorkflowForExecutor(device);
     const restored = await localRuntimeRepository.getSession(sessionId, device.user_id);
@@ -1221,7 +1275,7 @@ describe("server-managed Agent workflow", () => {
     await localRuntimeRepository.completeJob(firstJob!.id, device.id, {
       summary: "等待服务端扫描恢复",
       candidates: candidates(firstModuleId, firstModuleName)
-    });
+    }, firstJob!.lease_token!);
     const interrupted = await localRuntimeRepository.getSession(sessionId, device.user_id);
     interrupted!.hosted_tasks = interrupted!.hosted_tasks.filter((task) => task.task_id !== firstJob!.id);
     await localRuntimeRepository.saveSession(interrupted!);

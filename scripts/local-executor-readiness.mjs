@@ -29,6 +29,15 @@ export function missingTaobaoCartTools(tools) {
   return ["get_product_skus", "add_to_cart"].filter((name) => !available.has(name));
 }
 
+export function missingTaobaoDetailTools(tools) {
+  const available = new Set(
+    (Array.isArray(tools) ? tools : [])
+      .map((tool) => tool?.name)
+      .filter((name) => typeof name === "string")
+  );
+  return ["navigate_to_url", "read_page_content"].filter((name) => !available.has(name));
+}
+
 export function isMcpReadinessError(error) {
   const candidate = error && typeof error === "object" ? error : {};
   const output = [candidate.name, candidate.code, candidate.message, String(error ?? "")]

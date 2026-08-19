@@ -52,7 +52,7 @@ async function api(pathname, options = {}) {
 async function resolveJob(job, body) {
   await api(`/api/executor/jobs/${encodeURIComponent(job.id)}/resolve`, {
     method: "POST",
-    body: JSON.stringify(body)
+    body: JSON.stringify({ ...body, lease_token: job.lease_token })
   });
 }
 
@@ -72,6 +72,31 @@ async function runJob(job) {
     process.stdout.write(
       `[interview-demo-worker] ${result.product_id}: 仅加入产品内演示清单（淘宝加购调用 0 次）\n`
     );
+    return;
+  }
+
+  if (job.job_type === "product_detail") {
+    await resolveJob(job, {
+      status: "completed",
+      result: {
+        detail_evidence: {
+          schema: "scenecart.taobao-mcp-product-detail-evidence/v1",
+          source: "taobao-mcp",
+          status: "unavailable",
+          tool: "navigate_to_url+read_page_content",
+          tools_used: [],
+          source_app: "SceneCartInterviewDemo",
+          job_id: job.id,
+          search_job_id: job.payload?.search_job_id,
+          module_id: job.payload?.module_id,
+          workflow_run_id: job.payload?.workflow_run_id,
+          product_id: job.payload?.product_id,
+          detail_url: job.payload?.detail_url,
+          captured_at: new Date().toISOString(),
+          unavailable_reason: "隔离演示不访问淘宝详情页"
+        }
+      }
+    });
     return;
   }
 

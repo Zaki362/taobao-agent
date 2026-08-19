@@ -347,8 +347,16 @@ body {
     @apply border-2 border-[#ff6b1a] bg-[#fffaf6] shadow-[0_16px_42px_rgba(255,107,26,0.18)] hover:border-[#ff6b1a] hover:shadow-[0_20px_52px_rgba(255,107,26,0.24)];
   }
 
+  .product-result-card-summary-pick {
+    @apply border-slate-300 bg-slate-50/60 hover:border-slate-400;
+  }
+
   .product-ai-pick {
     @apply absolute left-3 top-3 z-10 inline-flex items-center gap-1.5 rounded-full bg-[#ff681f] px-3 py-2 text-[11px] font-semibold text-white shadow-[0_8px_24px_rgba(255,104,31,0.34)] ring-2 ring-white/90;
+  }
+
+  .product-summary-pick {
+    @apply absolute left-3 top-3 z-10 inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-white/95 px-3 py-2 text-[11px] font-semibold text-slate-700 shadow-sm backdrop-blur;
   }
 
   .product-fit-note {

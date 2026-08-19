@@ -3,13 +3,16 @@ export class ExecutorLeaseGuard {
     this.failureLimit = Math.max(Number(failureLimit) || 3, 1);
     this.onLeaseLost = onLeaseLost;
     this.currentJobId = null;
+    this.currentLeaseToken = null;
     this.abortController = null;
     this.failureCount = 0;
     this.lossReason = null;
   }
 
-  start(jobId, abortController = new AbortController()) {
+  start(jobId, leaseToken, abortController = new AbortController()) {
+    if (!leaseToken) throw new Error("executor lease token is required");
     this.currentJobId = jobId;
+    this.currentLeaseToken = leaseToken;
     this.abortController = abortController;
     this.failureCount = 0;
     this.lossReason = null;
@@ -19,14 +22,20 @@ export class ExecutorLeaseGuard {
   clear(jobId) {
     if (this.currentJobId !== jobId) return false;
     this.currentJobId = null;
+    this.currentLeaseToken = null;
     this.abortController = null;
     this.failureCount = 0;
     this.lossReason = null;
     return true;
   }
 
-  acceptHeartbeat(jobId, renewed) {
-    if (!jobId || this.currentJobId !== jobId || this.lossReason) return;
+  acceptHeartbeat(jobId, leaseToken, renewed) {
+    if (
+      !jobId ||
+      this.currentJobId !== jobId ||
+      this.currentLeaseToken !== leaseToken ||
+      this.lossReason
+    ) return;
     if (renewed) {
       this.failureCount = 0;
       return;
@@ -34,8 +43,13 @@ export class ExecutorLeaseGuard {
     this.lose(jobId, "server rejected lease renewal");
   }
 
-  rejectHeartbeat(jobId) {
-    if (!jobId || this.currentJobId !== jobId || this.lossReason) return;
+  rejectHeartbeat(jobId, leaseToken) {
+    if (
+      !jobId ||
+      this.currentJobId !== jobId ||
+      this.currentLeaseToken !== leaseToken ||
+      this.lossReason
+    ) return;
     this.failureCount += 1;
     if (this.failureCount >= this.failureLimit) {
       this.lose(jobId, `${this.failureCount} consecutive heartbeat failures`);

@@ -1,7 +1,5 @@
 import { NextResponse } from "next/server";
 
-const MAX_PUBLIC_ERROR_LENGTH = 520;
-
 export class ApiRouteError extends Error {
   constructor(
     message: string,
@@ -48,6 +46,8 @@ export function requireString(value: unknown, fieldName: string) {
 function redactSensitiveText(message: string) {
   return message
     .replace(/sk-[A-Za-z0-9_-]{12,}/g, "[redacted-api-key]")
+    .replace(/\bBearer\s+[^\s'"`]+/gi, "Bearer [redacted-token]")
+    .replace(/\bpostgres(?:ql)?:\/\/[^\s'"`]+/gi, "[redacted-database-url]")
     .replace(/\/Users\/[^'"`\s]+/g, "[local-path]")
     .replace(/\/var\/folders\/[^'"`\s]+/g, "[temp-path]")
     .replace(/\s+/g, " ")
@@ -115,22 +115,16 @@ function summarizeKnownError(message: string) {
 }
 
 function toPublicError(message: string, fallbackMessage: string) {
-  const redacted = redactSensitiveText(message || fallbackMessage);
-  const known = summarizeKnownError(redacted);
+  const known = summarizeKnownError(redactSensitiveText(message));
   if (known) {
     return known;
   }
 
-  if (redacted.length <= MAX_PUBLIC_ERROR_LENGTH) {
-    return {
-      message: redacted || fallbackMessage,
-      code: "internal_error",
-      status: 500
-    };
-  }
-
   return {
-    message: `${redacted.slice(0, MAX_PUBLIC_ERROR_LENGTH)}...（错误信息已截断，完整日志请查看服务端控制台）`,
+    // Unexpected errors are logged server-side after redaction. Returning the
+    // original message would expose database hosts, schema details or internal
+    // implementation state to an unauthenticated client.
+    message: redactSensitiveText(fallbackMessage) || "internal server error",
     code: "internal_error",
     status: 500
   };
@@ -149,6 +143,20 @@ export function apiRouteError(error: unknown, fallbackMessage: string) {
 
   if (normalized.includes("session not found") || normalized.includes("task not found")) {
     return notFound(redactSensitiveText(message));
+  }
+
+  if (
+    normalized.includes("job lease owner mismatch") ||
+    normalized.includes("job lease token mismatch")
+  ) {
+    return apiError("executor job lease is no longer current", 409, "job_lease_lost");
+  }
+
+  if (
+    normalized.includes("stale product detail callback") ||
+    message.includes("不再匹配当前 AI 首选或当前搜索任务")
+  ) {
+    return apiError("executor job was superseded", 409, "job_superseded");
   }
 
   console.error(

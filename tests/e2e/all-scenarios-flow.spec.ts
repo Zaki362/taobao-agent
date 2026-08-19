@@ -13,8 +13,15 @@ type ScenarioCase = {
 
 type ExecutorJob = {
   id: string;
-  job_type: "module_search" | "add_to_cart";
+  job_type: "module_search" | "product_detail" | "add_to_cart";
   payload: Record<string, unknown>;
+  lease_token: string;
+};
+
+type ExecutorObservations = {
+  jobs: ExecutorJob[];
+  detailOutcomes: Map<string, "verified" | "verified_empty" | "unavailable">;
+  staleMismatchRejected: boolean;
 };
 
 type PlannedState = {
@@ -45,7 +52,8 @@ const scenarioCases: ScenarioCase[] = [
 function executorHeaders(token: string) {
   return {
     Authorization: `Bearer ${token}`,
-    "X-SceneCart-Executor-Protocol": protocol.version
+    "X-SceneCart-Executor-Protocol": protocol.version,
+    Origin: appOrigin
   };
 }
 
@@ -61,7 +69,7 @@ function verifiedSearchResultFor(job: ExecutorJob, itemType: string, scenarioNam
     shop_name: `SceneCart E2E 测试店 ${index + 1}`,
     // Keep browser verification completely isolated from external image hosts.
     image_url: "",
-    detail_url: `https://item.taobao.com/item.htm?id=${encodeURIComponent(`${job.id}${index + 1}`)}`,
+    detail_url: `https://item.taobao.com/item.htm?id=${encodeURIComponent(`${job.id}-${index + 1}`)}`,
     shop_badges: ["旗舰店"],
     highlights: [itemType, "durable fixture executor 回填"],
     risk_notes: ["E2E 隔离候选，不执行真实淘宝详情或加购操作"],
@@ -87,6 +95,50 @@ function verifiedSearchResultFor(job: ExecutorJob, itemType: string, scenarioNam
       raw_result_count: candidates.length
     }
   };
+}
+
+function detailEvidenceFor(
+  job: ExecutorJob,
+  status: "verified" | "verified_empty" | "unavailable",
+  keyword: string,
+  productIdOverride?: string
+) {
+  const detailUrl = String(job.payload.detail_url ?? "");
+  const matchedFacts = status === "verified_empty" ? [] : Array.isArray(job.payload.fact_terms)
+    ? job.payload.fact_terms.filter((term): term is string => typeof term === "string").slice(0, 2)
+    : [];
+  const base = {
+    schema: "scenecart.taobao-mcp-product-detail-evidence/v1",
+    source: "taobao-mcp",
+    status: status === "unavailable" ? "unavailable" : "verified",
+    tool: "navigate_to_url+read_page_content",
+    source_app: "SceneCartAllScenariosE2EDetailFixture",
+    job_id: job.id,
+    search_job_id: String(job.payload.search_job_id ?? ""),
+    module_id: String(job.payload.module_id ?? ""),
+    workflow_run_id: String(job.payload.workflow_run_id ?? ""),
+    product_id: productIdOverride ?? String(job.payload.product_id ?? ""),
+    detail_url: detailUrl,
+    captured_at: new Date().toISOString()
+  };
+
+  return status !== "unavailable"
+    ? {
+        ...base,
+        tools_used: ["navigate_to_url", "read_page_content"],
+        summary: {
+          page_title: `${keyword} E2E 淘宝详情页`,
+          page_url: detailUrl,
+          visible_text_sha256: "a".repeat(64),
+          matched_facts: matchedFacts,
+          displayed_price_texts: ["¥399"]
+        }
+      }
+    : {
+        ...base,
+        tools_used: ["navigate_to_url"],
+        unavailable_reason: "E2E fixture 详情页读取超时，搜索结果继续保留"
+      };
 }
 
 async function registerFixtureExecutor(page: Page, scenarioId: ScenarioId) {
@@ -119,7 +171,7 @@ async function runScenarioExecutor(
   token: string,
   scenarioId: ScenarioId,
   shouldStop: () => boolean,
-  observedJobs: ExecutorJob[]
+  observations: ExecutorObservations
 ) {
   const scenario = getScenarioConfig(scenarioId);
   const headers = executorHeaders(token);
@@ -146,6 +198,45 @@ async function runScenarioExecutor(
     }
 
     // These tests never grant or exercise the real add-to-cart capability.
+    expect(job.job_type).not.toBe("add_to_cart");
+
+    if (job.job_type === "product_detail") {
+      const moduleId = String(job.payload.module_id ?? "");
+      const searchJobId = String(job.payload.search_job_id ?? "");
+      const searchJob = observations.jobs.find((item) => item.id === searchJobId);
+      expect(searchJob?.job_type).toBe("module_search");
+      const keyword = String(searchJob?.payload.keyword ?? "");
+      const outcome = (["verified", "verified_empty", "unavailable"] as const)[observations.detailOutcomes.size % 3];
+
+      if (!observations.staleMismatchRejected) {
+        const staleResolution = await api.post(`/api/executor/jobs/${job.id}/resolve`, {
+          headers,
+          data: {
+            status: "completed",
+            lease_token: job.lease_token,
+            result: {
+              detail_evidence: detailEvidenceFor(job, "verified", keyword, "stale-product-id")
+            }
+          }
+        });
+        expect(staleResolution.ok()).toBe(false);
+        observations.staleMismatchRejected = true;
+      }
+
+      const detailResolved = await api.post(`/api/executor/jobs/${job.id}/resolve`, {
+        headers,
+        data: {
+          status: "completed",
+          lease_token: job.lease_token,
+          result: { detail_evidence: detailEvidenceFor(job, outcome, keyword) }
+        }
+      });
+      expect(detailResolved.ok(), await detailResolved.text()).toBe(true);
+      observations.jobs.push(job);
+      observations.detailOutcomes.set(moduleId, outcome);
+      continue;
+    }
+
     expect(job.job_type).toBe("module_search");
     const sceneBrief = job.payload.scene_brief as { scenario_id?: string } | undefined;
     expect(sceneBrief?.scenario_id).toBe(scenarioId);
@@ -160,11 +251,12 @@ async function runScenarioExecutor(
       `${scenarioId}/${moduleId} keyword "${keyword}" must be one of ${module!.typical_item_types.join(", ")}`
     ).toBeTruthy();
 
-    observedJobs.push(job);
+    observations.jobs.push(job);
     const resolved = await api.post(`/api/executor/jobs/${job.id}/resolve`, {
       headers,
       data: {
         status: "completed",
+        lease_token: job.lease_token,
         result: verifiedSearchResultFor(job, matchedItemType!, scenario.name)
       }
     });
@@ -178,10 +270,17 @@ for (const scenarioCase of scenarioCases) {
   test(`${scenario.id} reaches scenario-specific recommendations through the durable fixture executor`, async ({ page }) => {
     const deviceToken = await registerFixtureExecutor(page, scenario.id);
     let stopExecutor = false;
-    const observedJobs: ExecutorJob[] = [];
+    const observations: ExecutorObservations = {
+      jobs: [],
+      detailOutcomes: new Map(),
+      staleMismatchRejected: false
+    };
     let executor: Promise<void> | undefined;
 
     try {
+      if (scenario.id === "moving-setup") {
+        await page.setViewportSize({ width: 390, height: 844 });
+      }
       await page.goto("/");
       await page.getByRole("button", {
         name: `${scenario.name} ${scenario.short_description}`,
@@ -218,7 +317,7 @@ for (const scenarioCase of scenarioCases) {
         deviceToken,
         scenario.id,
         () => stopExecutor,
-        observedJobs
+        observations
       );
       await page.getByRole("button", { name: "就按这个方案开始找商品" }).click();
       await expect(page.getByText("Agent 正在行动", { exact: true })).toBeVisible();
@@ -242,10 +341,59 @@ for (const scenarioCase of scenarioCases) {
         uncovered_module_ids: []
       });
       expect(moduleIds.every((moduleId) => completedState.module_candidates[moduleId]?.length > 0)).toBe(true);
-      expect(new Set(observedJobs.map((job) => String(job.payload.module_id)))).toEqual(new Set(moduleIds));
+      expect(new Set(
+        observations.jobs
+          .filter((job) => job.job_type === "module_search")
+          .map((job) => String(job.payload.module_id))
+      )).toEqual(new Set(moduleIds));
+      expect(new Set(
+        observations.jobs
+          .filter((job) => job.job_type === "product_detail")
+          .map((job) => String(job.payload.module_id))
+      )).toEqual(new Set(moduleIds));
+      expect(observations.staleMismatchRejected).toBe(true);
 
       for (const module of completedState.shopping_plan.modules) {
-        await expect(page.getByRole("tab", { name: new RegExp(`^${module.module_name}\\s+\\d+$`) })).toBeVisible();
+        const moduleTab = page.getByRole("tab", { name: new RegExp(`^${module.module_name}\\s+\\d+$`) });
+        await expect(moduleTab).toBeVisible();
+        await moduleTab.click();
+        const resultsPanel = page.getByRole("tabpanel");
+        const resultCards = resultsPanel.locator("article");
+        await expect(resultCards).toHaveCount(3);
+        const detailOutcome = observations.detailOutcomes.get(module.module_id);
+        if (detailOutcome === "verified") {
+          await expect(resultsPanel.getByText("AI 最推荐", { exact: true })).toHaveCount(1);
+          await expect(resultCards.first().getByText("AI 最推荐", { exact: true })).toBeVisible();
+          await expect(resultCards.first().getByText("本机 Worker 已读取淘宝详情页", { exact: true })).toBeVisible();
+          await expect(resultCards.first().getByText("基于详情页：", { exact: true })).toBeVisible();
+          const capturedAt = resultCards.first().locator("time[datetime]");
+          await expect(capturedAt).toBeVisible();
+          await expect(capturedAt).toContainText("提取于");
+          await expect(capturedAt).toHaveAttribute("datetime", /^\d{4}-\d{2}-\d{2}T/);
+          await expect(resultCards.first().getByText("详情已验证", { exact: true })).toHaveCount(0);
+          await expect(resultCards.first().getByText(/已核验淘宝详情页/)).toHaveCount(0);
+          await expect(resultCards.first().getByText(/具体 SKU 与成交价仍需购买前确认/)).toBeVisible();
+        } else if (detailOutcome === "verified_empty") {
+          await expect(resultsPanel.getByText("AI 最推荐", { exact: true })).toHaveCount(0);
+          await expect(resultCards.first().getByText("搜索首选", { exact: true })).toBeVisible();
+          await expect(resultCards.first().getByText("本机 Worker 已读取淘宝详情页", { exact: true })).toBeVisible();
+          await expect(resultCards.first()).not.toHaveClass(/product-result-card-featured/);
+          await expect(resultCards.first()).toHaveClass(/product-result-card-summary-pick/);
+        } else {
+          await expect(resultsPanel.getByText("AI 最推荐", { exact: true })).toHaveCount(0);
+          await expect(resultCards.first().getByText("搜索摘要首选", { exact: true })).toBeVisible();
+          await expect(resultCards.first().getByText(
+            "仅基于搜索摘要，淘宝详情页暂不可读",
+            { exact: true }
+          )).toBeVisible();
+          await expect(resultCards.first().getByText("搜索摘要判断：", { exact: true })).toBeVisible();
+          await expect(resultCards.first().getByText("读取状态：详情页读取超时", { exact: true })).toBeVisible();
+          await expect(resultCards.first().getByText("基于详情页：", { exact: true })).toHaveCount(0);
+          await expect(resultCards.first()).not.toHaveClass(/product-result-card-featured/);
+          await expect(resultCards.first()).toHaveClass(/product-result-card-summary-pick/);
+        }
+        await expect(resultCards.nth(1).getByText(/^(?:AI 最推荐|搜索首选|搜索摘要首选)$/)).toHaveCount(0);
+        await expect(resultCards.nth(2).getByText(/^(?:AI 最推荐|搜索首选|搜索摘要首选)$/)).toHaveCount(0);
       }
       await expect(page.getByText(new RegExp(`${scenario.name}.*E2E 候选`)).first()).toBeVisible();
       await expect(page.getByText(/本次淘宝 MCP ·/).first()).toBeVisible();
@@ -253,8 +401,8 @@ for (const scenarioCase of scenarioCases) {
 
       const jobsResponse = await page.request.get(`/api/runtime/jobs?session_id=${sessionId}`);
       const { jobs } = await jobsResponse.json() as { jobs: Array<{ job_type: string }> };
-      expect(jobs.length).toBeGreaterThanOrEqual(moduleIds.length);
-      expect(jobs.every((job) => job.job_type === "module_search")).toBe(true);
+      expect(jobs.length).toBeGreaterThanOrEqual(moduleIds.length * 2);
+      expect(jobs.every((job) => job.job_type === "module_search" || job.job_type === "product_detail")).toBe(true);
     } finally {
       stopExecutor = true;
       await executor;

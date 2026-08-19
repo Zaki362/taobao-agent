@@ -68,7 +68,7 @@ ALLOW_DEMO_CART_FALLBACK=false
 
 ## 协议与部署顺序
 
-当前 Worker、Doctor 和服务端使用执行器协议 **v3**。PostgreSQL 部署必须先对目标数据库执行包含 `db/migrations/007_executor_mcp_availability_state.sql` 的 `npm run db:migrate`，再执行 `npm run db:check`，之后再部署 v3 服务端；migration 007 为 `executor_devices.status` 增加 `mcp_unavailable`。随后把本机项目更新到同一版本并重启 Worker。版本不一致会收到 `426 executor_protocol_mismatch`，v3 Worker 不能在缺少 migration 007 的旧 schema 上运行。
+当前 Worker、Doctor 和服务端使用执行器协议 **v4**。PostgreSQL 部署必须先执行包含 `db/migrations/007_executor_mcp_availability_state.sql` 的 `npm run db:migrate && npm run db:check`，之后部署 v4 服务端，最后更新本机 Worker。v4 新增只读 `product_detail` 证据任务；v3 的新任务领取一律返回 `426 executor_protocol_mismatch`。发布切换前已经被同一 v3 设备领取的旧搜索/加购任务可继续心跳和回填至终态，既不会误领详情任务，也避免真实加购结果在升级窗口中丢失。
 
 ## 已退役路径
 

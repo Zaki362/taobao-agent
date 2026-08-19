@@ -8,7 +8,18 @@ export type RuntimeJobStatus =
   | "failed"
   | "cancelled";
 
-export type RuntimeJobType = "module_search" | "add_to_cart";
+export type ExecutorCapability = "module_search" | "add_to_cart";
+export type RuntimeJobType = ExecutorCapability | "product_detail";
+
+export function executorCapabilityForJobType(jobType: RuntimeJobType): ExecutorCapability {
+  return jobType === "product_detail" ? "module_search" : jobType;
+}
+
+export function claimableJobTypes(capabilities: ExecutorCapability[]): RuntimeJobType[] {
+  return capabilities.includes("module_search")
+    ? [...capabilities, "product_detail"]
+    : [...capabilities];
+}
 
 export type ExecutorDeviceStatus =
   | "online"
@@ -39,7 +50,7 @@ export interface ExecutorDevice {
   user_id: string;
   name: string;
   token_hash: string;
-  capabilities: RuntimeJobType[];
+  capabilities: ExecutorCapability[];
   status: ExecutorDeviceStatus;
   last_heartbeat_at?: string;
   created_at: string;
@@ -61,6 +72,7 @@ export interface RuntimeJob {
   lease_owner_id?: string;
   lease_expires_at?: string;
   lease_token?: string;
+  lease_protocol?: string;
   last_auth_failure_token_hash?: string;
   result?: Record<string, unknown>;
   error_message?: string;
@@ -118,7 +130,7 @@ export interface RuntimeRepository {
   createAuthSession(session: AuthSessionRecord): Promise<void>;
   findAuthSession(tokenHash: string): Promise<AuthSessionRecord | null>;
   deleteAuthSession(tokenHash: string): Promise<void>;
-  touchAuthSession(tokenHash: string): Promise<void>;
+  touchAuthSession(tokenHash: string, minIntervalMs?: number): Promise<void>;
 
   createDevice(device: ExecutorDevice): Promise<ExecutorDevice>;
   findDeviceByToken(tokenHash: string): Promise<ExecutorDevice | null>;
@@ -130,24 +142,31 @@ export interface RuntimeRepository {
   updateDeviceCapabilities(
     deviceId: string,
     userId: string,
-    capabilities: RuntimeJobType[]
+    capabilities: ExecutorCapability[]
   ): Promise<ExecutorDevice | null>;
   revokeDevice(deviceId: string, userId: string): Promise<boolean>;
 
   createJob(input: CreateRuntimeJobInput): Promise<RuntimeJob>;
   getJob(jobId: string): Promise<RuntimeJob | null>;
   listJobs(sessionId: string, userId?: string): Promise<RuntimeJob[]>;
-  claimJob(device: ExecutorDevice, leaseMs: number): Promise<RuntimeJob | null>;
-  renewJobLease(jobId: string, deviceId: string, leaseMs: number): Promise<RuntimeJob | null>;
+  claimJob(device: ExecutorDevice, leaseMs: number, protocolVersion?: string): Promise<RuntimeJob | null>;
+  renewJobLease(
+    jobId: string,
+    deviceId: string,
+    leaseToken: string,
+    leaseMs: number
+  ): Promise<RuntimeJob | null>;
   completeJob(
     jobId: string,
     deviceId: string,
-    result: Record<string, unknown>
+    result: Record<string, unknown>,
+    leaseToken: string
   ): Promise<{ job: RuntimeJob; alreadyCompleted: boolean }>;
   failJob(
     jobId: string,
     deviceId: string,
     errorMessage: string,
+    leaseToken: string,
     retryDelayMs?: number,
     terminal?: boolean
   ): Promise<RuntimeJob>;

@@ -3,6 +3,8 @@ import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { getSession, listSessions, saveSession } from "@/lib/session/store";
 import type { SessionState } from "@/lib/session/types";
+import { allowUnownedRuntimeJobs } from "@/lib/runtime/product-mode";
+import { executorCapabilityForJobType } from "@/lib/runtime/types";
 import type {
   AuthenticationFailureHold,
   AuthSessionRecord,
@@ -36,8 +38,6 @@ interface PersistedLocalRuntimeState {
   event_sequence: number;
   saved_at: string;
 }
-
-const AUTH_SESSION_TOUCH_PERSIST_INTERVAL_MS = 60_000;
 
 declare global {
   // eslint-disable-next-line no-var
@@ -94,7 +94,10 @@ function loadPersistedRuntimeState(): LocalRuntimeState {
     }));
     const jobs = records<RuntimeJob>(parsed.jobs).map((job) => ({
       ...job,
-      lease_token: typeof job.lease_token === "string" ? job.lease_token : undefined
+      lease_token: typeof job.lease_token === "string" ? job.lease_token : undefined,
+      lease_protocol: typeof job.lease_protocol === "string"
+        ? job.lease_protocol
+        : (job.lease_token && (job.status === "leased" || job.status === "running") ? "3" : undefined)
     }));
     const serviceHeartbeats = records<RuntimeServiceHeartbeat>(parsed.service_heartbeats);
     const events = records<ExecutionEvent>(parsed.events).slice(-5_000);
@@ -241,9 +244,48 @@ function workflowTransitionTime(session: SessionState) {
   return session.agent_runtime.last_transition_at ?? session.agent_runtime.initialized_at;
 }
 
+function isCurrentPreferredProductDetailJob(session: SessionState, job: RuntimeJob) {
+  if (job.job_type !== "product_detail") return false;
+  const moduleId = typeof job.payload.module_id === "string" ? job.payload.module_id : "";
+  const searchJobId = typeof job.payload.search_job_id === "string" ? job.payload.search_job_id : "";
+  const productId = typeof job.payload.product_id === "string" ? job.payload.product_id : "";
+  const detailUrl = typeof job.payload.detail_url === "string" ? job.payload.detail_url : "";
+  const preferred = session.module_candidates[moduleId]?.[0];
+  const provenanceTask = session.hosted_tasks.find((task) =>
+    task.task_type === "module_search" &&
+    task.module_id === moduleId &&
+    task.status === "completed" &&
+    typeof task.payload.preferred_product_detail_job_id === "string" &&
+    task.payload.preferred_product_detail_job_id.length > 0
+  );
+  return Boolean(
+    preferred?.product_id === productId &&
+    preferred.detail_url === detailUrl &&
+    provenanceTask &&
+    (provenanceTask.runtime_job_id ?? provenanceTask.task_id) === searchJobId &&
+    provenanceTask.payload.preferred_product_detail_job_id === job.id &&
+    provenanceTask.payload.preferred_product_id === productId
+  );
+}
+
 function isWorkflowRecoveryCandidate(session: SessionState) {
   if (session.archived_at) return false;
   if (!isActiveWorkflow(session)) return false;
+
+  const workflowRunId = session.agent_runtime.workflow_run_id;
+  const hasActiveProductDetail = [...runtimeState().jobs.values()].some((job) => {
+    if (
+      job.session_id !== session.session_id ||
+      job.job_type !== "product_detail" ||
+      job.payload.workflow_run_id !== workflowRunId ||
+      (job.status !== "pending" && job.status !== "leased" && job.status !== "running")
+    ) return false;
+    const moduleId = typeof job.payload.module_id === "string" ? job.payload.module_id : "";
+    const preferred = session.module_candidates[moduleId]?.[0];
+    return isCurrentPreferredProductDetailJob(session, job) &&
+      preferred.detail_evidence?.job_id !== job.id;
+  });
+  if (hasActiveProductDetail) return false;
 
   const activeTask = session.hosted_tasks.find((task) =>
     task.task_type === "module_search" &&
@@ -319,16 +361,18 @@ export const localRuntimeRepository: RuntimeRepository = {
     if (state.authSessions.delete(tokenHash)) persistRuntimeState(state);
   },
 
-  async touchAuthSession(tokenHash) {
+  async touchAuthSession(tokenHash, minIntervalMs = 0) {
     const state = runtimeState();
     const found = state.authSessions.get(tokenHash);
     if (found) {
       const now = Date.now();
       const previousLastSeenAt = Date.parse(found.last_seen_at);
+      if (
+        Number.isFinite(previousLastSeenAt) &&
+        now - previousLastSeenAt < Math.max(0, minIntervalMs)
+      ) return;
       found.last_seen_at = new Date(now).toISOString();
-      if (!Number.isFinite(previousLastSeenAt) || now - previousLastSeenAt >= AUTH_SESSION_TOUCH_PERSIST_INTERVAL_MS) {
-        persistRuntimeState(state);
-      }
+      persistRuntimeState(state);
     }
   },
 
@@ -417,6 +461,7 @@ export const localRuntimeRepository: RuntimeRepository = {
         existing.lease_owner_id = undefined;
         existing.lease_expires_at = undefined;
         existing.lease_token = undefined;
+        existing.lease_protocol = undefined;
       }
       persistRuntimeState(state);
       return copy(existing);
@@ -449,7 +494,7 @@ export const localRuntimeRepository: RuntimeRepository = {
       .map(copy);
   },
 
-  async claimJob(device, leaseMs) {
+  async claimJob(device, leaseMs, protocolVersion = "4") {
     if (device.status !== "online") return null;
     await this.recoverExpiredJobs();
     const state = runtimeState();
@@ -473,8 +518,8 @@ export const localRuntimeRepository: RuntimeRepository = {
             !authenticationBlocked &&
             !getSession(item.session_id)?.archived_at &&
             new Date(item.available_at).getTime() <= now &&
-            (!item.user_id || item.user_id === storedDevice.user_id) &&
-            storedDevice.capabilities.includes(item.job_type);
+            (item.user_id === storedDevice.user_id || (!item.user_id && allowUnownedRuntimeJobs())) &&
+            storedDevice.capabilities.includes(executorCapabilityForJobType(item.job_type));
         }
       )
       .sort((a, b) => b.priority - a.priority || a.created_at.localeCompare(b.created_at))[0];
@@ -483,16 +528,23 @@ export const localRuntimeRepository: RuntimeRepository = {
     job.lease_owner_id = storedDevice.id;
     job.lease_expires_at = new Date(now + leaseMs).toISOString();
     job.lease_token = randomUUID();
+    job.lease_protocol = protocolVersion;
     job.attempts += 1;
     job.updated_at = new Date(now).toISOString();
     persistRuntimeState(state);
     return copy(job);
   },
 
-  async renewJobLease(jobId, deviceId, leaseMs) {
+  async renewJobLease(jobId, deviceId, leaseToken, leaseMs) {
     const state = runtimeState();
     const job = state.jobs.get(jobId);
-    if (!job || job.lease_owner_id !== deviceId || (job.status !== "leased" && job.status !== "running")) {
+    if (
+      !job ||
+      job.lease_owner_id !== deviceId ||
+      !job.lease_token ||
+      job.lease_token !== leaseToken ||
+      (job.status !== "leased" && job.status !== "running")
+    ) {
       return null;
     }
     const now = Date.now();
@@ -503,12 +555,13 @@ export const localRuntimeRepository: RuntimeRepository = {
     return copy(job);
   },
 
-  async completeJob(jobId, deviceId, result) {
+  async completeJob(jobId, deviceId, result, leaseToken) {
     const state = runtimeState();
     const job = state.jobs.get(jobId);
     if (!job) throw new Error("job not found");
-    if (job.status === "completed") return { job: copy(job), alreadyCompleted: true };
     if (job.lease_owner_id !== deviceId) throw new Error("job lease owner mismatch");
+    if (!job.lease_token || job.lease_token !== leaseToken) throw new Error("job lease token mismatch");
+    if (job.status === "completed") return { job: copy(job), alreadyCompleted: true };
     const now = new Date().toISOString();
     job.status = "completed";
     job.result = copy(result);
@@ -519,12 +572,13 @@ export const localRuntimeRepository: RuntimeRepository = {
     return { job: copy(job), alreadyCompleted: false };
   },
 
-  async failJob(jobId, deviceId, errorMessage, retryDelayMs = 2_000, terminal = false) {
+  async failJob(jobId, deviceId, errorMessage, leaseToken, retryDelayMs = 2_000, terminal = false) {
     const state = runtimeState();
     const job = state.jobs.get(jobId);
     if (!job) throw new Error("job not found");
-    if (job.status === "completed") return copy(job);
     if (job.lease_owner_id !== deviceId) throw new Error("job lease owner mismatch");
+    if (!job.lease_token || job.lease_token !== leaseToken) throw new Error("job lease token mismatch");
+    if (job.status === "completed") return copy(job);
     const now = Date.now();
     job.error_message = errorMessage.slice(0, 1000);
     job.updated_at = new Date(now).toISOString();
@@ -553,7 +607,7 @@ export const localRuntimeRepository: RuntimeRepository = {
     if (!job) throw new Error("job not found");
     if (job.status === "failed") {
       if (
-        !storedDevice.capabilities.includes(job.job_type) ||
+        !storedDevice.capabilities.includes(executorCapabilityForJobType(job.job_type)) ||
         job.attempts <= 0 ||
         !job.lease_token ||
         job.lease_token !== leaseToken ||
@@ -579,7 +633,7 @@ export const localRuntimeRepository: RuntimeRepository = {
     );
     if (
       (job.job_type !== "module_search" && job.job_type !== "add_to_cart") ||
-      !storedDevice.capabilities.includes(job.job_type) ||
+      !storedDevice.capabilities.includes(executorCapabilityForJobType(job.job_type)) ||
       job.attempts <= 0 ||
       !job.lease_token ||
       job.lease_token !== leaseToken ||
@@ -622,7 +676,7 @@ export const localRuntimeRepository: RuntimeRepository = {
     );
     if (
       (job.job_type !== "module_search" && job.job_type !== "add_to_cart") ||
-      !storedDevice.capabilities.includes(job.job_type) ||
+      !storedDevice.capabilities.includes(executorCapabilityForJobType(job.job_type)) ||
       job.attempts <= 0 ||
       !job.lease_token ||
       job.lease_token !== leaseToken ||

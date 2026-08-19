@@ -1,6 +1,12 @@
-import { isTaobaoMcpSearchEvidence } from "@/lib/session/guards";
-import type { SessionState } from "@/lib/session/types";
-import { MpcStatus } from "@/components/dashboard-types";
+import {
+  isTaobaoMcpProductDetailEvidence,
+  isTaobaoMcpSearchEvidence
+} from "@/lib/session/guards";
+import type { ProductCandidate, SessionState } from "@/lib/session/types";
+import type {
+  MpcStatus,
+  ProductDetailEvidencePresentation
+} from "@/components/dashboard-types";
 
 const TAOBAO_AUTHENTICATION_PATTERN =
   /(?:淘宝[^。\n]*(?:未登录|登录态失效|请先登录|登录页面)|未登录[^。\n]*淘宝|已打开登录页面|auth_required|login\.taobao\.com)/i;
@@ -47,6 +53,75 @@ export function getExecutionModeLabel(status: MpcStatus | null) {
 
 export function hasRealDetailUrl(detailUrl?: string) {
   return Boolean(detailUrl && detailUrl.trim() && detailUrl !== "https://www.taobao.com/");
+}
+
+function comparableDetailUrl(value: string) {
+  try {
+    const url = new URL(value.trim());
+    url.hash = "";
+    return url.toString().replace(/\/$/, "");
+  } catch {
+    return value.trim().replace(/\/$/, "");
+  }
+}
+
+function firstTwoSentences(value: string) {
+  const compact = value.replace(/\s+/g, " ").trim();
+  const sentences = compact.match(/[^。！？!?]+[。！？!?]?/g) ?? [];
+  return (sentences.slice(0, 2).join("") || compact)
+    .replace(/^已核验淘宝详情页/, "已读取淘宝详情页")
+    .slice(0, 220)
+    .trim();
+}
+
+function missingDetailPresentation(product: ProductCandidate): ProductDetailEvidencePresentation {
+  return {
+    state: "missing",
+    label: "仅基于搜索摘要，详情读取待完成",
+    summaryReason: product.fit_reason.trim() || "当前判断来自商品标题、价格、店铺与搜索摘要。"
+  };
+}
+
+function safeUnavailableReason(value: string) {
+  if (/(?:未登录|登录|auth|login)/i.test(value)) return "淘宝登录状态需要恢复";
+  if (/(?:超时|timeout|timed out)/i.test(value)) return "详情页读取超时";
+  if (/(?:页面|正文|内容|content|空白)/i.test(value)) return "详情页内容暂未完整返回";
+  return "本次详情页读取未完成";
+}
+
+export function productDetailEvidencePresentation(
+  product: ProductCandidate
+): ProductDetailEvidencePresentation {
+  const evidence = product.detail_evidence;
+  if (
+    !isTaobaoMcpProductDetailEvidence(evidence) ||
+    evidence.product_id !== product.product_id ||
+    comparableDetailUrl(evidence.detail_url) !== comparableDetailUrl(product.detail_url)
+  ) {
+    return missingDetailPresentation(product);
+  }
+
+  if (evidence.status === "unavailable") {
+    return {
+      state: "unavailable",
+      label: "仅基于搜索摘要，淘宝详情页暂不可读",
+      summaryReason: product.fit_reason.trim() || "当前判断来自商品标题、价格、店铺与搜索摘要。",
+      unavailableReason: safeUnavailableReason(evidence.unavailable_reason ?? "")
+    };
+  }
+
+  const reason = firstTwoSentences(evidence.recommendation_reason ?? "");
+  if (!reason) {
+    return missingDetailPresentation(product);
+  }
+
+  return {
+    state: "verified",
+    label: "本机 Worker 已读取淘宝详情页",
+    reason,
+    capturedAt: evidence.captured_at,
+    supportsRecommendation: Boolean(evidence.summary?.matched_facts.length)
+  };
 }
 
 function isCurrentWorkflowModuleTask(
