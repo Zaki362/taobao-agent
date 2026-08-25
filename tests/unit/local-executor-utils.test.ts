@@ -311,7 +311,7 @@ describe("local executor evidence boundary", () => {
     const directory = await fs.mkdtemp(path.join(os.tmpdir(), "scenecart-auth-retry-"));
     const callbackPath = path.join(directory, "pending-auth-failure.json");
     let resolveAttempts = 0;
-    let taobaoToolCalls = 0;
+    const taobaoToolCalls = 0;
     try {
       const originalWorker = new PendingAuthenticationFailureStore(callbackPath);
       await originalWorker.save(createPendingAuthenticationFailure({

@@ -4,7 +4,6 @@ import {
   MCP_STATUS_REFRESH_MS,
   executorDeviceStatusLabel,
   executorDeviceViewState,
-  isLocalExecutorUnavailable,
   isTaobaoMcpReconnecting,
   shouldOfferWorkflowResume,
   shouldPresentActiveTaobaoSearch

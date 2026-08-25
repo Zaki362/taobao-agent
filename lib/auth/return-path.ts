@@ -1,4 +1,6 @@
-export function normalizeAuthReturnPath(value: unknown, fallback = "/") {
+import type { Route } from "next";
+
+export function normalizeAuthReturnPath(value: unknown, fallback: Route = "/") {
   if (typeof value !== "string") return fallback;
   const candidate = value.trim();
   if (
@@ -15,7 +17,7 @@ export function normalizeAuthReturnPath(value: unknown, fallback = "/") {
     if (parsed.origin !== "http://scenecart.local" || parsed.pathname === "/login") {
       return fallback;
     }
-    return `${parsed.pathname}${parsed.search}${parsed.hash}`;
+    return `${parsed.pathname}${parsed.search}${parsed.hash}` as Route;
   } catch {
     return fallback;
   }

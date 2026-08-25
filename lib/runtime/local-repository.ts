@@ -8,7 +8,6 @@ import { executorCapabilityForJobType } from "@/lib/runtime/types";
 import type {
   AuthenticationFailureHold,
   AuthSessionRecord,
-  CreateRuntimeJobInput,
   ExecutionEvent,
   ExecutorDevice,
   RuntimeJob,
@@ -40,7 +39,6 @@ interface PersistedLocalRuntimeState {
 }
 
 declare global {
-  // eslint-disable-next-line no-var
   var __sceneCartLocalRuntime: LocalRuntimeState | undefined;
 }
 
@@ -194,13 +192,6 @@ function authenticationHoldFromEvent(event: ExecutionEvent): AuthenticationFailu
     attempt,
     lease_token: leaseToken
   };
-}
-
-function sameAuthenticationHold(event: ExecutionEvent, hold: AuthenticationFailureHold) {
-  return event.job_id === hold.job_id &&
-    event.payload.device_id === hold.device_id &&
-    Number(event.payload.attempt) === hold.attempt &&
-    event.payload.lease_token === hold.lease_token;
 }
 
 function activeAuthenticationHoldForJob(

@@ -1,4 +1,4 @@
-import { AgentDecisionProposal, ModuleCandidateReview, PlanningModule, PurchaseBundleProposal, SceneBrief, ShoppingPlan } from "@/lib/session/types";
+import { AgentDecisionProposal, ModuleCandidateReview, PlanningModule, PurchaseBundleProposal } from "@/lib/session/types";
 
 export interface ValidationResult {
   valid: boolean;

@@ -23,9 +23,7 @@ interface LlmTaskTelemetry {
 }
 
 declare global {
-  // eslint-disable-next-line no-var
   var __sceneCartLlmTelemetry: Map<LlmTaskName, LlmTaskTelemetry> | undefined;
-  // eslint-disable-next-line no-var
   var __sceneCartLlmTelemetrySequence: number | undefined;
 }
 

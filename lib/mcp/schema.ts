@@ -108,7 +108,7 @@ function productIdFromUrl(value: unknown) {
   return match?.[1] ?? "";
 }
 
-function normalizeSearchResultItem(value: unknown, index: number): SearchResultItem | null {
+function normalizeSearchResultItem(value: unknown, _index: number): SearchResultItem | null {
   if (!isRecord(value)) {
     return null;
   }

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Pause, Play, RefreshCcw } from "lucide-react";
 import { jsonFetch } from "@/components/dashboard-api";
@@ -224,7 +224,7 @@ export function HostedConsole() {
     };
   }, [selectedSession]);
 
-  async function loadData() {
+  const loadData = useCallback(async () => {
     setBusy(true);
     setErrorMessage("");
     try {
@@ -255,7 +255,7 @@ export function HostedConsole() {
     } finally {
       setBusy(false);
     }
-  }
+  }, [selectedSessionId]);
 
   async function cancelTask(taskId: string) {
     if (!window.confirm("只会取消尚未被本地执行器领取的任务，确定继续吗？")) return;
@@ -350,7 +350,7 @@ export function HostedConsole() {
       loadData().catch(() => undefined);
     }, 5000);
     return () => window.clearInterval(timer);
-  }, []);
+  }, [loadData]);
 
   return (
     <main className="min-h-screen">

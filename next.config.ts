@@ -20,7 +20,7 @@ const nextConfig: NextConfig = {
   ...(process.env.NEXT_DIST_DIR?.trim()
     ? { distDir: process.env.NEXT_DIST_DIR.trim() }
     : {}),
-  typedRoutes: false,
+  typedRoutes: true,
   ...(process.env.NEXT_TSCONFIG_PATH?.trim()
     ? { typescript: { tsconfigPath: process.env.NEXT_TSCONFIG_PATH.trim() } }
     : {}),

@@ -2,10 +2,11 @@
 
 import { FormEvent, useState } from "react";
 import { useRouter } from "next/navigation";
+import type { Route } from "next";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 
-export function AuthForm({ returnTo = "/" }: { returnTo?: string }) {
+export function AuthForm({ returnTo = "/" }: { returnTo?: Route }) {
   const router = useRouter();
   const [mode, setMode] = useState<"login" | "register">("login");
   const [email, setEmail] = useState("");

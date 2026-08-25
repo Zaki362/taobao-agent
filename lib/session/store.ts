@@ -8,7 +8,6 @@ import { isAgentBundleAdoptionForReport, isAgentCompletionReport, isAgentDecisio
 import { AgentDirectives, ModuleCandidateReview, ModuleSearchTrace, PlanExecutionStrategy, PlanQualityReview, ProductCandidate, SelectedItem, SessionState, ShoppingPlanModule } from "@/lib/session/types";
 
 declare global {
-  // eslint-disable-next-line no-var
   var __AUTOPREP_SESSION_STORE__: Map<string, SessionState> | undefined;
 }
 

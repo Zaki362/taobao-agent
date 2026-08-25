@@ -74,7 +74,6 @@ export class AgentPartialResultsAcceptanceError extends Error {
 }
 
 declare global {
-  // eslint-disable-next-line no-var
   var __SCENECART_WORKFLOW_RUNNERS__: Map<string, Promise<AgentWorkflowAdvanceResult>> | undefined;
 }
 
@@ -177,7 +176,7 @@ async function executeAdvance(
   userId: string | undefined,
   options: { start?: boolean; trigger: AgentWorkflowTrigger }
 ): Promise<AgentWorkflowAdvanceResult> {
-  let state = await loadSession(sessionId, userId);
+  const state = await loadSession(sessionId, userId);
   if (!state) throw new Error("session not found");
   if (state.archived_at) {
     return { state, outcome: "paused" };

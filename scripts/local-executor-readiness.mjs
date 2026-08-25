@@ -11,7 +11,7 @@ export function requiredTaobaoTools() {
   return ["search_products", "get_current_tab"];
 }
 
-export function missingTaobaoTools(tools, capabilities = []) {
+export function missingTaobaoTools(tools, _capabilities = []) {
   const available = new Set(
     (Array.isArray(tools) ? tools : [])
       .map((tool) => tool?.name)

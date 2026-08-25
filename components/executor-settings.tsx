@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
+import Link from "next/link";
 import { Check, Copy, RefreshCw, ShieldCheck, Terminal, Wifi } from "lucide-react";
 import {
   executorDeviceStatusLabel,
@@ -72,6 +73,12 @@ function capabilityLabel(capability: string) {
   return capability;
 }
 
+function requireActiveLogin(response: Response) {
+  if (response.status !== 401) return;
+  window.location.assign("/login?next=%2Fsettings%2Fexecutor");
+  throw new Error("登录状态已失效，正在返回登录页");
+}
+
 export function ExecutorSettings() {
   const [devices, setDevices] = useState<Device[]>([]);
   const [auditEvents, setAuditEvents] = useState<DeviceAuditEvent[]>([]);
@@ -95,13 +102,7 @@ export function ExecutorSettings() {
   const doctorCommand = "npm run executor:doctor";
   const workerCommand = "npm run worker:local";
 
-  function requireActiveLogin(response: Response) {
-    if (response.status !== 401) return;
-    window.location.assign("/login?next=%2Fsettings%2Fexecutor");
-    throw new Error("登录状态已失效，正在返回登录页");
-  }
-
-  async function load() {
+  const load = useCallback(async () => {
     const [devicesResponse, readinessResponse] = await Promise.all([
       fetch("/api/executor/devices"),
       fetch("/api/runtime/readiness")
@@ -115,7 +116,7 @@ export function ExecutorSettings() {
     setAuditEvents(devicesPayload.audit_events || []);
     setReadiness(readinessPayload as Readiness);
     setLastCheckedAt(new Date().toLocaleTimeString("zh-CN", { hour12: false }));
-  }
+  }, []);
 
   useEffect(() => {
     setApiUrl(window.location.origin);
@@ -124,7 +125,7 @@ export function ExecutorSettings() {
       load().catch((value) => setError(value instanceof Error ? value.message : "刷新执行器状态失败"));
     }, 10_000);
     return () => window.clearInterval(timer);
-  }, []);
+  }, [load]);
 
   async function register() {
     setBusy(true);
@@ -240,7 +241,7 @@ export function ExecutorSettings() {
         <CardContent className="px-6 py-7 md:px-8">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <p className="label-text">Local Executor</p>
-            <a href="/?resume=1" className="text-sm font-medium text-primary hover:underline">返回当前购物进度</a>
+            <Link href="/?resume=1" className="text-sm font-medium text-primary hover:underline">返回当前购物进度</Link>
           </div>
           <h1 className="mt-3 text-3xl font-semibold">连接这台电脑上的淘宝执行器</h1>
           <p className="mt-3 max-w-3xl text-sm leading-7 text-muted-foreground">
