@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import path from "node:path";
 import process from "node:process";
 import pg from "pg";
+import { databaseSslConfig } from "./database-ssl.mjs";
 
 const { Pool } = pg;
 const databaseUrl = process.env.DATABASE_URL;
@@ -13,7 +14,7 @@ if (!databaseUrl) {
 
 const pool = new Pool({
   connectionString: databaseUrl,
-  ssl: process.env.DATABASE_SSL === "true" ? { rejectUnauthorized: false } : undefined
+  ssl: databaseSslConfig()
 });
 
 const requiredTables = [
@@ -24,6 +25,7 @@ const requiredTables = [
   "agent_jobs",
   "execution_events",
   "security_rate_limits",
+  "security_concurrency_leases",
   "runtime_service_heartbeats"
 ];
 const migrationsDir = path.join(process.cwd(), "db", "migrations");

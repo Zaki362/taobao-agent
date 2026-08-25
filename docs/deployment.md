@@ -28,6 +28,8 @@ APP_ORIGIN=https://scenecart.example.com
 AUTH_COOKIE_SECURE=true
 AUTH_REQUIRED=true
 RUNTIME_STORE=postgres
+DATABASE_SSL=true
+DATABASE_SSL_REJECT_UNAUTHORIZED=true
 TAOBAO_EXECUTION_BACKEND=local_executor
 SCENECART_ENABLE_MCP_DEBUG=false
 SCENECART_CRON_SECRET=至少32字符的独立随机密钥
@@ -42,12 +44,14 @@ DATABASE_POOL_SIZE=1
 ## 发布检查
 
 1. GitHub Actions `quality` 全部通过。
-2. 数据库 migration 由发布流程显式执行一次：`npm run db:migrate`。验证命令不会自动改数据库。
+2. 数据库 migration 由独立 release 阶段显式执行一次：`npm run db:migrate && npm run db:check`。`npm run build` 永远不会连接或修改数据库；迁移器使用 PostgreSQL advisory lock 防止并发发布重复执行。
 3. 设置 `SCENECART_RELEASE_VERIFY_URL=https://正式域名`，运行 `npm run release:verify`。它会依次验证静态配置、数据库 schema、公开 health 与受内部 Bearer 保护的只读 readiness，且不会打印 Key、Token 或数据库连接串。
 4. `npm run check`、`npm run eval:agent` 成功。
 5. 注册测试设备并运行 `npm run executor:doctor`；登录后访问 `/api/runtime/readiness`，设备在线时应得到 `operational_for_shopping=true`。
 6. 使用隔离淘宝测试账号完成一次搜索；真实加购仅在明确授权且账号能力稳定时验收。
 7. 检查执行台中的任务积压、在线设备、模型 fallback、失败任务和“运行健康诊断”，不得带着严重告警发布。
+
+工作流恢复任务会至多每 12 小时执行一次数据保留清理：过期登录会话立即删除，限流记录保留 48 小时、执行事件 30 天、终态任务 90 天、归档会话 365 天、已撤销设备 180 天。可通过 `.env.example` 中的 `SCENECART_*_RETENTION_*` 变量调整，但代码会阻止过短或无界的配置。
 
 ```bash
 SCENECART_RELEASE_VERIFY_URL=https://scenecart.example.com npm run release:verify

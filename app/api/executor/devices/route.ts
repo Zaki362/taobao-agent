@@ -4,6 +4,7 @@ import { ApiRouteError, apiOk, apiRouteError, requireString } from "@/lib/api/re
 import { getRuntimeRepository } from "@/lib/runtime";
 import { executorAuditSessionId, registerExecutorDevice } from "@/lib/runtime/jobs";
 import type { ExecutorCapability } from "@/lib/runtime/types";
+import { readJsonObject } from "@/lib/api/validation";
 
 const ALLOWED_CAPABILITIES: ExecutorCapability[] = ["module_search", "add_to_cart"];
 const DEFAULT_CAPABILITIES: ExecutorCapability[] = ["module_search"];
@@ -36,7 +37,7 @@ export async function GET() {
 export async function POST(request: NextRequest) {
   try {
     const identity = await requireAuthenticatedIdentity();
-    const body = await request.json().catch(() => ({}));
+    const body = await readJsonObject(request);
     const result = await registerExecutorDevice(
       identity.userId,
       requireString(body.name, "name"),
@@ -56,7 +57,7 @@ export async function POST(request: NextRequest) {
 export async function PATCH(request: NextRequest) {
   try {
     const identity = await requireAuthenticatedIdentity();
-    const body = await request.json().catch(() => ({}));
+    const body = await readJsonObject(request);
     const repository = getRuntimeRepository();
     const deviceId = requireString(body.device_id, "device_id");
     const previous = (await repository.listDevices(identity.userId)).find((device) => device.id === deviceId);
@@ -90,7 +91,7 @@ export async function PATCH(request: NextRequest) {
 export async function DELETE(request: NextRequest) {
   try {
     const identity = await requireAuthenticatedIdentity();
-    const body = await request.json().catch(() => ({}));
+    const body = await readJsonObject(request);
     const repository = getRuntimeRepository();
     const deviceId = requireString(body.device_id, "device_id");
     const previous = (await repository.listDevices(identity.userId)).find((device) => device.id === deviceId);

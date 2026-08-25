@@ -258,11 +258,12 @@ function assertProductionBuildMigrationGate() {
   }
   if (
     !String(pkg.scripts?.build ?? "").includes("scripts/build.mjs") ||
-    !buildScript.includes('environment.VERCEL_ENV === "production"') ||
-    !buildScript.includes('import("./db-migrate.mjs")') ||
-    !buildScript.includes('import("./db-check.mjs")')
+    !String(pkg.scripts?.["db:migrate"] ?? "").includes("db-migrate.mjs") ||
+    !String(pkg.scripts?.["db:check"] ?? "").includes("db-check.mjs") ||
+    buildScript.includes('import("./db-migrate.mjs")') ||
+    buildScript.includes('import("./db-check.mjs")')
   ) {
-    fail("Vercel Production 构建必须先执行并验证数据库迁移，本地和 Preview 构建不得访问生产数据库");
+    fail("数据库迁移必须由独立 release 阶段执行并验证，Next.js 构建不得直接修改数据库");
   }
 }
 
@@ -1137,7 +1138,7 @@ function assertArchitectureContracts() {
         hostedConsole.includes("最近一次调整影响") &&
         refiner.includes("delete state.module_reviews") &&
         refiner.includes("delete state.module_search_traces") &&
-        dashboard.includes("已有候选会尽量保留") &&
+        refineRoute.includes('requireString(body.quick_action') &&
         decisionEngine.includes("candidateCount > 0") &&
         decisionEngine.includes("hasSkippedModule") &&
         refiner.includes("removeModuleAgentDecisions"),

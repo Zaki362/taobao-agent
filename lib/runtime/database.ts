@@ -1,10 +1,9 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { Pool, PoolClient, QueryResultRow } from "pg";
+import { databaseSslConfig } from "@/lib/runtime/database-ssl";
 
 declare global {
-  // eslint-disable-next-line no-var
   var __sceneCartPgPool: Pool | undefined;
-  // eslint-disable-next-line no-var
   var __sceneCartLocalWorkflowLocks: Map<string, Promise<void>> | undefined;
 }
 
@@ -92,7 +91,7 @@ export function getDatabasePool() {
       max: Number(process.env.DATABASE_POOL_SIZE ?? 10),
       idleTimeoutMillis: 30_000,
       connectionTimeoutMillis: 5_000,
-      ssl: process.env.DATABASE_SSL === "true" ? { rejectUnauthorized: false } : undefined
+      ssl: databaseSslConfig()
     });
   }
 

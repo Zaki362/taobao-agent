@@ -6,20 +6,25 @@ import { mockParseScene } from "@/lib/llm/mock";
 import { normalizeSceneBriefOptions } from "@/lib/scenarios/normalize";
 import { isScenarioId } from "@/lib/scenarios";
 import { getRequestIdentity } from "@/lib/auth/request";
+import { enforceAiRateLimit, withAiConcurrencyLimit } from "@/lib/security/rate-limit";
+import {
+  API_INPUT_LIMITS,
+  boundedNumber,
+  boundedString,
+  boundedStringArray,
+  readJsonObject
+} from "@/lib/api/validation";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
-function asStringArray(value: unknown, fallback: string[]) {
-  if (!Array.isArray(value)) {
-    return fallback;
-  }
-
-  return value
-    .filter((item): item is string => typeof item === "string")
-    .map((item) => item.trim())
-    .filter(Boolean);
+function asStringArray(value: unknown, fallback: string[], fieldName: string) {
+  return boundedStringArray(value, fieldName, {
+    maxItems: API_INPUT_LIMITS.sceneListItems,
+    maxItemLength: API_INPUT_LIMITS.sceneListItemLength,
+    fallback
+  });
 }
 
 function asDeepSeekMode(value: unknown): "connected" | "mock" {
@@ -31,10 +36,11 @@ function normalizeSceneBriefInput(value: unknown, fallback: SceneBrief): SceneBr
     return fallback;
   }
 
-  const budget =
-    typeof value.budget === "number" && Number.isFinite(value.budget)
-      ? value.budget
-      : fallback.budget;
+  const budget = boundedNumber(value.budget, "scene_brief.budget", {
+    min: API_INPUT_LIMITS.budgetMin,
+    max: API_INPUT_LIMITS.budgetMax,
+    fallback: fallback.budget
+  });
 
   const priorityStyle =
     value.priority_style === "实用优先" ||
@@ -49,46 +55,62 @@ function normalizeSceneBriefInput(value: unknown, fallback: SceneBrief): SceneBr
       isScenarioId(value.scenario_id)
         ? value.scenario_id
         : fallback.scenario_id,
-    scene_type: typeof value.scene_type === "string" && value.scene_type.trim() ? value.scene_type.trim() : fallback.scene_type,
-    vehicle_type: typeof value.vehicle_type === "string" && value.vehicle_type.trim() ? value.vehicle_type.trim() : fallback.vehicle_type,
-    user_stage: typeof value.user_stage === "string" && value.user_stage.trim() ? value.user_stage.trim() : fallback.user_stage,
+    scene_type: boundedString(value.scene_type, "scene_brief.scene_type", {
+      maxLength: API_INPUT_LIMITS.sceneLabelLength,
+      fallback: fallback.scene_type
+    }),
+    vehicle_type: boundedString(value.vehicle_type, "scene_brief.vehicle_type", {
+      maxLength: API_INPUT_LIMITS.sceneLabelLength,
+      fallback: fallback.vehicle_type
+    }),
+    user_stage: boundedString(value.user_stage, "scene_brief.user_stage", {
+      maxLength: API_INPUT_LIMITS.sceneLabelLength,
+      fallback: fallback.user_stage
+    }),
     budget,
     priority_style: priorityStyle,
-    already_have: asStringArray(value.already_have, fallback.already_have),
-    avoid_items: asStringArray(value.avoid_items, fallback.avoid_items),
-    optional_notes:
-      typeof value.optional_notes === "string" && value.optional_notes.trim()
-        ? value.optional_notes.trim()
-        : fallback.optional_notes
+    already_have: asStringArray(value.already_have, fallback.already_have, "scene_brief.already_have"),
+    avoid_items: asStringArray(value.avoid_items, fallback.avoid_items, "scene_brief.avoid_items"),
+    optional_notes: boundedString(value.optional_notes, "scene_brief.optional_notes", {
+      maxLength: API_INPUT_LIMITS.optionalNotesLength,
+      fallback: fallback.optional_notes
+    })
   }, fallback);
 }
 
 export async function POST(request: NextRequest) {
   try {
     const identity = await getRequestIdentity();
-    const body = await request.json().catch(() => ({}));
+    await enforceAiRateLimit(request, identity.userId);
+    const body = await readJsonObject(request);
     const sceneBriefInput = isRecord(body.scene_brief) ? body.scene_brief : undefined;
     const scenarioId = isScenarioId(body.scenario_id)
       ? body.scenario_id
       : isScenarioId(sceneBriefInput?.scenario_id)
         ? sceneBriefInput.scenario_id
         : "new-car";
-    const rawInput =
-      (typeof body.raw_input === "string" ? body.raw_input : undefined) ??
-      (sceneBriefInput
-        ? `${sceneBriefInput.vehicle_type ?? ""} ${sceneBriefInput.user_stage ?? ""} 预算 ${sceneBriefInput.budget ?? ""} ${sceneBriefInput.priority_style ?? ""} ${sceneBriefInput.optional_notes ?? ""}`
-        : undefined);
+    const providedRawInput = boundedString(body.raw_input, "raw_input", {
+      maxLength: API_INPUT_LIMITS.sceneInputLength,
+      required: !sceneBriefInput
+    });
 
     const parseDeepSeekMode = asDeepSeekMode(body.parse_deepseek_mode);
 
-    const state = sceneBriefInput
-      ? await createSessionFromScene(
+    const normalizedSceneBrief = sceneBriefInput
+      ? normalizeSceneBriefInput(sceneBriefInput, mockParseScene(providedRawInput, scenarioId))
+      : undefined;
+    const rawInput = providedRawInput || (normalizedSceneBrief
+      ? `${normalizedSceneBrief.vehicle_type} ${normalizedSceneBrief.user_stage} 预算 ${normalizedSceneBrief.budget} ${normalizedSceneBrief.priority_style} ${normalizedSceneBrief.optional_notes}`.trim()
+      : "");
+
+    const state = await withAiConcurrencyLimit(request, identity.userId, () => normalizedSceneBrief
+      ? createSessionFromScene(
           rawInput ?? "",
-          normalizeSceneBriefInput(sceneBriefInput, mockParseScene(rawInput ?? "", scenarioId)),
+          normalizedSceneBrief,
           parseDeepSeekMode,
           identity.userId
         )
-      : await initializeSession(rawInput, scenarioId, identity.userId);
+      : initializeSession(rawInput, scenarioId, identity.userId));
 
     return apiOk({
       session_id: state.session_id,

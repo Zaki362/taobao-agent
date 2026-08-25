@@ -8,6 +8,7 @@ import { getLegacyHostedAccess } from "@/lib/auth/hosted-worker";
 import { advanceAgentWorkflow } from "@/lib/agent/workflow-runner";
 import { reviewModuleCandidatesWithAgent } from "@/lib/agent/candidate-reviewer";
 import { mergeAndRankModuleCandidates } from "@/lib/agent/candidate-ranker";
+import { API_INPUT_LIMITS, readJsonObject } from "@/lib/api/validation";
 
 function optionalString(value: unknown) {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
@@ -16,7 +17,7 @@ function optionalString(value: unknown) {
 export async function POST(request: NextRequest) {
   try {
     const access = await getLegacyHostedAccess(request);
-    const body = await request.json().catch(() => ({}));
+    const body = await readJsonObject(request, API_INPUT_LIMITS.executorBodyBytes);
     const sessionId = requireString(body.session_id, "session_id");
     const taskId = requireString(body.task_id, "task_id");
     const session = await ensureSession(sessionId, access.userId);

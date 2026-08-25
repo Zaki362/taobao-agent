@@ -2,14 +2,21 @@ import { NextRequest } from "next/server";
 import { refineSession } from "@/lib/agent/orchestrator";
 import { apiOk, apiRouteError, requireString } from "@/lib/api/responses";
 import { getRequestIdentity } from "@/lib/auth/request";
+import { enforceAiRateLimit, withAiConcurrencyLimit } from "@/lib/security/rate-limit";
+import { readJsonObject } from "@/lib/api/validation";
 
 export async function POST(request: NextRequest) {
   try {
     const identity = await getRequestIdentity();
-    const body = await request.json().catch(() => ({}));
+    await enforceAiRateLimit(request, identity.userId);
+    const body = await readJsonObject(request);
     const sessionId = requireString(body.session_id, "session_id");
-    const quickAction = requireString(body.quick_action, "quick_action");
-    const result = await refineSession(sessionId, quickAction, identity.userId);
+    const quickAction = requireString(body.quick_action, "quick_action", 200);
+    const result = await withAiConcurrencyLimit(
+      request,
+      identity.userId,
+      () => refineSession(sessionId, quickAction, identity.userId)
+    );
     return apiOk({
       session_id: result.state.session_id,
       scene_brief: result.state.scene_brief,

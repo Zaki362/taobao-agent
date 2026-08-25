@@ -7,6 +7,7 @@ import { getMcpToolDefinition, isMcpToolName, validateMcpToolInput } from "@/lib
 import { persistSession } from "@/lib/session/repository";
 import { getRequestIdentity } from "@/lib/auth/request";
 import { isMcpDebugEnabled } from "@/lib/runtime/product-mode";
+import { readJsonObject } from "@/lib/api/validation";
 
 export async function POST(request: NextRequest) {
   try {
@@ -19,7 +20,7 @@ export async function POST(request: NextRequest) {
       return conflict("当前为持久队列执行模式，不能从 Next.js 请求进程直接调用 MCP 工具。");
     }
 
-    const body = await request.json().catch(() => ({}));
+    const body = await readJsonObject(request);
     const sessionId = requireString(body.session_id, "session_id");
     const state = await ensureSession(sessionId, identity.userId);
     if (!state) {

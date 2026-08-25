@@ -4,7 +4,8 @@ export class ApiRouteError extends Error {
   constructor(
     message: string,
     public readonly status = 500,
-    public readonly code = "internal_error"
+    public readonly code = "internal_error",
+    public readonly headers?: HeadersInit
   ) {
     super(message);
   }
@@ -14,13 +15,13 @@ export function apiOk<T>(payload: T, status = 200) {
   return NextResponse.json(payload, { status });
 }
 
-export function apiError(message: string, status = 500, code = "internal_error") {
+export function apiError(message: string, status = 500, code = "internal_error", headers?: HeadersInit) {
   return NextResponse.json(
     {
       error: message,
       code
     },
-    { status }
+    { status, headers }
   );
 }
 
@@ -36,11 +37,15 @@ export function conflict(message: string) {
   return apiError(message, 409, "conflict");
 }
 
-export function requireString(value: unknown, fieldName: string) {
+export function requireString(value: unknown, fieldName: string, maxLength = 4_096) {
   if (typeof value !== "string" || !value.trim()) {
     throw new ApiRouteError(`${fieldName} is required`, 400, "bad_request");
   }
-  return value.trim();
+  const normalized = value.trim();
+  if (normalized.length > maxLength) {
+    throw new ApiRouteError(`${fieldName} must be at most ${maxLength} characters`, 400, "input_too_long");
+  }
+  return normalized;
 }
 
 function redactSensitiveText(message: string) {
@@ -132,7 +137,7 @@ function toPublicError(message: string, fallbackMessage: string) {
 
 export function apiRouteError(error: unknown, fallbackMessage: string) {
   if (error instanceof ApiRouteError) {
-    return apiError(redactSensitiveText(error.message), error.status, error.code);
+    return apiError(redactSensitiveText(error.message), error.status, error.code, error.headers);
   }
   if (error instanceof Error && error.name === "InvalidSearchKeywordError") {
     return apiError(redactSensitiveText(error.message), 400, "invalid_search_keyword");

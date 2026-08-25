@@ -42,6 +42,15 @@ describe("API error boundary", () => {
     });
   });
 
+  it("preserves safe retry metadata for rate-limited responses", () => {
+    const response = apiRouteError(
+      new ApiRouteError("请稍后重试", 429, "rate_limited", { "Retry-After": "30" }),
+      "rate limit failed"
+    );
+    expect(response.status).toBe(429);
+    expect(response.headers.get("retry-after")).toBe("30");
+  });
+
   it("keeps the existing safe mapping for known external tool failures", async () => {
     vi.spyOn(console, "error").mockImplementation(() => undefined);
     const response = apiRouteError(new Error("ETIMEDOUT"), "mcp run failed");

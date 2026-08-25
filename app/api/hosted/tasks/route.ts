@@ -5,6 +5,7 @@ import { buildHostedTaskInstruction } from "@/lib/mcp/hosted-protocol";
 import { loadSessions, persistSession } from "@/lib/session/repository";
 import { isHostedExecutionTask } from "@/lib/session/guards";
 import { getLegacyHostedAccess } from "@/lib/auth/hosted-worker";
+import { API_INPUT_LIMITS, readJsonObject } from "@/lib/api/validation";
 
 export async function GET(request: NextRequest) {
   try {
@@ -48,7 +49,7 @@ export async function GET(request: NextRequest) {
 export async function POST(request: NextRequest) {
   try {
     const access = await getLegacyHostedAccess(request);
-    const body = await request.json().catch(() => ({}));
+    const body = await readJsonObject(request, API_INPUT_LIMITS.executorBodyBytes);
     const sessionId = requireString(body.session_id, "session_id");
     const taskId = requireString(body.task_id, "task_id");
     const session = await ensureSession(sessionId, access.userId);

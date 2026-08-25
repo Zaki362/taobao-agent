@@ -2,11 +2,14 @@ import { NextRequest } from "next/server";
 import { ApiRouteError, apiOk, apiRouteError, requireString } from "@/lib/api/responses";
 import { getRequestIdentity } from "@/lib/auth/request";
 import { ShoppingSessionLifecycleError, updateShoppingSessionLifecycle } from "@/lib/session/lifecycle";
+import { enforceWorkflowMutationRateLimit } from "@/lib/security/rate-limit";
+import { readJsonObject } from "@/lib/api/validation";
 
 export async function POST(request: NextRequest) {
   try {
     const identity = await getRequestIdentity();
-    const body = await request.json().catch(() => ({}));
+    await enforceWorkflowMutationRateLimit(request, identity.userId);
+    const body = await readJsonObject(request);
     if (body.confirmed !== true) {
       throw new ApiRouteError("归档或恢复购物任务需要用户显式确认。", 400, "confirmation_required");
     }

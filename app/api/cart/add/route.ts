@@ -2,11 +2,14 @@ import { NextRequest } from "next/server";
 import { addToCart } from "@/lib/agent/orchestrator";
 import { apiOk, apiRouteError, conflict, requireString } from "@/lib/api/responses";
 import { getRequestIdentity } from "@/lib/auth/request";
+import { enforceWorkflowMutationRateLimit } from "@/lib/security/rate-limit";
+import { readJsonObject } from "@/lib/api/validation";
 
 export async function POST(request: NextRequest) {
   try {
     const identity = await getRequestIdentity();
-    const body = await request.json().catch(() => ({}));
+    await enforceWorkflowMutationRateLimit(request, identity.userId);
+    const body = await readJsonObject(request);
     const sessionId = requireString(body.session_id, "session_id");
     const productId = requireString(body.product_id, "product_id");
     if (body.confirmed !== true) {

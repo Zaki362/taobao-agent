@@ -1,5 +1,5 @@
 import { getConfiguredExecutionBackend, getExecutionBackend } from "@/lib/mcp/client";
-import { isAuthenticationRequired, useSecureAuthCookie } from "@/lib/auth/request";
+import { isAuthenticationRequired, shouldUseSecureAuthCookie } from "@/lib/auth/request";
 import { query } from "@/lib/runtime/database";
 import { getRuntimeRepository, runtimeStoreMode } from "@/lib/runtime";
 import { allowDemoCartFallback, getProductMode, isMcpDebugEnabled } from "@/lib/runtime/product-mode";
@@ -53,7 +53,7 @@ export async function inspectRuntimeReadiness(userId?: string) {
   const authConfigured = process.env.AUTH_REQUIRED === "true";
   const authRequired = isAuthenticationRequired();
   const secureCookieConfigured = process.env.AUTH_COOKIE_SECURE === "true";
-  const secureCookie = useSecureAuthCookie();
+  const secureCookie = shouldUseSecureAuthCookie();
   const deepSeekConfigured = configured(process.env.DEEPSEEK_API_KEY) && process.env.DEEPSEEK_DISABLED !== "true";
   const llmRuntime = summarizeLlmRuntimeStatus();
   const productMode = getProductMode();

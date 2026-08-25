@@ -1,11 +1,16 @@
+import fs from "node:fs";
 import { describe, expect, it } from "vitest";
-import { shouldRunProductionMigrations } from "../../scripts/build.mjs";
 
 describe("production build migration gate", () => {
-  it("runs migrations only for Vercel Production builds", () => {
-    expect(shouldRunProductionMigrations({ VERCEL_ENV: "production" })).toBe(true);
-    expect(shouldRunProductionMigrations({ VERCEL_ENV: "preview" })).toBe(false);
-    expect(shouldRunProductionMigrations({ VERCEL_ENV: "development" })).toBe(false);
-    expect(shouldRunProductionMigrations({})).toBe(false);
+  it("keeps database mutations out of the Next.js build phase", () => {
+    const buildScript = fs.readFileSync(new URL("../../scripts/build.mjs", import.meta.url), "utf8");
+    expect(buildScript).not.toContain("db-migrate.mjs");
+    expect(buildScript).not.toContain("db-check.mjs");
+  });
+
+  it("serializes concurrent migration runners with a PostgreSQL advisory lock", () => {
+    const migrationScript = fs.readFileSync(new URL("../../scripts/db-migrate.mjs", import.meta.url), "utf8");
+    expect(migrationScript).toContain("pg_advisory_xact_lock");
+    expect(migrationScript).toContain("scenecart:schema-migrations");
   });
 });

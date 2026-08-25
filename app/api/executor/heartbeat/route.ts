@@ -1,4 +1,5 @@
 import { NextRequest } from "next/server";
+import { API_INPUT_LIMITS, readJsonObject } from "@/lib/api/validation";
 import { ApiRouteError, apiOk, apiRouteError } from "@/lib/api/responses";
 import { getRuntimeRepository } from "@/lib/runtime";
 import {
@@ -20,7 +21,7 @@ export async function POST(request: NextRequest) {
   try {
     const drainingPreviousProtocol = isPreviousExecutorProtocolDrain(request);
     if (!drainingPreviousProtocol) assertExecutorProtocol(request);
-    const body = await request.json().catch(() => ({}));
+    const body = await readJsonObject(request, API_INPUT_LIMITS.executorBodyBytes);
     const currentJobId = typeof body.current_job_id === "string" ? body.current_job_id : undefined;
     if (drainingPreviousProtocol && !currentJobId) {
       assertPreviousProtocolInFlightJob(null, "");

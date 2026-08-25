@@ -2,16 +2,21 @@ import { NextRequest } from "next/server";
 import { advanceAgentWorkflow } from "@/lib/agent/workflow-runner";
 import { apiOk, apiRouteError, requireString } from "@/lib/api/responses";
 import { getRequestIdentity } from "@/lib/auth/request";
+import { enforceAiRateLimit, withAiConcurrencyLimit } from "@/lib/security/rate-limit";
+import { readJsonObject } from "@/lib/api/validation";
 
 export async function POST(request: NextRequest) {
   try {
     const identity = await getRequestIdentity();
-    const body = await request.json().catch(() => ({}));
+    await enforceAiRateLimit(request, identity.userId);
+    const body = await readJsonObject(request);
     const sessionId = requireString(body.session_id, "session_id");
-    const result = await advanceAgentWorkflow(sessionId, identity.userId, {
-      start: true,
-      trigger: "user_start"
-    });
+    const result = await withAiConcurrencyLimit(request, identity.userId, () =>
+      advanceAgentWorkflow(sessionId, identity.userId, {
+        start: true,
+        trigger: "user_start"
+      })
+    );
 
     return apiOk({
       outcome: result.outcome,

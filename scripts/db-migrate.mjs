@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import path from "node:path";
 import process from "node:process";
 import pg from "pg";
+import { databaseSslConfig } from "./database-ssl.mjs";
 
 const { Pool } = pg;
 const databaseUrl = process.env.DATABASE_URL_UNPOOLED || process.env.DATABASE_URL;
@@ -13,7 +14,7 @@ if (!databaseUrl) {
 
 const pool = new Pool({
   connectionString: databaseUrl,
-  ssl: process.env.DATABASE_SSL === "true" ? { rejectUnauthorized: false } : undefined
+  ssl: databaseSslConfig()
 });
 
 const migrationsDir = path.join(process.cwd(), "db", "migrations");
@@ -26,6 +27,10 @@ function checksum(sql) {
 const client = await pool.connect();
 try {
   await client.query("BEGIN");
+  await client.query(
+    "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+    ["scenecart:schema-migrations"]
+  );
   await client.query(`
     CREATE TABLE IF NOT EXISTS schema_migrations (
       name TEXT PRIMARY KEY,

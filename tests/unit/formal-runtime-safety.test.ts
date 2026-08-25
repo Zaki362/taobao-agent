@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { isAuthenticationRequired, useSecureAuthCookie } from "@/lib/auth/request";
+import { isAuthenticationRequired, shouldUseSecureAuthCookie } from "@/lib/auth/request";
 import { assertRuntimeRepositoryConfiguration, getRuntimeRepository } from "@/lib/runtime";
 
 const original = {
@@ -64,13 +64,13 @@ describe("formal runtime safety", () => {
     process.env.APP_ORIGIN = "https://scenecart.example.com";
     process.env.AUTH_COOKIE_SECURE = "false";
 
-    expect(useSecureAuthCookie()).toBe(true);
+    expect(shouldUseSecureAuthCookie()).toBe(true);
   });
 
   it("keeps an HTTP local production preview usable when explicitly requested", () => {
     process.env.APP_ORIGIN = "http://127.0.0.1:3000";
     process.env.AUTH_COOKIE_SECURE = "false";
 
-    expect(useSecureAuthCookie()).toBe(false);
+    expect(shouldUseSecureAuthCookie()).toBe(false);
   });
 });

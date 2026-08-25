@@ -35,6 +35,9 @@ ALLOW_DEMO_CART_FALLBACK=false
 RUNTIME_STORE=postgres
 DATABASE_URL=postgresql://USER:PASSWORD@HOST:5432/scenecart
 DATABASE_SSL=true
+DATABASE_SSL_REJECT_UNAUTHORIZED=true
+# 私有 CA 场景可额外配置 PEM 内容；不要关闭证书校验
+DATABASE_SSL_CA=
 DATABASE_POOL_SIZE=10
 AUTH_REQUIRED=true
 AUTH_SESSION_TTL_DAYS=30
@@ -47,6 +50,8 @@ DEEPSEEK_REASONER_MODEL=deepseek-reasoner
 ```
 
 正式模式采用 fail-closed 运行契约：即使误设 `AUTH_REQUIRED=false`，请求仍会被强制要求账号身份；即使误设 `AUTH_COOKIE_SECURE=false`，只要 `APP_ORIGIN` 是 HTTPS，登录 Cookie 仍会强制使用 `Secure`；如果未启用 PostgreSQL 或缺少 `DATABASE_URL`，会话、认证和任务仓库会直接拒绝读写，不会静默回退到本地开发存储。Readiness 仍会把这些被安全兜底的误配置标记为失败，必须修正环境变量后才能发布。
+
+数据库迁移必须在独立 release 阶段运行 `npm run db:migrate && npm run db:check`；应用构建不会修改数据库。迁移器持有 transaction-level advisory lock，因此并发发布会串行核对迁移及 checksum。
 
 执行 migration：
 

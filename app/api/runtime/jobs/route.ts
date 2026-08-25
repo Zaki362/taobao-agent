@@ -3,6 +3,7 @@ import { getRequestIdentity } from "@/lib/auth/request";
 import { apiOk, apiRouteError, requireString } from "@/lib/api/responses";
 import { getRuntimeRepository } from "@/lib/runtime";
 import { ensureSession } from "@/lib/agent/orchestrator";
+import { publicRuntimeJob } from "@/lib/runtime/public-dto";
 
 export async function GET(request: NextRequest) {
   try {
@@ -11,7 +12,7 @@ export async function GET(request: NextRequest) {
     const session = await ensureSession(sessionId, identity.userId);
     if (!session) return apiOk({ jobs: [] });
     const jobs = await getRuntimeRepository().listJobs(sessionId, identity.userId);
-    return apiOk({ jobs });
+    return apiOk({ jobs: jobs.map(publicRuntimeJob) });
   } catch (error) {
     return apiRouteError(error, "failed to list runtime jobs");
   }

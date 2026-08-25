@@ -1,4 +1,5 @@
 import { NextRequest } from "next/server";
+import { API_INPUT_LIMITS, readJsonObject } from "@/lib/api/validation";
 import { ApiRouteError, apiOk, apiRouteError } from "@/lib/api/responses";
 import { getRuntimeRepository } from "@/lib/runtime";
 import {
@@ -62,7 +63,7 @@ export async function POST(
     const responseProtocolVersion = drainingPreviousProtocol
       ? receivedExecutorProtocol(request)!
       : EXECUTOR_PROTOCOL_VERSION;
-    const body = await request.json().catch(() => ({}));
+    const body = await readJsonObject(request, API_INPUT_LIMITS.executorBodyBytes);
     const leaseToken = drainingPreviousProtocol
       ? existingJob.lease_token ?? ""
       : typeof body.lease_token === "string" ? body.lease_token : "";

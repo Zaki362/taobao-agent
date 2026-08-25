@@ -2,13 +2,15 @@ import { NextRequest } from "next/server";
 import { getRequestIdentity } from "@/lib/auth/request";
 import { ApiRouteError, apiOk, apiRouteError } from "@/lib/api/responses";
 import { cancelPendingRuntimeJob } from "@/lib/runtime/jobs";
+import { enforceWorkflowMutationRateLimit } from "@/lib/security/rate-limit";
 
 export async function POST(
-  _request: NextRequest,
+  request: NextRequest,
   context: { params: Promise<{ jobId: string }> }
 ) {
   try {
     const identity = await getRequestIdentity();
+    await enforceWorkflowMutationRateLimit(request, identity.userId);
     const { jobId } = await context.params;
     const job = await cancelPendingRuntimeJob(jobId, identity.userId);
     if (!job) {

@@ -5,11 +5,14 @@ import {
 import { applyMarketBudgetSuggestion } from "@/lib/agent/orchestrator";
 import { ApiRouteError, apiOk, apiRouteError, requireString } from "@/lib/api/responses";
 import { getRequestIdentity } from "@/lib/auth/request";
+import { enforceWorkflowMutationRateLimit } from "@/lib/security/rate-limit";
+import { readJsonObject } from "@/lib/api/validation";
 
 export async function POST(request: NextRequest) {
   try {
     const identity = await getRequestIdentity();
-    const body = await request.json().catch(() => ({}));
+    await enforceWorkflowMutationRateLimit(request, identity.userId);
+    const body = await readJsonObject(request);
     if (body.confirmed !== true) {
       throw new ApiRouteError("必须由用户显式确认预算调配。", 400, "confirmation_required");
     }

@@ -7,6 +7,7 @@ import { recoverAgentWorkflows } from "@/lib/agent/workflow-recovery";
 import { closeDatabasePoolForTests, query, withWorkflowSessionLock } from "@/lib/runtime/database";
 import { applyCompletedRuntimeJob, enqueueModuleSearchJob } from "@/lib/runtime/jobs";
 import { postgresRuntimeRepository } from "@/lib/runtime/postgres-repository";
+import { runRuntimeRetention } from "@/lib/runtime/retention";
 import type { ExecutorDevice, RuntimeUser } from "@/lib/runtime/types";
 import { updateShoppingSessionLifecycle } from "@/lib/session/lifecycle";
 import { createSessionFixture } from "@/tests/fixtures/session";
@@ -78,6 +79,46 @@ describeWithDatabase("PostgreSQL production runtime contract", () => {
     expect(latest).toMatchObject({ status: "healthy", metadata: { failed: 0 } });
     expect((await postgresRuntimeRepository.getServiceHeartbeat("workflow_recovery"))?.checked_at)
       .toBe(latestTime);
+  });
+
+  it("removes expired authentication and security records through the retention job", async () => {
+    const authSessionId = randomUUID();
+    const tokenHash = `expired-token-${randomUUID()}`;
+    const rateLimitKey = `expired-rate-${randomUUID()}`;
+    const concurrencyKey = `expired-concurrency-${randomUUID()}`;
+    await query("DELETE FROM runtime_service_heartbeats WHERE service_name = $1", ["runtime-retention"]);
+    await query(
+      `INSERT INTO auth_sessions(id, user_id, token_hash, expires_at, created_at, last_seen_at)
+       VALUES($1, $2, $3, NOW() - INTERVAL '1 day', NOW() - INTERVAL '2 days', NOW() - INTERVAL '2 days')`,
+      [authSessionId, userId, tokenHash]
+    );
+    await query(
+      `INSERT INTO security_rate_limits(key_hash, attempt_count, window_started_at, updated_at)
+       VALUES($1, 1, NOW() - INTERVAL '10 days', NOW() - INTERVAL '10 days')`,
+      [rateLimitKey]
+    );
+    await query(
+      `INSERT INTO security_concurrency_leases(key_hash, lease_token, expires_at, updated_at)
+       VALUES($1, $2, NOW() - INTERVAL '1 day', NOW() - INTERVAL '1 day')`,
+      [concurrencyKey, randomUUID()]
+    );
+
+    const result = await runRuntimeRetention();
+    expect(result.status).toBe("completed");
+    expect(result.deleted).toMatchObject({
+      auth_sessions: expect.any(Number),
+      rate_limits: expect.any(Number),
+      concurrency_leases: expect.any(Number)
+    });
+    const remaining = await query<{ count: string }>(
+      `SELECT COUNT(*)::text AS count FROM (
+         SELECT token_hash AS key FROM auth_sessions WHERE token_hash = $1
+         UNION ALL SELECT key_hash FROM security_rate_limits WHERE key_hash = $2
+         UNION ALL SELECT key_hash FROM security_concurrency_leases WHERE key_hash = $3
+       ) records`,
+      [tokenHash, rateLimitKey, concurrencyKey]
+    );
+    expect(remaining.rows[0]?.count).toBe("0");
   });
 
   it("enforces queue leases, idempotency, event ordering and replay-safe completion", async () => {

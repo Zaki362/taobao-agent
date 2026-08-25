@@ -64,6 +64,15 @@ const checks = [
     "设置 RUNTIME_STORE=postgres 和 DATABASE_URL"
   ),
   check(
+    "database_tls",
+    "PostgreSQL TLS 证书校验",
+    process.env.DATABASE_SSL === "true" && process.env.DATABASE_SSL_REJECT_UNAUTHORIZED !== "false",
+    process.env.DATABASE_SSL === "true" && process.env.DATABASE_SSL_REJECT_UNAUTHORIZED !== "false"
+      ? "数据库 TLS 已启用且校验证书"
+      : "数据库 TLS 未启用或证书校验被关闭",
+    "设置 DATABASE_SSL=true、DATABASE_SSL_REJECT_UNAUTHORIZED=true；私有 CA 使用 DATABASE_SSL_CA"
+  ),
+  check(
     "authentication",
     "强制用户认证",
     process.env.AUTH_REQUIRED === "true",

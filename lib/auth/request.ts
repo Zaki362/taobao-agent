@@ -14,7 +14,7 @@ function hasHttpsAppOrigin() {
   return origins.length > 0 && origins.every((origin) => /^https:\/\//i.test(origin));
 }
 
-export function useSecureAuthCookie() {
+export function shouldUseSecureAuthCookie() {
   // An explicit false must never downgrade cookies on a configured HTTPS deployment.
   if (hasHttpsAppOrigin()) return true;
   if (process.env.AUTH_COOKIE_SECURE === "true") return true;

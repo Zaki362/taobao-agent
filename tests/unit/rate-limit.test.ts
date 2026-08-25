@@ -1,6 +1,12 @@
 import { NextRequest } from "next/server";
 import { beforeEach, describe, expect, it } from "vitest";
-import { clearAuthRateLimit, enforceAuthRateLimit, resetRateLimitsForTests } from "@/lib/security/rate-limit";
+import {
+  clearAuthRateLimit,
+  acquireEventStreamLease,
+  enforceAuthRateLimit,
+  resetRateLimitsForTests,
+  withAiConcurrencyLimit
+} from "@/lib/security/rate-limit";
 
 describe("authentication rate limit", () => {
   beforeEach(() => resetRateLimitsForTests());
@@ -41,5 +47,51 @@ describe("authentication rate limit", () => {
       subject: "ok@example.com",
       limit: 1
     })).resolves.toBeUndefined();
+  });
+
+  it("blocks registration bursts even when every attempt changes the email", async () => {
+    const request = new NextRequest("http://localhost/api/auth/register", { method: "POST" });
+    await enforceAuthRateLimit(request, { action: "register", subject: "first@example.com", ipLimit: 2 });
+    await enforceAuthRateLimit(request, { action: "register", subject: "second@example.com", ipLimit: 2 });
+    await expect(enforceAuthRateLimit(request, {
+      action: "register",
+      subject: "third@example.com",
+      ipLimit: 2
+    })).rejects.toMatchObject({ status: 429, code: "rate_limited" });
+  });
+
+  it("allows only one concurrent AI workflow per identity", async () => {
+    const request = new NextRequest("http://localhost/api/scene/plan", { method: "POST" });
+    let release!: () => void;
+    let started!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const active = new Promise<void>((resolve) => { started = resolve; });
+    const first = withAiConcurrencyLimit(request, "user-1", async () => {
+      started();
+      await gate;
+      return "done";
+    });
+    await active;
+
+    await expect(withAiConcurrencyLimit(request, "user-1", async () => "duplicate"))
+      .rejects.toMatchObject({ status: 429, code: "workflow_concurrency_limited" });
+    release();
+    await expect(first).resolves.toBe("done");
+    await expect(withAiConcurrencyLimit(request, "user-1", async () => "next"))
+      .resolves.toBe("next");
+  });
+
+  it("caps concurrent event streams per session", async () => {
+    const request = new NextRequest("http://localhost/api/runtime/events/stream");
+    const releases = await Promise.all([
+      acquireEventStreamLease(request, "user-1", "session-1"),
+      acquireEventStreamLease(request, "user-1", "session-1"),
+      acquireEventStreamLease(request, "user-1", "session-1")
+    ]);
+    await expect(acquireEventStreamLease(request, "user-1", "session-1"))
+      .rejects.toMatchObject({ status: 429, code: "event_stream_concurrency_limited" });
+    await releases[0]();
+    const replacement = await acquireEventStreamLease(request, "user-1", "session-1");
+    await Promise.all([...releases.slice(1).map((release) => release()), replacement()]);
   });
 });
