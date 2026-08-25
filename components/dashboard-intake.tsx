@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import Link from "next/link";
 import {
   Archive,
   ArchiveRestore,
@@ -23,8 +24,10 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { API_INPUT_LIMITS } from "@/lib/api/input-limits";
 import { Textarea } from "@/components/ui/textarea";
 import {
+  clearWorkflowStorageForOwner,
   scenarioOptions,
   stageLabels,
 } from "@/components/dashboard-config";
@@ -81,29 +84,50 @@ const workflowPhases: Array<{ label: string; stages: WorkflowStage[] }> = [
   { label: "推荐", stages: ["review_results", "carting", "cart_review"] }
 ];
 
-export function TopHeader({ currentStage }: { currentStage: WorkflowStage }) {
+export type DashboardNavigationDestination = "home" | "history" | "settings" | "login";
+
+export function TopHeader({
+  currentStage,
+  authMode = "live",
+  onNavigationRequest
+}: {
+  currentStage: WorkflowStage;
+  authMode?: "live" | "frozen-demo";
+  onNavigationRequest?: (destination: DashboardNavigationDestination) => void;
+}) {
   const [authenticated, setAuthenticated] = useState(false);
   const [authenticationRequired, setAuthenticationRequired] = useState(false);
+  const [accountId, setAccountId] = useState("");
   const activePhaseIndex = Math.max(0, workflowPhases.findIndex((phase) => phase.stages.includes(currentStage)));
 
   useEffect(() => {
+    if (authMode === "frozen-demo") return;
     fetch("/api/auth/me")
       .then((response) => response.json())
       .then((payload) => {
         setAuthenticated(payload.authenticated === true);
         setAuthenticationRequired(payload.authentication_required === true);
+        setAccountId(typeof payload.user?.id === "string" ? payload.user.id : "");
       })
       .catch(() => undefined);
-  }, []);
+  }, [authMode]);
 
   async function logout() {
     await fetch("/api/auth/logout", { method: "POST" }).catch(() => undefined);
+    clearWorkflowStorageForOwner(
+      window.localStorage,
+      accountId ? `user:${accountId}` : authenticationRequired ? undefined : "anonymous"
+    );
     window.location.assign(authenticationRequired ? "/login" : "/");
   }
 
   return (
     <header className="workflow-header">
-      <button type="button" className="flex min-w-0 items-center gap-3 text-left" onClick={() => window.location.assign("/")}>
+      <button
+        type="button"
+        className="flex min-w-0 items-center gap-3 text-left"
+        onClick={() => onNavigationRequest ? onNavigationRequest("home") : window.location.assign("/")}
+      >
         <BrandMark />
         <span>
           <span className="block text-[15px] font-semibold leading-none tracking-tight">SceneCart</span>
@@ -123,17 +147,45 @@ export function TopHeader({ currentStage }: { currentStage: WorkflowStage }) {
       </div>
       <span className="workflow-stage-pill lg:hidden">{stageLabels[currentStage]}</span>
       <nav className="ml-auto flex items-center gap-1.5">
-        <a href="/hosted" className="header-icon-link" title="执行详情" aria-label="执行详情">
+        <a
+          href={onNavigationRequest ? "/demo" : "/hosted"}
+          className="header-icon-link"
+          title="执行详情"
+          aria-label="执行详情"
+          onClick={(event) => {
+            if (!onNavigationRequest) return;
+            event.preventDefault();
+            onNavigationRequest("history");
+          }}
+        >
           <History className="h-4 w-4" />
         </a>
-        <a href="/settings/executor" className="header-icon-link" title="执行器设置" aria-label="执行器设置">
+        <a
+          href={onNavigationRequest ? "/demo" : "/settings/executor"}
+          className="header-icon-link"
+          title="执行器设置"
+          aria-label="执行器设置"
+          onClick={(event) => {
+            if (!onNavigationRequest) return;
+            event.preventDefault();
+            onNavigationRequest("settings");
+          }}
+        >
           <Settings2 className="h-4 w-4" />
         </a>
         {authenticationRequired ? (
           authenticated ? (
             <button type="button" onClick={logout} className="header-text-link">退出</button>
           ) : (
-            <a href="/login" className="header-text-link">登录</a>
+            <a
+              href={onNavigationRequest ? "/demo" : "/login"}
+              className="header-text-link"
+              onClick={(event) => {
+                if (!onNavigationRequest) return;
+                event.preventDefault();
+                onNavigationRequest("login");
+              }}
+            >登录</a>
           )
         ) : null}
       </nav>
@@ -158,7 +210,9 @@ export function LandingPage({
   lifecycleSessionId,
   onResumeSession,
   onArchiveSession,
-  onRestoreSession
+  onRestoreSession,
+  authMode = "live",
+  onNavigationRequest
 }: {
   selectedScenario: ScenarioId;
   onScenarioChange: (scenarioId: ScenarioId) => void;
@@ -177,45 +231,79 @@ export function LandingPage({
   onResumeSession: (session: ShoppingSessionSummary) => void;
   onArchiveSession: (session: ShoppingSessionSummary) => void;
   onRestoreSession: (session: ShoppingSessionSummary) => void;
+  authMode?: "live" | "frozen-demo";
+  onNavigationRequest?: (destination: DashboardNavigationDestination) => void;
 }) {
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const [authenticated, setAuthenticated] = useState(false);
   const [authenticationRequired, setAuthenticationRequired] = useState(false);
   const [accountEmail, setAccountEmail] = useState("");
+  const [accountId, setAccountId] = useState("");
   const [accountMenuOpen, setAccountMenuOpen] = useState(false);
   const canStart = sceneInput.trim().length >= 6 && interactiveReady && !busy;
   const scenario = getScenarioConfig(selectedScenario);
 
   useEffect(() => {
+    if (authMode === "frozen-demo") return;
     fetch("/api/auth/me")
       .then((response) => response.json())
       .then((payload) => {
         setAuthenticated(payload.authenticated === true);
         setAuthenticationRequired(payload.authentication_required === true);
         setAccountEmail(typeof payload.user?.email === "string" ? payload.user.email : "");
+        setAccountId(typeof payload.user?.id === "string" ? payload.user.id : "");
       })
       .catch(() => undefined);
-  }, []);
+  }, [authMode]);
 
   async function logout() {
     setAccountMenuOpen(false);
     await fetch("/api/auth/logout", { method: "POST" }).catch(() => undefined);
+    clearWorkflowStorageForOwner(window.localStorage, accountId ? `user:${accountId}` : undefined);
     window.location.assign("/login");
   }
 
   return (
     <div className="landing-shell">
       <header className="landing-nav">
-        <a href="/" className="flex items-center gap-3">
+        <Link
+          href={onNavigationRequest ? "/demo" : "/"}
+          className="flex items-center gap-3"
+          onClick={(event) => {
+            if (!onNavigationRequest) return;
+            event.preventDefault();
+            onNavigationRequest("home");
+          }}
+        >
           <BrandMark />
           <span className="text-[15px] font-semibold tracking-tight">SceneCart</span>
           <span className="hidden text-xs text-muted-foreground sm:inline">场景化购物助手</span>
-        </a>
+        </Link>
         <nav className="flex items-center gap-1.5">
-          <a href="#recent-tasks" className="header-icon-link" title="最近任务" aria-label="最近任务">
+          <a
+            href={onNavigationRequest ? "/demo" : "#recent-tasks"}
+            className="header-icon-link"
+            title="最近任务"
+            aria-label="最近任务"
+            onClick={(event) => {
+              if (!onNavigationRequest) return;
+              event.preventDefault();
+              onNavigationRequest("history");
+            }}
+          >
             <History className="h-4 w-4" />
           </a>
-          <a href="/settings/executor" className="header-icon-link" title="设置" aria-label="设置">
+          <a
+            href={onNavigationRequest ? "/demo" : "/settings/executor"}
+            className="header-icon-link"
+            title="设置"
+            aria-label="设置"
+            onClick={(event) => {
+              if (!onNavigationRequest) return;
+              event.preventDefault();
+              onNavigationRequest("settings");
+            }}
+          >
             <Settings2 className="h-4 w-4" />
           </a>
           {authenticationRequired ? (
@@ -244,9 +332,14 @@ export function LandingPage({
                       </p>
                     </div>
                     <a
-                      href="/settings/executor"
+                      href={onNavigationRequest ? "/demo" : "/settings/executor"}
                       role="menuitem"
                       className="flex h-10 items-center rounded-[14px] px-3 text-sm text-foreground transition hover:bg-muted"
+                      onClick={(event) => {
+                        if (!onNavigationRequest) return;
+                        event.preventDefault();
+                        onNavigationRequest("settings");
+                      }}
                     >
                       执行器设置
                     </a>
@@ -262,7 +355,15 @@ export function LandingPage({
                 ) : null}
               </div>
             ) : (
-              <a href="/login" className="header-text-link">登录</a>
+              <a
+                href={onNavigationRequest ? "/demo" : "/login"}
+                className="header-text-link"
+                onClick={(event) => {
+                  if (!onNavigationRequest) return;
+                  event.preventDefault();
+                  onNavigationRequest("login");
+                }}
+              >登录</a>
             )
           ) : null}
         </nav>
@@ -282,6 +383,7 @@ export function LandingPage({
             <Textarea
               ref={inputRef}
               value={sceneInput}
+              maxLength={API_INPUT_LIMITS.sceneInputLength}
               aria-label="描述你的购物场景"
               placeholder={scenario.input_placeholder}
               onChange={(event) => onSceneInputChange(event.target.value)}
@@ -343,10 +445,11 @@ export function LandingPage({
         </div>
 
         <div className="example-grid" aria-label="示例购物场景">
-          {scenario.example_prompts.slice(0, 3).map((example) => (
+          {scenario.example_prompts.slice(0, 3).map((example, index) => (
             <button
               key={example}
               type="button"
+              data-demo-target={`scene:example:${selectedScenario}:${index}`}
               disabled={!interactiveReady || busy}
               onClick={() => onExampleStart(example, selectedScenario)}
               className="example-prompt"
@@ -543,6 +646,7 @@ export function RequirementPage({
       <CardContent className="space-y-5 px-6 pb-7 pt-5 md:px-8 md:pb-8">
         <Textarea
           value={sceneInput}
+          maxLength={API_INPUT_LIMITS.sceneInputLength}
           aria-label="描述你的购物场景"
           placeholder={scenario.input_placeholder}
           onChange={(event) => onSceneInputChange(event.target.value)}

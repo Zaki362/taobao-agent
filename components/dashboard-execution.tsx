@@ -1,11 +1,13 @@
 "use client";
 
+import Image from "next/image";
 import { CheckCircle2, ExternalLink, Loader2, PackageCheck, Pause, Play, ShoppingCart, Store, Trash2 } from "lucide-react";
 import { HostedInstructionCard, InfoBlock } from "@/components/dashboard-common";
 import {
   hasRealDetailUrl,
   isHostedMode,
   isQueuedExecutionMode,
+  isTaobaoSearchUrl,
   isTaobaoAuthenticationPause,
   isTaobaoCartAuthenticationPause
 } from "@/components/dashboard-helpers";
@@ -16,6 +18,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { formatCurrency } from "@/lib/utils";
 import type { ProductCandidate, SessionState } from "@/lib/session/types";
+import { normalizeTaobaoImageUrl } from "@/lib/product-image";
 
 export function SearchSummaryPage({
   session,
@@ -257,7 +260,9 @@ export function CartReviewPage({
   cartingProductId,
   busy,
   removingProductId,
-  errorMessage
+  errorMessage,
+  onOpenProductDetail,
+  onOpenTaobaoCart
 }: {
   session: SessionState;
   mcpStatus: MpcStatus | null;
@@ -269,6 +274,8 @@ export function CartReviewPage({
   busy: boolean;
   removingProductId: string;
   errorMessage: string;
+  onOpenProductDetail?: (item: DashboardShoppingListItem) => void;
+  onOpenTaobaoCart?: () => void;
 }) {
   const shoppingList = deriveShoppingListView(session);
   const items = shoppingList.listItems;
@@ -341,10 +348,19 @@ export function CartReviewPage({
               const running = item.status === "queued" || cartingProductId === item.product_id;
               const added = item.status === "added";
               const failed = item.status === "failed";
+              const imageUrl = normalizeTaobaoImageUrl(item.image_url);
               return (
               <article key={item.product_id} className="grid grid-cols-[72px_minmax(0,1fr)] gap-3 rounded-[20px] border border-border/75 bg-white p-3 shadow-sm sm:grid-cols-[112px_1fr] sm:gap-4 sm:p-4">
-                {item.image_url ? (
-                  <img src={item.image_url} alt={item.title} className="h-[72px] w-[72px] rounded-[14px] object-cover sm:h-28 sm:w-28 sm:rounded-[16px]" loading="lazy" />
+                {imageUrl ? (
+                  <Image
+                    src={imageUrl}
+                    alt={item.title}
+                    width={112}
+                    height={112}
+                    sizes="(min-width: 640px) 112px, 72px"
+                    className="h-[72px] w-[72px] rounded-[14px] object-cover sm:h-28 sm:w-28 sm:rounded-[16px]"
+                    unoptimized={imageUrl.endsWith(".svg")}
+                  />
                 ) : (
                   <div className="flex h-[72px] w-[72px] items-center justify-center rounded-[14px] bg-secondary/40 text-center text-[10px] text-muted-foreground sm:h-28 sm:w-28 sm:rounded-[16px] sm:text-xs">
                     暂无商品图片
@@ -378,15 +394,17 @@ export function CartReviewPage({
                         if (!hasRealDetailUrl(item.detail_url)) {
                           return;
                         }
-                        window.open(item.detail_url, "_blank", "noopener,noreferrer");
+                        if (onOpenProductDetail) onOpenProductDetail(item);
+                        else window.open(item.detail_url, "_blank", "noopener,noreferrer");
                       }}
                     >
-                      查看商品页
+                      {isTaobaoSearchUrl(item.detail_url) ? "在淘宝搜索" : "查看商品页"}
                     </Button>
                     {added && item.cart_source === "demo" ? (
                       <Button
                         variant="outline"
                         size="sm"
+                        data-demo-target={`cart:remove:${item.product_id}`}
                         className="w-full sm:w-auto"
                         disabled={Boolean(removingProductId)}
                         onClick={() => onRemoveDemoItem(item)}
@@ -399,7 +417,9 @@ export function CartReviewPage({
                         variant="outline"
                         size="sm"
                         className="w-full sm:w-auto"
-                        onClick={() => window.open("https://cart.taobao.com/cart.htm", "_blank", "noopener,noreferrer")}
+                        onClick={() => onOpenTaobaoCart
+                          ? onOpenTaobaoCart()
+                          : window.open("https://cart.taobao.com/cart.htm", "_blank", "noopener,noreferrer")}
                       >
                         <ExternalLink className="h-4 w-4" />
                         在淘宝购物车中管理
@@ -425,7 +445,9 @@ export function CartReviewPage({
             <Button variant="outline" onClick={onBack}>返回上一步继续加购</Button>
             <Button
               disabled={taobaoItemCount === 0}
-              onClick={() => window.open("https://cart.taobao.com/cart.htm", "_blank", "noopener,noreferrer")}
+              onClick={() => onOpenTaobaoCart
+                ? onOpenTaobaoCart()
+                : window.open("https://cart.taobao.com/cart.htm", "_blank", "noopener,noreferrer")}
             >
               <ShoppingCart className="h-4 w-4" />
               {taobaoItemCount > 0 ? "打开淘宝购物车核对" : demoItemCount > 0 ? "当前仅有演示清单" : "还没有真实加购商品"}

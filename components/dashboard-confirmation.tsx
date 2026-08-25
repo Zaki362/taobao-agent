@@ -16,6 +16,7 @@ import { PriorityStyle, SessionState } from "@/lib/session/types";
 import { getScenarioConfig } from "@/lib/scenarios";
 import { formatCurrency } from "@/lib/utils";
 import type { AgentDirectiveProfile } from "@/lib/agent/directives";
+import { API_INPUT_LIMITS } from "@/lib/api/input-limits";
 
 function toggleMultiValue(list: string[], value: string) {
   return list.includes(value) ? list.filter((item) => item !== value) : [...list, value];
@@ -112,7 +113,7 @@ export function ConfirmScenePage({
           </div>
           <div className="flex flex-col-reverse gap-3 border-t border-border/60 pt-5 sm:flex-row sm:justify-between">
             <Button variant="ghost" onClick={onBack}><ChevronLeft className="h-4 w-4" />返回修改原需求</Button>
-            <Button onClick={onConfirm} disabled={busy}>
+            <Button data-demo-target="scene:confirm" onClick={onConfirm} disabled={busy}>
               {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <ArrowRight className="h-4 w-4" />}
               确认无误，生成购买路线
             </Button>
@@ -288,6 +289,7 @@ export function ConfirmPlanPage({
                     <span className="w-24 shrink-0 text-xs font-medium text-foreground">{module.module_name}</span>
                     <input
                       value={draftStrategies[module.module_id] ?? ""}
+                      maxLength={API_INPUT_LIMITS.keywordLength}
                       onChange={(event) => setDraftStrategies((current) => ({ ...current, [module.module_id]: event.target.value }))}
                       className="h-10 min-w-0 flex-1 rounded-[14px] border border-border bg-muted/20 px-3 text-sm outline-none transition focus:border-primary"
                       aria-label={`${module.module_name}搜索词`}
@@ -314,7 +316,7 @@ export function ConfirmPlanPage({
             <Button variant="ghost" onClick={onBack}><ChevronLeft className="h-4 w-4" />返回修改需求</Button>
             <Button variant="outline" onClick={onAdjust}>重新调整方案</Button>
           </div>
-          <Button onClick={onConfirm} disabled={busy}>
+          <Button data-demo-target="plan:confirm" onClick={onConfirm} disabled={busy}>
             {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}
             就按这个方案开始找商品
           </Button>

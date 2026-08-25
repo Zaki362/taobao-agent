@@ -214,6 +214,7 @@ export function SearchProgressPage({
           </div>
           {!authenticationPaused ? (
             <Button
+              data-demo-target="search:view-results"
               onClick={onViewResults}
               disabled={(busy && !(executorUnavailable && candidateCount > 0)) || activelySearching || (executorUnavailable && candidateCount === 0)}
             >

@@ -36,4 +36,19 @@ export const stageLabels: Record<WorkflowStage, string> = {
 };
 
 export const defaultInput = "";
-export const WORKFLOW_STORAGE_KEY = "scenecart-dashboard-state";
+export const LEGACY_WORKFLOW_STORAGE_KEY = "scenecart-dashboard-state";
+// Keep the original export available for pages that have not adopted owner-scoped persistence yet.
+export const WORKFLOW_STORAGE_KEY = LEGACY_WORKFLOW_STORAGE_KEY;
+export const WORKFLOW_STORAGE_KEY_PREFIX = "scenecart-dashboard-state:v2";
+
+export function workflowStorageKeyForOwner(owner: string) {
+  return `${WORKFLOW_STORAGE_KEY_PREFIX}:${encodeURIComponent(owner)}`;
+}
+
+export function clearWorkflowStorageForOwner(
+  storage: Pick<Storage, "removeItem">,
+  owner?: string
+) {
+  storage.removeItem(LEGACY_WORKFLOW_STORAGE_KEY);
+  if (owner) storage.removeItem(workflowStorageKeyForOwner(owner));
+}

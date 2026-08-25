@@ -1,10 +1,12 @@
 "use client";
 
-import { useState } from "react";
+import Image from "next/image";
+import { useEffect, useState, type KeyboardEvent } from "react";
 import {
   ArrowLeft,
   ArrowRight,
   CheckCircle2,
+  ChevronDown,
   ExternalLink,
   Loader2,
   RefreshCw,
@@ -16,6 +18,7 @@ import {
 import {
   findCurrentTaobaoMcpEvidence,
   hasRealDetailUrl,
+  isTaobaoSearchUrl,
   isTaobaoCartAuthenticationPause,
   isTaobaoAuthenticationPause,
   productDetailEvidencePresentation
@@ -32,10 +35,11 @@ import { Button } from "@/components/ui/button";
 import type { ProductCandidate, SessionState } from "@/lib/session/types";
 import { getScenarioConfig } from "@/lib/scenarios";
 import { formatCurrency } from "@/lib/utils";
+import { normalizeTaobaoImageUrl } from "@/lib/product-image";
 
 function ProductImage({ product, className = "" }: { product: ProductCandidate; className?: string }) {
   const [failed, setFailed] = useState(false);
-  const imageUrl = product.image_url?.trim().replace(/^http:\/\//, "https://");
+  const imageUrl = normalizeTaobaoImageUrl(product.image_url);
 
   if (!imageUrl || failed) {
     return (
@@ -47,11 +51,14 @@ function ProductImage({ product, className = "" }: { product: ProductCandidate; 
   }
 
   return (
-    <img
+    <Image
       src={imageUrl}
       alt={product.title}
+      fill
+      sizes="(min-width: 1280px) 25vw, (min-width: 768px) 40vw, 100vw"
       className={`h-full w-full object-cover transition duration-500 hover:scale-[1.025] ${className}`}
       loading="lazy"
+      unoptimized={imageUrl.endsWith(".svg")}
       onError={() => setFailed(true)}
     />
   );
@@ -59,7 +66,7 @@ function ProductImage({ product, className = "" }: { product: ProductCandidate; 
 
 function ShoppingItemImage({ item }: { item: DashboardShoppingListItem }) {
   const [failed, setFailed] = useState(false);
-  const imageUrl = item.image_url?.trim().replace(/^http:\/\//, "https://");
+  const imageUrl = normalizeTaobaoImageUrl(item.image_url);
 
   if (!imageUrl || failed) {
     return (
@@ -69,7 +76,17 @@ function ShoppingItemImage({ item }: { item: DashboardShoppingListItem }) {
     );
   }
 
-  return <img src={imageUrl} alt="" className="h-full w-full object-cover" onError={() => setFailed(true)} />;
+  return (
+    <Image
+      src={imageUrl}
+      alt=""
+      fill
+      sizes="44px"
+      className="object-cover"
+      unoptimized={imageUrl.endsWith(".svg")}
+      onError={() => setFailed(true)}
+    />
+  );
 }
 
 function formatEvidenceTime(value: string) {
@@ -117,6 +134,78 @@ function ShoppingStatusBadge({ item }: { item: DashboardShoppingListItem }) {
   );
 }
 
+function ProductActions({
+  product,
+  shoppingItem,
+  authenticationPaused,
+  cartAuthenticationPaused,
+  cartingProductId,
+  busy,
+  onAddToCart,
+  onOpenProductDetail
+}: {
+  product: ProductCandidate;
+  shoppingItem?: DashboardShoppingListItem;
+  authenticationPaused: boolean;
+  cartAuthenticationPaused: boolean;
+  cartingProductId: string;
+  busy: boolean;
+  onAddToCart: (product: ProductCandidate) => void;
+  onOpenProductDetail?: (product: ProductCandidate) => void;
+}) {
+  const effectiveStatus = cartingProductId === product.product_id ? "queued" : shoppingItem?.status;
+  const added = effectiveStatus === "added";
+  const demoAdded = added && shoppingItem?.cart_source === "demo";
+  const queued = effectiveStatus === "queued";
+  const failed = effectiveStatus === "failed";
+  const awaiting = effectiveStatus === "awaiting_confirmation";
+
+  return (
+    <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+      <Button
+        variant="outline"
+        size="sm"
+        data-demo-target={`results:detail:${product.product_id}`}
+        disabled={!hasRealDetailUrl(product.detail_url)}
+        onClick={() => {
+          if (!hasRealDetailUrl(product.detail_url)) return;
+          if (onOpenProductDetail) onOpenProductDetail(product);
+          else window.open(product.detail_url, "_blank", "noopener,noreferrer");
+        }}
+      >
+        <ExternalLink className="h-4 w-4" />
+        {isTaobaoSearchUrl(product.detail_url) ? "淘宝搜索" : "淘宝详情"}
+      </Button>
+      <Button
+        size="sm"
+        data-demo-target={`results:add:${product.product_id}`}
+        disabled={authenticationPaused || cartAuthenticationPaused || (busy && cartingProductId !== product.product_id) || queued || added}
+        title={authenticationPaused || cartAuthenticationPaused
+          ? "请先恢复淘宝登录，再显式创建真实加购任务"
+          : demoAdded
+            ? "当前仅在产品内演示清单中，尚未加入淘宝购物车"
+            : undefined}
+        onClick={() => onAddToCart(product)}
+      >
+        {queued ? <Loader2 className="h-4 w-4 animate-spin" /> : added ? <CheckCircle2 className="h-4 w-4" /> : <ShoppingCart className="h-4 w-4" />}
+        {queued
+          ? "正在加购"
+          : added
+            ? demoAdded ? "演示清单" : "淘宝已加"
+            : authenticationPaused
+              ? "登录后加购"
+              : cartAuthenticationPaused
+                ? "加购已暂停"
+                : failed
+                  ? "重新加入"
+                  : awaiting
+                    ? "确认加购"
+                    : "加入购物车"}
+      </Button>
+    </div>
+  );
+}
+
 export function ResultsPage({
   session,
   selectedModuleId,
@@ -130,7 +219,8 @@ export function ResultsPage({
   onRefresh,
   onSearchModule,
   cartingProductId,
-  busy
+  busy,
+  onOpenProductDetail
 }: {
   session: SessionState;
   selectedModuleId: string;
@@ -149,7 +239,9 @@ export function ResultsPage({
   onSearchModule: (moduleId: string, keywordOverride?: string) => void;
   cartingProductId: string;
   busy: boolean;
+  onOpenProductDetail?: (product: ProductCandidate) => void;
 }) {
+  const [alternativesExpanded, setAlternativesExpanded] = useState(false);
   const scenario = getScenarioConfig(session.scene_brief.scenario_id);
   const selectedModule = session.shopping_plan.modules.find((item) => item.module_id === selectedModuleId)
     ?? session.shopping_plan.modules[0];
@@ -166,10 +258,31 @@ export function ResultsPage({
   const selectedTaobaoMcpEvidence = findCurrentTaobaoMcpEvidence(session, selectedModuleId);
   const visibleShoppingItems = shoppingList.listItems.filter((item) => item.status !== "suggested");
   const shoppingPreviewItems = visibleShoppingItems.slice(0, 4);
+  const primaryProduct = selectedProducts[0];
+  const alternativeProducts = selectedProducts.slice(1);
+
+  useEffect(() => {
+    setAlternativesExpanded(false);
+  }, [selectedModuleId]);
 
   const shoppingItemForProduct = (productId: string) =>
     shoppingList.listItems.find((item) => item.product_id === productId)
     ?? shoppingList.bundleItems.find((item) => item.product_id === productId);
+
+  function handleModuleTabKey(event: KeyboardEvent<HTMLButtonElement>, currentIndex: number) {
+    const lastIndex = session.shopping_plan.modules.length - 1;
+    let nextIndex: number | undefined;
+    if (event.key === "ArrowRight" || event.key === "ArrowDown") nextIndex = currentIndex === lastIndex ? 0 : currentIndex + 1;
+    if (event.key === "ArrowLeft" || event.key === "ArrowUp") nextIndex = currentIndex === 0 ? lastIndex : currentIndex - 1;
+    if (event.key === "Home") nextIndex = 0;
+    if (event.key === "End") nextIndex = lastIndex;
+    if (nextIndex === undefined) return;
+    event.preventDefault();
+    const nextModule = session.shopping_plan.modules[nextIndex];
+    onSelectModule(nextModule.module_id);
+    const tabs = event.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>('[role="tab"]');
+    tabs?.[nextIndex]?.focus();
+  }
 
   return (
     <div className="workflow-content space-y-4">
@@ -195,7 +308,7 @@ export function ResultsPage({
         <section className="min-w-0 space-y-3" aria-label="淘宝搜索结果">
           <div className="flex flex-col gap-2.5 xl:flex-row xl:items-center">
             <div className="module-tabs hide-scrollbar min-w-0 flex-1" role="tablist" aria-label="商品分类">
-          {session.shopping_plan.modules.map((module) => {
+          {session.shopping_plan.modules.map((module, index) => {
             const count = (session.module_candidates[module.module_id] ?? []).length;
             const active = selectedModule?.module_id === module.module_id;
             return (
@@ -203,11 +316,14 @@ export function ResultsPage({
                 key={module.module_id}
                 id={`product-module-tab-${module.module_id}`}
                 type="button"
+                data-demo-target={`results:module:${module.module_id}`}
                 role="tab"
                 aria-selected={active}
                 aria-controls="product-results-panel"
+                tabIndex={active ? 0 : -1}
                 className={`module-tab ${active ? "module-tab-active" : ""}`}
                 onClick={() => onSelectModule(module.module_id)}
+                onKeyDown={(event) => handleModuleTabKey(event, index)}
               >
                 {module.module_name}<span>{count}</span>
               </button>
@@ -237,51 +353,48 @@ export function ResultsPage({
             role="tabpanel"
             aria-labelledby={selectedModule ? `product-module-tab-${selectedModule.module_id}` : undefined}
           >
-        {selectedProducts.map((product, index) => {
-          const shoppingItem = shoppingItemForProduct(product.product_id);
-          const detailEvidence = productDetailEvidencePresentation(product);
-          const supportsAiRecommendation = index === 0 &&
-            detailEvidence.state === "verified" &&
-            detailEvidence.supportsRecommendation;
+        {primaryProduct ? (() => {
+          const shoppingItem = shoppingItemForProduct(primaryProduct.product_id);
+          const detailEvidence = productDetailEvidencePresentation(primaryProduct);
+          const supportsAiRecommendation = detailEvidence.state === "verified" && detailEvidence.supportsRecommendation;
           const preferredLabel = detailEvidence.state === "verified"
             ? detailEvidence.supportsRecommendation ? "AI 最推荐" : "搜索首选"
             : "搜索摘要首选";
-          const effectiveStatus = cartingProductId === product.product_id ? "queued" : shoppingItem?.status;
-          const productCartAuthenticationPaused = cartAuthenticationPaused;
-          const added = effectiveStatus === "added";
-          const demoAdded = added && shoppingItem?.cart_source === "demo";
-          const queued = effectiveStatus === "queued";
-          const failed = effectiveStatus === "failed";
-          const awaiting = effectiveStatus === "awaiting_confirmation";
 
           return (
-            <article key={product.product_id} className={`product-result-card ${supportsAiRecommendation ? "product-result-card-featured" : index === 0 ? "product-result-card-summary-pick" : ""}`}>
-              <div className="product-image-frame">
-                {index === 0 ? (
-                  <span className={supportsAiRecommendation ? "product-ai-pick" : "product-summary-pick"}>
-                    {supportsAiRecommendation ? <Sparkles className="h-3 w-3" /> : <Search className="h-3 w-3" />}
-                    {preferredLabel}
-                  </span>
-                ) : null}
-                <ProductImage product={product} />
+            <article className={`product-result-card product-primary-recommendation ${supportsAiRecommendation ? "product-result-card-featured" : "product-result-card-summary-pick"}`}>
+              <div className="product-image-frame product-primary-image">
+                <span className={supportsAiRecommendation ? "product-ai-pick" : "product-summary-pick"}>
+                  {supportsAiRecommendation ? <Sparkles className="h-3 w-3" /> : <Search className="h-3 w-3" />}
+                  {preferredLabel}
+                </span>
+                <ProductImage product={primaryProduct} />
               </div>
-              <div className="flex flex-1 flex-col p-4">
-                <div className="flex flex-wrap items-center gap-1.5">
-                  <Badge variant={supportsAiRecommendation ? "default" : "secondary"}>{product.recommendation_type}</Badge>
+              <div className="product-primary-content">
+                <div className="flex flex-wrap items-center gap-2">
+                  <Badge variant={supportsAiRecommendation ? "default" : "secondary"}>{primaryProduct.recommendation_type}</Badge>
+                  <Badge variant="outline">Agent 主推荐</Badge>
                   {shoppingItem?.origin === "bundle" ? <ShoppingStatusBadge item={shoppingItem} /> : null}
                 </div>
-                <h2 className="mt-3 line-clamp-2 text-[15px] font-semibold leading-6 text-foreground">{product.title}</h2>
-                <div className="mt-2 hidden items-center gap-1.5 text-xs text-muted-foreground sm:flex"><Store className="h-3.5 w-3.5" />{product.shop_name}</div>
-                <p className="mt-3 text-[25px] font-semibold tracking-tight text-[#ef5b24]">{formatCurrency(product.price)}</p>
-                {product.highlights.length > 0 ? (
-                  <div className="mt-2.5 hidden flex-wrap gap-1.5 sm:flex">
-                    {product.highlights.slice(0, 2).map((item) => <span key={item} className="product-highlight">{item}</span>)}
+                <h2 className="product-primary-title">{primaryProduct.title}</h2>
+                <div className="product-primary-shop"><Store className="h-3.5 w-3.5" />{primaryProduct.shop_name}</div>
+                <p className="product-primary-price">{formatCurrency(primaryProduct.price)}</p>
+                {primaryProduct.highlights.length > 0 ? (
+                  <div className="product-primary-highlights">
+                    {primaryProduct.highlights.slice(0, 3).map((item) => <span key={item} className="product-highlight">{item}</span>)}
                   </div>
                 ) : null}
+                <div className="product-recommendation-reason" role="note" aria-label={`${primaryProduct.title}推荐理由`}>
+                  <Sparkles className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
+                  <div>
+                    <p className="text-xs font-semibold text-foreground">为什么推荐它</p>
+                    <p className="mt-1 text-xs leading-5 text-muted-foreground md:text-[13px]">{primaryProduct.fit_reason}</p>
+                  </div>
+                </div>
                 <div
                   role="note"
-                  aria-label={`${product.title}推荐证据`}
-                  className={`mt-3 rounded-[14px] border px-3 py-2.5 text-xs leading-5 ${
+                  aria-label={`${primaryProduct.title}推荐证据`}
+                  className={`mt-2 rounded-[13px] border px-3 py-2 text-[11px] leading-4 ${
                     detailEvidence.state === "verified"
                       ? "border-emerald-200 bg-emerald-50 text-emerald-900"
                       : "border-amber-200 bg-amber-50 text-amber-900"
@@ -293,68 +406,90 @@ export function ResultsPage({
                       : <Search className="h-3.5 w-3.5 shrink-0 text-amber-700" />}
                     <span>{detailEvidence.label}</span>
                     {detailEvidence.state === "verified" ? (
-                      <time
-                        dateTime={detailEvidence.capturedAt}
-                        className="font-normal text-emerald-700"
-                        title={detailEvidence.capturedAt}
-                      >
+                      <time dateTime={detailEvidence.capturedAt} className="font-normal text-emerald-700" title={detailEvidence.capturedAt}>
                         提取于 {formatDetailEvidenceTime(detailEvidence.capturedAt)}
                       </time>
                     ) : null}
                   </div>
-                  <p className="mt-1.5 line-clamp-3">
-                    <span className="mr-1 font-medium">
-                      {detailEvidence.state === "verified" ? "基于详情页：" : "搜索摘要判断："}
-                    </span>
+                  <p className="mt-1 line-clamp-2">
+                    <span className="mr-1 font-medium">{detailEvidence.state === "verified" ? "基于详情页：" : "搜索摘要判断："}</span>
                     {detailEvidence.state === "verified" ? detailEvidence.reason : detailEvidence.summaryReason}
                   </p>
-                  {detailEvidence.state === "unavailable" ? (
-                    <p className="mt-1 text-[11px] text-amber-800">读取状态：{detailEvidence.unavailableReason}</p>
-                  ) : null}
+                  {detailEvidence.state === "unavailable" ? <p className="mt-1 text-[11px] text-amber-800">读取状态：{detailEvidence.unavailableReason}</p> : null}
                 </div>
-                <details className="mt-2 hidden text-[11px] leading-5 text-muted-foreground sm:block">
+                <details className="mt-2 text-[11px] leading-5 text-muted-foreground">
                   <summary className="cursor-pointer font-medium text-foreground/70">购买前确认</summary>
-                  <p className="mt-1">{product.risk_notes[0] ?? scenario.product_risk_style}</p>
+                  <p className="mt-1">{primaryProduct.risk_notes[0] ?? scenario.product_risk_style}</p>
                 </details>
-                <div className="mt-auto grid grid-cols-1 gap-2 pt-4 sm:grid-cols-2">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    disabled={!hasRealDetailUrl(product.detail_url)}
-                    onClick={() => hasRealDetailUrl(product.detail_url) && window.open(product.detail_url, "_blank", "noopener,noreferrer")}
-                  >
-                    <ExternalLink className="h-4 w-4" />淘宝详情
-                  </Button>
-                  <Button
-                    size="sm"
-                    disabled={authenticationPaused || productCartAuthenticationPaused || (busy && cartingProductId !== product.product_id) || queued || added}
-                    title={authenticationPaused || productCartAuthenticationPaused
-                      ? "请先恢复淘宝登录，再显式创建真实加购任务"
-                      : demoAdded
-                        ? "当前仅在产品内演示清单中，尚未加入淘宝购物车"
-                        : undefined}
-                    onClick={() => onAddToCart(product)}
-                  >
-                    {queued ? <Loader2 className="h-4 w-4 animate-spin" /> : added ? <CheckCircle2 className="h-4 w-4" /> : <ShoppingCart className="h-4 w-4" />}
-                    {queued
-                      ? "正在加购"
-                      : added
-                        ? demoAdded ? "演示清单" : "淘宝已加"
-                        : authenticationPaused
-                          ? "登录后加购"
-                          : productCartAuthenticationPaused
-                            ? "加购已暂停"
-                            : failed
-                              ? "重新加入"
-                              : awaiting
-                                ? "确认加购"
-                                : "加入购物车"}
-                  </Button>
+                <div className="mt-auto pt-3">
+                  <ProductActions
+                    product={primaryProduct}
+                    shoppingItem={shoppingItem}
+                    authenticationPaused={authenticationPaused}
+                    cartAuthenticationPaused={cartAuthenticationPaused}
+                    cartingProductId={cartingProductId}
+                    busy={busy}
+                    onAddToCart={onAddToCart}
+                    onOpenProductDetail={onOpenProductDetail}
+                  />
                 </div>
               </div>
             </article>
           );
-        })}
+        })() : null}
+
+        {primaryProduct && alternativeProducts.length > 0 ? (
+          <section className="product-alternatives" aria-labelledby="alternative-products-title">
+            <button
+              type="button"
+              data-demo-target="results:alternatives"
+              className="product-alternatives-toggle"
+              aria-expanded={alternativesExpanded}
+              aria-controls="alternative-products-list"
+              onClick={() => setAlternativesExpanded((value) => !value)}
+            >
+              <span>
+                <strong id="alternative-products-title">{alternativesExpanded ? "收起备选商品" : `查看 ${alternativeProducts.length} 个备选商品`}</strong>
+                <small>{alternativesExpanded ? "回到主推荐，保持决策聚焦" : "需要比较价格或规格时再展开"}</small>
+              </span>
+              <ChevronDown className={`h-5 w-5 transition-transform ${alternativesExpanded ? "rotate-180" : ""}`} />
+            </button>
+            {alternativesExpanded ? (
+              <div id="alternative-products-list" className="product-alternative-list">
+                {alternativeProducts.map((product) => {
+                  const shoppingItem = shoppingItemForProduct(product.product_id);
+                  return (
+                    <article key={product.product_id} className="product-result-card product-alternative-row">
+                      <div className="product-image-frame product-alternative-image"><ProductImage product={product} /></div>
+                      <div className="min-w-0 flex-1 p-4 md:p-5">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <Badge variant="secondary">{product.recommendation_type}</Badge>
+                          {shoppingItem?.origin === "bundle" ? <ShoppingStatusBadge item={shoppingItem} /> : null}
+                        </div>
+                        <h3 className="mt-2 line-clamp-2 text-[15px] font-semibold leading-6 text-foreground">{product.title}</h3>
+                        <div className="mt-1.5 flex items-center gap-1.5 text-xs text-muted-foreground"><Store className="h-3.5 w-3.5" />{product.shop_name}</div>
+                        <p className="mt-2 text-xl font-semibold tracking-tight text-[#ef5b24]">{formatCurrency(product.price)}</p>
+                        <p className="mt-2 line-clamp-2 text-xs leading-5 text-muted-foreground"><span className="font-medium text-foreground">备选理由：</span>{product.fit_reason}</p>
+                      </div>
+                      <div className="product-alternative-actions">
+                        <ProductActions
+                          product={product}
+                          shoppingItem={shoppingItem}
+                          authenticationPaused={authenticationPaused}
+                          cartAuthenticationPaused={cartAuthenticationPaused}
+                          cartingProductId={cartingProductId}
+                          busy={busy}
+                          onAddToCart={onAddToCart}
+                          onOpenProductDetail={onOpenProductDetail}
+                        />
+                      </div>
+                    </article>
+                  );
+                })}
+              </div>
+            ) : null}
+          </section>
+        ) : null}
 
         {selectedProducts.length === 0 ? (
           <div className="empty-result-card md:col-span-2">
@@ -412,7 +547,7 @@ export function ResultsPage({
                   onClick={() => onSelectModule(item.module_id)}
                   aria-label={`查看${item.module_name ?? "对应分类"}：${item.title}`}
                 >
-                  <span className="h-11 w-11 shrink-0 overflow-hidden rounded-[12px] bg-muted"><ShoppingItemImage item={item} /></span>
+                  <span className="relative h-11 w-11 shrink-0 overflow-hidden rounded-[12px] bg-muted"><ShoppingItemImage item={item} /></span>
                   <span className="min-w-0 flex-1 text-left">
                     <span className="block truncate text-xs font-medium text-foreground">{item.title}</span>
                     <span className="mt-0.5 block text-[11px] font-semibold text-primary">{formatCurrency(item.price)}</span>
@@ -440,6 +575,7 @@ export function ResultsPage({
 
           <Button
             className="w-full"
+            data-demo-target="results:view-cart"
             onClick={onProceedToCartReview}
             disabled={visibleShoppingItems.length === 0 || busy}
           >

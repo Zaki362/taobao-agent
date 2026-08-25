@@ -4,6 +4,7 @@ import { CircleDashed, ShoppingBag, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { formatCurrency } from "@/lib/utils";
+import { API_INPUT_LIMITS } from "@/lib/api/input-limits";
 
 export function AgentBrief({
   eyebrow = "SceneCart Agent",
@@ -200,10 +201,15 @@ export function EditableBudgetField({
       <p className="mt-2 text-base font-semibold">{formatCurrency(value)}</p>
       <input
         type="number"
+        data-demo-target="scene:budget"
         min={300}
+        max={API_INPUT_LIMITS.budgetMax}
         step={100}
         value={value}
-        onChange={(event) => onChange(Math.max(300, Number(event.target.value) || 300))}
+        onChange={(event) => onChange(Math.min(
+          API_INPUT_LIMITS.budgetMax,
+          Math.max(300, Number(event.target.value) || 300)
+        ))}
         className="mt-3 h-11 w-full rounded-[16px] border border-border bg-white px-3 text-sm outline-none transition focus:border-primary"
       />
     </div>

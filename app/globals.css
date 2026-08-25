@@ -106,6 +106,7 @@ body {
 
   .workflow-rail {
     @apply mx-auto hidden items-center gap-0 lg:flex;
+    transition: opacity 180ms ease, visibility 180ms ease;
   }
 
   .workflow-rail-step {
@@ -332,7 +333,7 @@ body {
   }
 
   .product-result-grid {
-    @apply grid gap-4 md:grid-cols-2 min-[1180px]:grid-cols-3;
+    @apply space-y-3;
   }
 
   .product-result-card {
@@ -344,11 +345,244 @@ body {
   }
 
   .product-result-card-featured {
-    @apply border-2 border-[#ff6b1a] bg-[#fffaf6] shadow-[0_16px_42px_rgba(255,107,26,0.18)] hover:border-[#ff6b1a] hover:shadow-[0_20px_52px_rgba(255,107,26,0.24)];
+    @apply border border-primary/35 bg-[#fffaf6] shadow-[0_10px_28px_rgba(255,107,26,0.12)] hover:border-primary/50 hover:shadow-[0_14px_34px_rgba(255,107,26,0.16)];
   }
 
   .product-result-card-summary-pick {
     @apply border-slate-300 bg-slate-50/60 hover:border-slate-400;
+  }
+
+  .product-primary-recommendation {
+    @apply md:grid md:grid-cols-[220px_minmax(0,1fr)] lg:grid-cols-[230px_minmax(0,1fr)] xl:grid-cols-[250px_minmax(0,1fr)];
+  }
+
+  .product-primary-image {
+    @apply aspect-[16/10] min-h-0 md:m-3 md:aspect-square md:h-auto md:self-center md:rounded-[16px] md:border md:border-border/60;
+  }
+
+  .product-primary-content {
+    @apply flex min-w-0 flex-1 flex-col p-4 md:p-5;
+  }
+
+  .product-primary-title {
+    @apply mt-2.5 line-clamp-2 text-base font-semibold leading-6 text-foreground md:text-lg md:leading-7;
+  }
+
+  .product-primary-shop {
+    @apply mt-1.5 flex items-center gap-1.5 text-[11px] text-muted-foreground md:text-xs;
+  }
+
+  .product-primary-price {
+    @apply mt-2 text-[24px] font-semibold leading-none tracking-tight text-[#ef5b24];
+  }
+
+  .product-primary-highlights {
+    @apply mt-2 flex flex-wrap gap-1.5;
+  }
+
+  .product-recommendation-reason {
+    @apply mt-3 flex items-start gap-2.5 rounded-[15px] border border-primary/10 bg-primary/[0.045] px-3.5 py-2.5;
+  }
+
+  .product-primary-risk {
+    @apply mt-2 line-clamp-2 rounded-[13px] bg-amber-50 px-3 py-2 text-[11px] leading-4 text-amber-900;
+  }
+
+  .product-alternatives {
+    @apply overflow-hidden rounded-[22px] border border-border/75 bg-white shadow-sm;
+  }
+
+  .product-alternatives-toggle {
+    @apply flex w-full items-center justify-between gap-4 px-4 py-4 text-left transition hover:bg-muted/45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring md:px-5;
+  }
+
+  .product-alternatives-toggle strong {
+    @apply block text-sm font-semibold text-foreground;
+  }
+
+  .product-alternatives-toggle small {
+    @apply mt-1 block text-xs font-normal text-muted-foreground;
+  }
+
+  .product-alternative-list {
+    @apply space-y-3 border-t border-border/60 bg-muted/20 p-3 md:p-4;
+  }
+
+  .product-alternative-row {
+    @apply md:grid md:grid-cols-[160px_minmax(0,1fr)_210px] md:items-stretch;
+  }
+
+  .product-alternative-image {
+    @apply aspect-[4/3] md:aspect-auto md:h-full md:min-h-[168px];
+  }
+
+  .product-alternative-actions {
+    @apply border-t border-border/60 p-4 md:flex md:items-center md:border-l md:border-t-0 md:p-5;
+  }
+
+  .product-alternative-actions > div {
+    @apply w-full md:grid-cols-1;
+  }
+
+  .public-demo-controls {
+    @apply fixed right-[108px] top-[15px] z-[60] flex items-center gap-1.5;
+  }
+
+  .public-demo-controls > button:first-child {
+    @apply border-white/80 bg-white/95 shadow-card backdrop-blur-md;
+  }
+
+  .public-demo-controls > button.public-demo-launch-button {
+    @apply border-primary bg-primary text-white shadow-lg hover:border-primary hover:bg-primary/90 hover:text-white;
+    animation: public-demo-launch-attention 1.8s ease-in-out infinite;
+  }
+
+  .public-demo-reset {
+    @apply inline-flex h-8 w-8 items-center justify-center rounded-full border border-white/80 bg-white/95 text-muted-foreground shadow-card transition hover:text-foreground;
+    backdrop-filter: blur(14px);
+  }
+
+  .public-demo-takeover {
+    @apply fixed left-1/2 top-[118px] z-50 flex w-[calc(100%_-_2rem)] max-w-[520px] -translate-x-1/2 items-center gap-2 rounded-[16px] border border-primary/15 bg-white/95 px-4 py-3 text-left text-xs text-foreground shadow-card;
+    backdrop-filter: blur(16px);
+  }
+
+  .public-demo-takeover > span {
+    @apply min-w-0 flex-1;
+  }
+
+  .public-demo-takeover > button {
+    @apply inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-base text-muted-foreground transition hover:bg-muted hover:text-foreground;
+  }
+
+  .public-demo-narrator {
+    @apply pointer-events-none fixed left-1/2 top-[80px] z-[55] h-[56px] w-[calc(100%_-_2rem)] max-w-[720px] -translate-x-1/2 overflow-hidden rounded-[16px] border px-4 py-2;
+    border-color: rgba(255, 104, 31, 0.4);
+    border-left-width: 3px;
+    background: linear-gradient(105deg, rgba(255, 241, 229, 0.98) 0%, rgba(255, 255, 255, 0.98) 62%, rgba(255, 247, 239, 0.98) 100%);
+    backdrop-filter: blur(18px);
+    box-shadow: 0 8px 28px rgba(234, 88, 12, 0.17), 0 1px 0 rgba(255, 255, 255, 0.95) inset;
+    transition: top 240ms ease, width 240ms ease, max-width 240ms ease, height 240ms ease, padding 240ms ease, box-shadow 240ms ease;
+  }
+
+  .public-demo-narrator-acting {
+    @apply h-[40px] max-w-[620px] px-3.5 py-[9px];
+    box-shadow: 0 6px 22px rgba(234, 88, 12, 0.15), 0 1px 0 rgba(255, 255, 255, 0.95) inset;
+  }
+
+  .public-demo-narrator-completed {
+    @apply h-[40px] w-auto max-w-[calc(100%_-_2rem)] px-3.5 py-[9px];
+    border-color: rgba(16, 185, 129, 0.34);
+    border-left-color: rgb(16, 185, 129);
+    background: rgba(240, 253, 250, 0.97);
+  }
+
+  .public-demo-narrator-lead {
+    @apply flex min-w-0 items-center gap-2 text-xs;
+  }
+
+  .public-demo-narrator-step {
+    @apply shrink-0 rounded-full bg-primary px-2 py-0.5 text-[10px] font-bold tracking-[0.01em] text-white shadow-sm;
+  }
+
+  .public-demo-narrator-title {
+    @apply min-w-0 flex-1 truncate text-sm font-bold leading-5 text-[#17252b];
+  }
+
+  .public-demo-narrator-state {
+    @apply shrink-0 rounded-full border border-primary/15 bg-white/80 px-2 py-0.5 text-[10px] font-semibold text-[#b45309];
+  }
+
+  .public-demo-narrator-state-paused {
+    @apply border-amber-300/70 bg-amber-100 text-amber-800;
+  }
+
+  .public-demo-narrator-description {
+    @apply mt-0.5 block min-w-0 truncate text-xs font-medium leading-4 text-slate-600;
+  }
+
+  .public-demo-narrator-error {
+    @apply mt-0.5 truncate text-[10px] font-semibold text-red-700;
+  }
+
+  .public-demo-narrator-progress {
+    @apply absolute inset-x-0 bottom-0 h-[3px] overflow-hidden bg-[#fed7c2];
+  }
+
+  .public-demo-cursor {
+    @apply pointer-events-none fixed left-0 top-0 z-[90] opacity-0;
+    transform-origin: 0 0;
+    transition-property: transform, opacity;
+    transition-timing-function: cubic-bezier(0.22, 1, 0.36, 1);
+  }
+
+  .public-demo-cursor-visible {
+    @apply opacity-100;
+  }
+
+  .public-demo-cursor > svg {
+    @apply relative -left-1 -top-1 text-slate-950 drop-shadow-[0_3px_2px_rgba(255,255,255,0.95)];
+    transition: transform 120ms ease;
+  }
+
+  .public-demo-cursor-pressed > svg {
+    transform: scale(0.82);
+  }
+
+  .public-demo-click-ripple {
+    @apply absolute left-0 top-0 h-10 w-10 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-primary/75 opacity-0;
+  }
+
+  .public-demo-cursor-pressed .public-demo-click-ripple {
+    animation: public-demo-click 360ms ease-out;
+  }
+
+  .public-demo-cursor-callout {
+    @apply absolute left-5 top-4 w-max max-w-[280px] rounded-[12px] border border-white/15 bg-slate-950/95 px-3 py-2 text-left text-xs font-semibold leading-5 text-white shadow-[0_12px_34px_rgba(15,23,42,0.28)];
+    animation: public-demo-callout-in 180ms ease-out both;
+    backdrop-filter: blur(12px);
+  }
+
+  .public-demo-cursor-callout::before {
+    content: "";
+    @apply absolute -left-1.5 top-3 h-3 w-3 rotate-45 border-b border-l border-white/15 bg-slate-950/95;
+  }
+
+  .public-demo-cursor-callout-left {
+    @apply left-auto right-5;
+  }
+
+  .public-demo-cursor-callout-left::before {
+    @apply -right-1.5 left-auto border-b-0 border-l-0 border-r border-t;
+  }
+
+  [data-demo-tour-active="true"] .workflow-rail {
+    visibility: hidden;
+    opacity: 0;
+  }
+
+  @media (min-width: 1024px) {
+    .public-demo-narrator {
+      top: 6px;
+      width: min(720px, calc(100vw - 520px));
+      max-width: none;
+    }
+
+    .public-demo-narrator-acting {
+      top: 14px;
+      width: min(620px, calc(100vw - 520px));
+    }
+
+    .public-demo-narrator-completed {
+      top: 14px;
+      width: auto;
+    }
+  }
+
+  [data-demo-clicking="true"],
+  [data-demo-pointing="true"] {
+    outline: 3px solid rgba(239, 91, 36, 0.22);
+    outline-offset: 4px;
   }
 
   .product-ai-pick {
@@ -656,7 +890,64 @@ body {
   50% { transform: translateY(-4px); opacity: 1; }
 }
 
+@keyframes public-demo-click {
+  0% { transform: translate(-50%, -50%) scale(0.35); opacity: 0.85; }
+  100% { transform: translate(-50%, -50%) scale(1.25); opacity: 0; }
+}
+
+@keyframes public-demo-callout-in {
+  0% { translate: 0 4px; opacity: 0; }
+  100% { translate: 0 0; opacity: 1; }
+}
+
+@keyframes public-demo-launch-attention {
+  0%, 100% {
+    box-shadow: 0 8px 22px rgba(255, 104, 31, 0.22), 0 0 0 0 rgba(255, 104, 31, 0.28);
+    filter: saturate(1);
+  }
+  50% {
+    box-shadow: 0 12px 30px rgba(255, 104, 31, 0.32), 0 0 0 8px rgba(255, 104, 31, 0);
+    filter: saturate(1.18);
+  }
+}
+
+@media (max-width: 767px) {
+  .public-demo-controls {
+    right: 12px;
+    top: 74px;
+  }
+
+  .public-demo-takeover {
+    top: 158px;
+  }
+
+  .public-demo-narrator {
+    top: 120px;
+    width: calc(100vw - 24px);
+  }
+
+  .public-demo-cursor-callout,
+  .public-demo-cursor-callout-left {
+    left: 50%;
+    right: auto;
+    top: 34px;
+    width: max-content;
+    max-width: calc(100vw - 32px);
+    transform: translateX(-50%);
+    text-align: center;
+  }
+
+  .public-demo-cursor-callout::before,
+  .public-demo-cursor-callout-left::before {
+    display: none;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
+  .public-demo-controls > button.public-demo-launch-button {
+    animation: none;
+  }
+
   .scene-spirit,
   .spirit-orbit,
   .spirit-eye {
@@ -668,6 +959,16 @@ body {
   .agent-brief-pulse,
   .agent-live-label > span,
   .agent-thinking-step-active .agent-thinking-icon {
+    animation: none;
+  }
+
+  .public-demo-cursor {
+    transition-duration: 0ms !important;
+  }
+
+  .public-demo-click-ripple,
+  .public-demo-cursor-pressed .public-demo-click-ripple,
+  .public-demo-cursor-callout {
     animation: none;
   }
 }

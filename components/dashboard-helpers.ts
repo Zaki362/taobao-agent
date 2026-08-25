@@ -55,6 +55,19 @@ export function hasRealDetailUrl(detailUrl?: string) {
   return Boolean(detailUrl && detailUrl.trim() && detailUrl !== "https://www.taobao.com/");
 }
 
+export function isTaobaoSearchUrl(detailUrl?: string) {
+  if (!detailUrl?.trim()) return false;
+  try {
+    const url = new URL(detailUrl.trim());
+    return url.protocol === "https:"
+      && url.hostname === "s.taobao.com"
+      && url.pathname === "/search"
+      && Boolean(url.searchParams.get("q")?.trim());
+  } catch {
+    return false;
+  }
+}
+
 function comparableDetailUrl(value: string) {
   try {
     const url = new URL(value.trim());
