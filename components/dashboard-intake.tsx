@@ -199,7 +199,6 @@ export function LandingPage({
   sceneInput,
   onSceneInputChange,
   onStart,
-  onExampleStart,
   interactiveReady,
   busy,
   errorMessage,
@@ -219,7 +218,6 @@ export function LandingPage({
   sceneInput: string;
   onSceneInputChange: (value: string) => void;
   onStart: () => void;
-  onExampleStart: (value: string, scenarioId: ScenarioId) => void;
   interactiveReady: boolean;
   busy: boolean;
   errorMessage: string;
@@ -381,6 +379,7 @@ export function LandingPage({
         <div className="scene-input-wrap">
           <div className="scene-input-shell">
             <Textarea
+              id="scene-requirement-input"
               ref={inputRef}
               value={sceneInput}
               maxLength={API_INPUT_LIMITS.sceneInputLength}
@@ -408,7 +407,14 @@ export function LandingPage({
                 })()}
                 {scenario.name} · 已选择
               </button>
-              <Button size="lg" onClick={onStart} disabled={!canStart} className="w-full sm:w-auto" aria-label={scenario.start_button_text}>
+              <Button
+                size="lg"
+                onClick={onStart}
+                disabled={!canStart}
+                className="w-full sm:w-auto"
+                aria-label={scenario.start_button_text}
+                data-demo-target="scene:start"
+              >
                 {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <SendHorizontal className="h-4 w-4" />}
                 让 Agent 开始理解
               </Button>
@@ -451,7 +457,16 @@ export function LandingPage({
               type="button"
               data-demo-target={`scene:example:${selectedScenario}:${index}`}
               disabled={!interactiveReady || busy}
-              onClick={() => onExampleStart(example, selectedScenario)}
+              aria-controls="scene-requirement-input"
+              onClick={() => {
+                onSceneInputChange(example);
+                window.requestAnimationFrame(() => {
+                  const input = inputRef.current;
+                  if (!input) return;
+                  input.focus();
+                  input.setSelectionRange(example.length, example.length);
+                });
+              }}
               className="example-prompt"
             >
               <span className="min-w-0 flex-1">

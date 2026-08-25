@@ -1172,7 +1172,6 @@ export function Dashboard() {
             sceneInput={sceneInput}
             onSceneInputChange={setSceneInput}
             onStart={() => startParsing(undefined, selectedScenario ?? "new-car")}
-            onExampleStart={(value, scenarioId) => startParsing(value, scenarioId)}
             interactiveReady={interactiveReady}
             busy={busy}
             errorMessage={errorMessage}

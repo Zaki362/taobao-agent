@@ -289,6 +289,10 @@ for (const scenarioCase of scenarioCases) {
 
       const examplePrompt = scenario.example_prompts[scenarioCase.exampleIndex];
       await page.getByRole("button", { name: examplePrompt, exact: true }).click();
+      const requirementInput = page.getByRole("textbox", { name: "描述你的购物场景" });
+      await expect(requirementInput).toHaveValue(examplePrompt);
+      await requirementInput.fill(`${examplePrompt}，希望优先考虑耐用和容易收纳。`);
+      await page.getByRole("button", { name: scenario.start_button_text }).click();
       await expect(page.getByRole("heading", { name: scenario.confirm_scene_title })).toBeVisible();
       await page.getByRole("button", { name: "确认无误，生成购买路线" }).click();
       await expect(page.getByRole("heading", { name: scenario.confirm_plan_title })).toBeVisible();

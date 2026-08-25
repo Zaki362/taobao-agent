@@ -49,9 +49,15 @@ const PRODUCT_DETAIL_CALLOUT = "本次不演示，可以自己点击跳转到真
 const TOUR_STEPS: TourStep[] = [
   {
     target: "scene:example:new-car:0",
-    title: "从真实场景示例开始",
-    description: "鼠标会点击产品首页中的真实示例，随后由冻结运行层完成需求理解。",
+    title: "先用真实场景示例填入需求",
+    description: "点击示例只会填入输入框，不会直接发送；你仍可以修改预算、偏好或补充要求。",
     dwell: 2500
+  },
+  {
+    target: "scene:start",
+    title: "确认描述后再开始理解",
+    description: "检查并补充需求后，由你点击开始理解；Demo 才会进入冻结的需求解析流程。",
+    dwell: 2400
   },
   {
     target: "scene:budget",
@@ -803,7 +809,6 @@ export function PublicDemo() {
             sceneInput={sceneInput}
             onSceneInputChange={setSceneInput}
             onStart={() => startParsing()}
-            onExampleStart={(value, scenarioId) => startParsing(value, scenarioId)}
             interactiveReady
             busy={busy}
             errorMessage={errorMessage}

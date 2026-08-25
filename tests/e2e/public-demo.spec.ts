@@ -4,6 +4,10 @@ import type { ScenarioId } from "../../lib/session/types";
 
 async function enterResultsManually(page: Page) {
   await page.locator('[data-demo-target="scene:example:new-car:0"]').click();
+  await expect(page.getByRole("textbox", { name: "描述你的购物场景" })).toHaveValue(
+    getScenarioConfig("new-car").example_prompts[0]
+  );
+  await page.locator('[data-demo-target="scene:start"]').click();
   await expect(page.getByRole("heading", { name: "确认新车选购需求" })).toBeVisible();
   await page.locator('[data-demo-target="scene:budget"]').fill("1000");
   await page.locator('[data-demo-target="scene:confirm"]').click();
@@ -106,6 +110,10 @@ test("every visible product scenario completes through the same frozen product f
       exact: true
     }).click();
     await page.locator(`[data-demo-target="scene:example:${scenarioId}:0"]`).click();
+    await expect(page.getByRole("textbox", { name: "描述你的购物场景" })).toHaveValue(
+      scenario.example_prompts[0]
+    );
+    await page.locator('[data-demo-target="scene:start"]').click();
     await expect(page.getByRole("heading", { name: scenario.confirm_scene_title })).toBeVisible();
     await page.locator('[data-demo-target="scene:confirm"]').click();
     await expect(page.getByRole("heading", { name: scenario.confirm_plan_title })).toBeVisible();
@@ -162,6 +170,7 @@ test("frozen navigation and refresh actions stay inside the demo", async ({ cont
   await expect(page).toHaveURL(/\/demo/);
 
   await page.locator('[data-demo-target="scene:example:new-car:0"]').click();
+  await page.locator('[data-demo-target="scene:start"]').click();
   await page.locator('[data-demo-target="scene:confirm"]').click();
   await page.locator('[data-demo-target="plan:confirm"]').click();
   await page.getByRole("button", { name: "刷新进度" }).click();
@@ -288,6 +297,7 @@ test("auto tour moves its cursor onto real controls and reaches the real cart re
   );
   expect(clickSamples.map((sample) => sample.target)).toEqual([
     "scene:example:new-car:0",
+    "scene:start",
     "scene:budget",
     "scene:confirm",
     "plan:confirm",
