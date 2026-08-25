@@ -243,9 +243,10 @@ async function runDemo(page, context) {
   });
 
   const sessionId = await page.evaluate(() => {
-    const raw = window.localStorage.getItem("scenecart-dashboard-state");
+    const key = Object.keys(window.localStorage).find((item) => item.startsWith("scenecart-dashboard-state:v2:"));
+    const raw = key ? window.localStorage.getItem(key) : null;
     if (!raw) return "";
-    return String(JSON.parse(raw).sessionId || "");
+    return String(JSON.parse(raw).state?.sessionId || "");
   });
   if (!sessionId) throw new Error("页面没有保存 SceneCart session_id");
 

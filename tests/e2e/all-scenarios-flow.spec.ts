@@ -294,9 +294,10 @@ for (const scenarioCase of scenarioCases) {
       await expect(page.getByRole("heading", { name: scenario.confirm_plan_title })).toBeVisible();
 
       const sessionId = await page.evaluate(() => {
-        const raw = window.localStorage.getItem("scenecart-dashboard-state");
+        const key = Object.keys(window.localStorage).find((item) => item.startsWith("scenecart-dashboard-state:v2:"));
+        const raw = key ? window.localStorage.getItem(key) : null;
         if (!raw) return "";
-        return String((JSON.parse(raw) as { sessionId?: string }).sessionId ?? "");
+        return String((JSON.parse(raw) as { state?: { sessionId?: string } }).state?.sessionId ?? "");
       });
       expect(sessionId).not.toBe("");
 
@@ -359,7 +360,19 @@ for (const scenarioCase of scenarioCases) {
         await moduleTab.click();
         const resultsPanel = page.getByRole("tabpanel");
         const resultCards = resultsPanel.locator("article");
+        await expect(resultCards).toHaveCount(1);
+        await expect(resultCards.first().getByText("为什么推荐它", { exact: true })).toBeVisible();
+        if (scenario.id === "camping" && module.module_id === moduleIds[0]) {
+          const primaryCardBox = await resultCards.first().boundingBox();
+          expect(primaryCardBox).not.toBeNull();
+          expect(primaryCardBox!.height).toBeLessThan(520);
+          await resultCards.first().screenshot({ path: ".data/previews/scenecart-local-compact-recommendation.png" });
+        }
+        const alternativesToggle = resultsPanel.getByRole("button", { name: /查看 2 个备选商品/ });
+        await expect(alternativesToggle).toBeVisible();
+        await alternativesToggle.click();
         await expect(resultCards).toHaveCount(3);
+        await expect(resultsPanel.getByRole("button", { name: /收起备选商品/ })).toBeVisible();
         const detailOutcome = observations.detailOutcomes.get(module.module_id);
         if (detailOutcome === "verified") {
           await expect(resultsPanel.getByText("AI 最推荐", { exact: true })).toHaveCount(1);

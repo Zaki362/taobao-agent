@@ -1,5 +1,9 @@
 import { isScenarioId } from "@/lib/scenarios";
 import { ScenarioId, SessionState, WorkflowStage } from "@/lib/session/types";
+import { API_INPUT_LIMITS } from "@/lib/api/input-limits";
+
+export const WORKFLOW_SNAPSHOT_VERSION = 2;
+export const WORKFLOW_SNAPSHOT_TTL_MS = 7 * 24 * 60 * 60_000;
 
 export type SelectedScenario = ScenarioId | null;
 
@@ -18,6 +22,13 @@ export type PersistedDashboardState = {
 };
 
 export type ResumeSnapshot = PersistedDashboardState | null;
+
+type PersistedDashboardEnvelope = {
+  version: typeof WORKFLOW_SNAPSHOT_VERSION;
+  owner: string;
+  savedAt: number;
+  state: PersistedDashboardState;
+};
 
 const WORKFLOW_STAGES: WorkflowStage[] = [
   "landing",
@@ -170,9 +181,40 @@ export function statusMessageForRestoredStage(stage: WorkflowStage | string, fal
   return fallback || "等待开始";
 }
 
-export function restoreDashboardSnapshot(raw: string, fallbackSceneInput: string): ResumeSnapshot {
+export function serializeDashboardSnapshot(
+  state: PersistedDashboardState,
+  owner: string,
+  savedAt = Date.now()
+) {
+  const envelope: PersistedDashboardEnvelope = {
+    version: WORKFLOW_SNAPSHOT_VERSION,
+    owner,
+    savedAt,
+    state
+  };
+  return JSON.stringify(envelope);
+}
+
+export function restoreDashboardSnapshot(
+  raw: string,
+  fallbackSceneInput: string,
+  expectedOwner: string,
+  now = Date.now()
+): ResumeSnapshot {
   try {
-    const persisted = JSON.parse(raw) as Partial<PersistedDashboardState>;
+    const envelope = JSON.parse(raw) as Partial<PersistedDashboardEnvelope>;
+    if (
+      envelope.version !== WORKFLOW_SNAPSHOT_VERSION ||
+      envelope.owner !== expectedOwner ||
+      typeof envelope.savedAt !== "number" ||
+      envelope.savedAt > now + 5 * 60_000 ||
+      now - envelope.savedAt > WORKFLOW_SNAPSHOT_TTL_MS ||
+      !envelope.state ||
+      typeof envelope.state !== "object"
+    ) {
+      return null;
+    }
+    const persisted = envelope.state as Partial<PersistedDashboardState>;
     const selectedScenario = isScenarioId(persisted.selectedScenario) ? persisted.selectedScenario : null;
     const parsedScene = persisted.parsedScene ?? null;
     const parseDeepSeekMode =
@@ -190,7 +232,10 @@ export function restoreDashboardSnapshot(raw: string, fallbackSceneInput: string
     return {
       stage,
       selectedScenario,
-      sceneInput: typeof persisted.sceneInput === "string" ? persisted.sceneInput : fallbackSceneInput,
+      sceneInput:
+        typeof persisted.sceneInput === "string" && persisted.sceneInput.length <= API_INPUT_LIMITS.sceneInputLength
+          ? persisted.sceneInput
+          : fallbackSceneInput,
       parsedScene,
       parseDeepSeekMode,
       sessionId,
@@ -201,7 +246,12 @@ export function restoreDashboardSnapshot(raw: string, fallbackSceneInput: string
         stage,
         typeof persisted.statusMessage === "string" ? persisted.statusMessage : "等待开始"
       ),
-      searchSummary: Array.isArray(persisted.searchSummary) ? persisted.searchSummary : []
+      searchSummary: Array.isArray(persisted.searchSummary)
+        ? persisted.searchSummary
+            .filter((item): item is string => typeof item === "string")
+            .slice(0, 20)
+            .map((item) => item.slice(0, 500))
+        : []
     };
   } catch {
     return null;

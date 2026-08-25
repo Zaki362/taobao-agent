@@ -19,25 +19,19 @@ import { LandingPage, RequirementPage, ResumeBanner, TopHeader } from "@/compone
 import { ResultsPage } from "@/components/dashboard-results-simple";
 import { CartReviewItem, HostedWorkerStatus, MpcStatus } from "@/components/dashboard-types";
 import {
-  ResumeSnapshot,
   SelectedScenario,
-  buildDashboardPersistenceSnapshot,
   resolveHydratedSessionStage,
-  restoreDashboardSnapshot,
   statusMessageForRestoredStage,
   toRestorableStage
 } from "@/components/dashboard-workflow";
-import {
-  WORKFLOW_STORAGE_KEY,
-  defaultInput,
-} from "@/components/dashboard-config";
-import { formatCurrency } from "@/lib/utils";
+import { defaultInput } from "@/components/dashboard-config";
+import { useDashboardPersistence } from "@/components/use-dashboard-persistence";
+import { useLatestCallback } from "@/components/use-latest-callback";
+import { useRuntimeEventStream } from "@/components/use-runtime-event-stream";
 import { isRenderableSessionState } from "@/lib/session/guards";
 import {
   AgentDecision,
   ProductCandidate,
-  QuickAction,
-  RefinementImpactSummary,
   ScenarioId,
   SessionState,
   WorkflowStage
@@ -75,7 +69,6 @@ const SESSION_REQUIRED_STAGES: WorkflowStage[] = [
 ];
 
 export function Dashboard() {
-  const hasRestoredRef = useRef(false);
   const autoResumeHandledRef = useRef(false);
   const searchParams = useSearchParams();
   const [interactiveReady, setInteractiveReady] = useState(false);
@@ -95,7 +88,6 @@ export function Dashboard() {
   const [mcpStatus, setMcpStatus] = useState<MpcStatus | null>(null);
   const [hostedInstruction, setHostedInstruction] = useState<string>("");
   const [workerStatus, setWorkerStatus] = useState<HostedWorkerStatus | null>(null);
-  const [resumeSnapshot, setResumeSnapshot] = useState<ResumeSnapshot>(null);
   const [cartingProductId, setCartingProductId] = useState("");
   const [removingCartProductId, setRemovingCartProductId] = useState("");
   const [workflowControlBusy, setWorkflowControlBusy] = useState(false);
@@ -104,6 +96,20 @@ export function Dashboard() {
   const [recentSessionsLoading, setRecentSessionsLoading] = useState(true);
   const [resumingSessionId, setResumingSessionId] = useState("");
   const [lifecycleSessionId, setLifecycleSessionId] = useState("");
+  const mcpMode = mcpStatus?.mode;
+  const { resumeSnapshot, setResumeSnapshot, clearPersistedSnapshot } = useDashboardPersistence({
+    stage,
+    selectedScenario,
+    sceneInput,
+    parsedScene,
+    parseDeepSeekMode,
+    sessionId: session?.session_id ?? null,
+    selectedModuleId,
+    expandedLogs,
+    expandedModel,
+    statusMessage,
+    searchSummary
+  });
 
   useEffect(() => {
     window.scrollTo({ top: 0, behavior: "auto" });
@@ -111,6 +117,7 @@ export function Dashboard() {
 
   const selectedModule = session?.shopping_plan.modules.find((item) => item.module_id === selectedModuleId) ?? session?.shopping_plan.modules[0];
   const selectedProducts = selectedModule ? session?.module_candidates[selectedModule.module_id] ?? [] : [];
+  const activeSessionId = session?.session_id;
   const pendingHostedTasks = session?.hosted_tasks.filter((task) => task.status === "pending" || task.status === "running") ?? [];
   const completedHostedTasks = session?.hosted_tasks.filter((task) => task.status === "completed") ?? [];
   async function refreshMcpStatus() {
@@ -185,9 +192,7 @@ export function Dashboard() {
     setSelectedModuleId("");
     setHostedInstruction("");
     setCartingProductId("");
-    if (typeof window !== "undefined") {
-      window.localStorage.removeItem(WORKFLOW_STORAGE_KEY);
-    }
+    clearPersistedSnapshot();
     refreshRecentSessions().catch(() => undefined);
   }
 
@@ -197,15 +202,17 @@ export function Dashboard() {
     refreshRecentSessions().catch(() => undefined);
   }, []);
 
+  const refreshMcpStatusFromEffect = useLatestCallback(() => refreshMcpStatus());
+
   useEffect(() => {
     // Keep retrying when the first status request fails and `mcpStatus` remains
     // null. A successful non-local response can safely stop this local poller.
-    if (mcpStatus && mcpStatus.mode !== "local_executor") {
+    if (mcpMode && mcpMode !== "local_executor") {
       return;
     }
 
     const refresh = () => {
-      refreshMcpStatus().catch(() => undefined);
+      refreshMcpStatusFromEffect().catch(() => undefined);
     };
     const refreshWhenVisible = () => {
       if (document.visibilityState === "visible") refresh();
@@ -222,27 +229,9 @@ export function Dashboard() {
       window.removeEventListener("online", refresh);
       document.removeEventListener("visibilitychange", refreshWhenVisible);
     };
-  }, [mcpStatus?.mode]);
+  }, [mcpMode, refreshMcpStatusFromEffect]);
 
-  useEffect(() => {
-    if (hasRestoredRef.current || typeof window === "undefined") {
-      return;
-    }
-
-    hasRestoredRef.current = true;
-    const raw = window.localStorage.getItem(WORKFLOW_STORAGE_KEY);
-    if (!raw) {
-      return;
-    }
-
-    const snapshot = restoreDashboardSnapshot(raw, defaultInput);
-    if (!snapshot) {
-      window.localStorage.removeItem(WORKFLOW_STORAGE_KEY);
-      return;
-    }
-
-    setResumeSnapshot(snapshot);
-  }, []);
+  const resumeWorkflowFromEffect = useLatestCallback(() => resumeWorkflow());
 
   useEffect(() => {
     const shouldAutoResume = searchParams.get("resume") === "1";
@@ -255,54 +244,14 @@ export function Dashboard() {
     }
 
     autoResumeHandledRef.current = true;
-    resumeWorkflow()
+    resumeWorkflowFromEffect()
       .catch(() => undefined)
       .finally(() => {
         if (typeof window !== "undefined") {
           window.history.replaceState({}, "", "/");
         }
       });
-  }, [resumeSnapshot, searchParams]);
-
-  useEffect(() => {
-    if (typeof window === "undefined" || !hasRestoredRef.current || resumeSnapshot) {
-      return;
-    }
-
-    const payload = buildDashboardPersistenceSnapshot({
-      stage,
-      selectedScenario,
-      sceneInput,
-      parsedScene,
-      parseDeepSeekMode,
-      sessionId: session?.session_id ?? null,
-      selectedModuleId,
-      expandedLogs,
-      expandedModel,
-      statusMessage,
-      searchSummary
-    });
-
-    if (!payload) {
-      window.localStorage.removeItem(WORKFLOW_STORAGE_KEY);
-      return;
-    }
-
-    window.localStorage.setItem(WORKFLOW_STORAGE_KEY, JSON.stringify(payload));
-  }, [
-    expandedLogs,
-    expandedModel,
-    parsedScene,
-    parseDeepSeekMode,
-    sceneInput,
-    searchSummary,
-    selectedModuleId,
-    selectedScenario,
-    session?.session_id,
-    stage,
-    statusMessage,
-    resumeSnapshot
-  ]);
+  }, [resumeSnapshot, resumeWorkflowFromEffect, searchParams]);
 
   useEffect(() => {
     if (busy) {
@@ -440,7 +389,7 @@ export function Dashboard() {
       });
       if (action === "archive" && resumeSnapshot?.sessionId === summary.session_id) {
         setResumeSnapshot(null);
-        window.localStorage.removeItem(WORKFLOW_STORAGE_KEY);
+        clearPersistedSnapshot();
       }
       await refreshRecentSessions();
       setStatusMessage(action === "archive" ? "购物任务已安全归档" : "购物任务已恢复，可从最近任务继续");
@@ -453,118 +402,56 @@ export function Dashboard() {
 
   function restartWorkflowFromBanner() {
     resetWorkflow();
-    setResumeSnapshot(null);
   }
 
+  const refreshWorkerStatusFromEffect = useLatestCallback(() => refreshWorkerStatus());
+  const refreshHostedInstructionFromEffect = useLatestCallback((sessionId: string) =>
+    refreshHostedInstruction(sessionId)
+  );
+  const hydrateSessionFromEffect = useLatestCallback((sessionId: string) => hydrateSession(sessionId));
+
+  useRuntimeEventStream({
+    enabled: mcpMode === "local_executor",
+    sessionId: activeSessionId,
+    hydrateSession: hydrateSessionFromEffect,
+    refreshExecutorStatus: refreshMcpStatusFromEffect,
+    updateStatusMessage: setStatusMessage
+  });
+
   useEffect(() => {
-    if (!isHostedMode(mcpStatus)) {
+    if (mcpMode !== "codex_hosted") {
       setWorkerStatus(null);
       return;
     }
 
-    refreshWorkerStatus().catch(() => undefined);
+    refreshWorkerStatusFromEffect().catch(() => undefined);
     const timer = window.setInterval(() => {
-      refreshWorkerStatus().catch(() => undefined);
+      refreshWorkerStatusFromEffect().catch(() => undefined);
     }, 5000);
 
     return () => window.clearInterval(timer);
-  }, [mcpStatus?.mode]);
+  }, [mcpMode, refreshWorkerStatusFromEffect]);
 
   useEffect(() => {
-    if (!session || !isHostedMode(mcpStatus)) {
+    if (!activeSessionId || mcpMode !== "codex_hosted") {
       setHostedInstruction("");
       return;
     }
-    refreshHostedInstruction(session.session_id).catch(() => undefined);
-  }, [mcpStatus?.mode, session?.session_id]);
+    refreshHostedInstructionFromEffect(activeSessionId).catch(() => undefined);
+  }, [activeSessionId, mcpMode, refreshHostedInstructionFromEffect]);
 
   useEffect(() => {
-    if (!session || pendingHostedTasks.length === 0) {
+    if (!activeSessionId || pendingHostedTasks.length === 0) {
       return;
     }
 
     const timer = window.setInterval(() => {
-      hydrateSession(session.session_id).catch(() => undefined);
-      refreshHostedInstruction(session.session_id).catch(() => undefined);
+      hydrateSessionFromEffect(activeSessionId).catch(() => undefined);
+      refreshHostedInstructionFromEffect(activeSessionId).catch(() => undefined);
     }, 4000);
 
     return () => window.clearInterval(timer);
-  }, [session, pendingHostedTasks.length]);
-
-  useEffect(() => {
-    if (!session || mcpStatus?.mode !== "local_executor") {
-      return;
-    }
-
-    const sessionId = session.session_id;
-    const cursorKey = `scenecart-event-cursor:${sessionId}`;
-    const after = window.sessionStorage.getItem(cursorKey) ?? "0";
-    const stream = new EventSource(
-      `/api/runtime/events/stream?session_id=${encodeURIComponent(sessionId)}&after=${encodeURIComponent(after)}`
-    );
-    let refreshTimer: number | undefined;
-
-    const refreshFromEvent = (event: Event) => {
-      const eventId = (event as MessageEvent).lastEventId;
-      if (eventId) window.sessionStorage.setItem(cursorKey, eventId);
-      let eventType = "执行任务已更新";
-      let shouldRefreshExecutorStatus = false;
-      try {
-        const payload = JSON.parse((event as MessageEvent).data) as {
-          event_type?: string;
-          payload?: { job_type?: string };
-        };
-        if (payload.event_type === "job.completed") {
-          eventType = payload.payload?.job_type === "add_to_cart"
-            ? "后台加购已完成"
-            : "后台搜索已完成";
-        } else if (payload.event_type === "agent.workflow.updated") {
-          eventType = "服务端 Agent 已推进到下一状态";
-        } else if (payload.event_type === "job.failed") {
-          eventType = "后台任务执行失败，可在执行台查看原因";
-          shouldRefreshExecutorStatus = true;
-        } else if (payload.event_type === "job.retry_scheduled") {
-          eventType = "后台任务正在自动重试";
-        } else if (payload.event_type === "job.requeued") {
-          eventType = "任务已重新进入本地执行器队列";
-        }
-      } catch {
-        // The persisted session remains the source of truth when event metadata is unavailable.
-      }
-
-      if (refreshTimer) {
-        window.clearTimeout(refreshTimer);
-      }
-      refreshTimer = window.setTimeout(() => {
-        Promise.all([
-          hydrateSession(sessionId),
-          shouldRefreshExecutorStatus ? refreshMcpStatus().catch(() => null) : Promise.resolve(null)
-        ])
-          .then(() => setStatusMessage(eventType))
-          .catch(() => undefined);
-      }, 120);
-    };
-
-    for (const eventName of [
-      "job.created",
-      "job.requeued",
-      "job.claimed",
-      "job.completed",
-      "job.failed",
-      "job.retry_scheduled",
-      "job.cancelled",
-      "agent.workflow.updated"
-    ]) {
-      stream.addEventListener(eventName, refreshFromEvent);
-    }
-
-    return () => {
-      if (refreshTimer) {
-        window.clearTimeout(refreshTimer);
-      }
-      stream.close();
-    };
-  }, [mcpStatus?.mode, session?.session_id]);
+  }, [activeSessionId, hydrateSessionFromEffect, pendingHostedTasks.length, refreshHostedInstructionFromEffect]);
 
   async function startParsing(inputOverride?: string, scenarioOverride?: ScenarioId) {
     const rawInput = (inputOverride ?? sceneInput).trim();
@@ -1023,48 +910,6 @@ export function Dashboard() {
     });
   }
 
-  async function applyQuickAction(action: QuickAction) {
-    if (!session) {
-      return;
-    }
-    setBusy(true);
-    setErrorMessage("");
-    setStage("refining");
-    setStatusMessage(`正在根据「${action}」重算方案`);
-    try {
-      const result = await jsonFetch<{
-        session_id: string;
-        impacted_modules: string[];
-        refinement_impact?: RefinementImpactSummary;
-      }>("/api/scene/refine", {
-        method: "POST",
-        body: JSON.stringify({
-          session_id: session.session_id,
-          quick_action: action
-        }),
-        timeoutMs: 70_000
-      });
-      const hydrated = await hydrateSession(result.session_id);
-      await refreshHostedInstruction(result.session_id);
-      const impactedModules = result.impacted_modules;
-      const focusModuleId = impactedModules[0] ?? hydrated.shopping_plan.modules[0]?.module_id ?? "";
-      setSearchSummary([]);
-      setParsedScene(hydrated.scene_brief);
-      setSelectedModuleId(focusModuleId);
-      setStage("confirm_plan");
-      setStatusMessage(result.refinement_impact?.summary ?? (
-        impactedModules.length > 0
-          ? `调整后的规划已更新，预计影响 ${impactedModules.length} 个模块，请确认最新方案后开始搜索`
-          : "调整后的规划已更新，已有候选会尽量保留，请确认最新方案后开始搜索"
-      ));
-    } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : "调整失败");
-      setStage("review_results");
-    } finally {
-      setBusy(false);
-    }
-  }
-
   async function recoverCompletionGaps() {
     if (!session?.completion_report || session.completion_report.uncovered_module_ids.length === 0) {
       return;
@@ -1216,10 +1061,6 @@ export function Dashboard() {
       return;
     }
     const returnStage: WorkflowStage = stage === "cart_review" ? "cart_review" : "review_results";
-    const confirmed = window.confirm(`确认将「${product.title}」加入购物车吗？`);
-    if (!confirmed) {
-      return;
-    }
     setBusy(true);
     setErrorMessage("");
     setCartingProductId(product.product_id);

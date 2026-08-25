@@ -3,6 +3,8 @@ import {
   buildDashboardPersistenceSnapshot,
   resolveHydratedSessionStage,
   restoreDashboardSnapshot,
+  serializeDashboardSnapshot,
+  WORKFLOW_SNAPSHOT_TTL_MS,
   toRestorableStage
 } from "@/components/dashboard-workflow";
 import { createSessionFixture } from "@/tests/fixtures/session";
@@ -31,7 +33,12 @@ describe("shopping workflow persistence", () => {
       statusMessage: "规划待确认",
       searchSummary: []
     });
-    const restored = restoreDashboardSnapshot(JSON.stringify(snapshot), "fallback");
+    const restored = restoreDashboardSnapshot(
+      serializeDashboardSnapshot(snapshot!, "user:user-1", 1_000),
+      "fallback",
+      "user:user-1",
+      2_000
+    );
     expect(restored?.sessionId).toBe("session-persisted");
     expect(restored?.stage).toBe("confirm_plan");
     expect(restored?.selectedScenario).toBe("new-car");
@@ -51,11 +58,40 @@ describe("shopping workflow persistence", () => {
       statusMessage: "等待提交",
       searchSummary: []
     });
-    const restored = restoreDashboardSnapshot(JSON.stringify(snapshot), "fallback");
+    const restored = restoreDashboardSnapshot(
+      serializeDashboardSnapshot(snapshot!, "user:user-1", 1_000),
+      "fallback",
+      "user:user-1",
+      2_000
+    );
 
     expect(restored?.selectedScenario).toBe("camping");
     expect(restored?.stage).toBe("input_requirement");
     expect(restored?.sceneInput).toContain("双人露营");
+  });
+
+  it("rejects snapshots from another account or outside the retention window", () => {
+    const snapshot = buildDashboardPersistenceSnapshot({
+      stage: "input_requirement",
+      selectedScenario: "camping",
+      sceneInput: "双人露营",
+      parsedScene: null,
+      parseDeepSeekMode: null,
+      sessionId: null,
+      selectedModuleId: "",
+      expandedLogs: false,
+      expandedModel: false,
+      statusMessage: "等待提交",
+      searchSummary: []
+    });
+    const raw = serializeDashboardSnapshot(snapshot!, "user:alice", 1_000);
+    expect(restoreDashboardSnapshot(raw, "fallback", "user:bob", 2_000)).toBeNull();
+    expect(restoreDashboardSnapshot(
+      raw,
+      "fallback",
+      "user:alice",
+      1_000 + WORKFLOW_SNAPSHOT_TTL_MS + 1
+    )).toBeNull();
   });
 
   it("overrides a stale cart snapshot when the hydrated plan needs confirmation", () => {

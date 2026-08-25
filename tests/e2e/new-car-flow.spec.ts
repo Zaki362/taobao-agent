@@ -13,7 +13,11 @@ const executorHeaders = (token: string) => ({
 async function returnToLandingWithoutLocalSnapshot(page: Page) {
   await page.goto("/");
   await page.evaluate(() => {
-    window.localStorage.removeItem("scenecart-dashboard-state");
+    for (const key of Object.keys(window.localStorage)) {
+      if (key === "scenecart-dashboard-state" || key.startsWith("scenecart-dashboard-state:v2:")) {
+        window.localStorage.removeItem(key);
+      }
+    }
   });
   await page.reload();
   const recentTasks = page.locator("#recent-tasks");
@@ -104,7 +108,7 @@ async function runExecutorUntilStopped(
     let claim;
     try {
       claim = await api.post("/api/executor/jobs/claim", { headers, data: {}, timeout: 5_000 });
-    } catch (error) {
+    } catch {
       if (shouldStop()) return;
       // Next.js dev compilation can briefly hold the local endpoint. A real worker
       // treats this as a transient transport failure and continues polling.
@@ -308,9 +312,10 @@ test("authenticated new-car workflow reaches recommendations through the durable
     await expect(page.getByText("儿童安全出行", { exact: true }).first()).toBeVisible();
     await expect(page.getByText("AI 新增", { exact: true }).first()).toBeVisible();
     const persistedSessionId = await page.evaluate(() => {
-      const raw = window.localStorage.getItem("scenecart-dashboard-state");
+      const key = Object.keys(window.localStorage).find((item) => item.startsWith("scenecart-dashboard-state:v2:"));
+      const raw = key ? window.localStorage.getItem(key) : null;
       if (!raw) return "";
-      return String((JSON.parse(raw) as { sessionId?: string }).sessionId ?? "");
+      return String((JSON.parse(raw) as { state?: { sessionId?: string } }).state?.sessionId ?? "");
     });
     expect(persistedSessionId).not.toBe("");
     const workflowRequestCounts = { mcpStatus: 0, agentRun: 0, legacyModuleSearch: 0 };
@@ -550,7 +555,6 @@ test("authenticated new-car workflow reaches recommendations through the durable
     await expect(cartSummary.getByText("淘宝已加购", { exact: true })).toBeVisible();
     await expect(cartSummary.getByText("已加购总价", { exact: true })).toBeVisible();
     await expect(cartSummary.getByRole("button", { name: "查看购物清单" })).toBeDisabled();
-    page.once("dialog", (dialog) => dialog.accept());
     await page.getByRole("button", { name: "加入购物车" }).first().click();
     await expect(page.getByRole("button", { name: "淘宝已加" }).first()).toBeVisible({
       timeout: 30_000

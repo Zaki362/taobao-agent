@@ -183,21 +183,30 @@ test("Taobao login loss pauses the page and resumes the same durable job atomica
   expect(Object.values(pausedState.module_candidates).flat().length).toBeGreaterThan(0);
 
   await page.goto("/");
-  await page.evaluate(({ rawInput, sessionId, pausedState }) => {
-    window.localStorage.setItem("scenecart-dashboard-state", JSON.stringify({
-      stage: "searching",
-      selectedScenario: "new-car",
-      sceneInput: rawInput,
-      parsedScene: pausedState.scene_brief,
-      parseDeepSeekMode: pausedState.deepseek_status,
-      sessionId,
-      selectedModuleId: pausedState.shopping_plan.modules[0]?.module_id ?? "",
-      expandedLogs: false,
-      expandedModel: false,
-      statusMessage: pausedState.agent_runtime.workflow_message,
-      searchSummary: []
+  const authResponse = await page.request.get("/api/auth/me");
+  const authState = await authResponse.json() as { user?: { id?: string } };
+  expect(authState.user?.id).toBeTruthy();
+  await page.evaluate(({ rawInput, sessionId, pausedState, userId }) => {
+    const owner = `user:${userId}`;
+    window.localStorage.setItem(`scenecart-dashboard-state:v2:${encodeURIComponent(owner)}`, JSON.stringify({
+      version: 2,
+      owner,
+      savedAt: Date.now(),
+      state: {
+        stage: "searching",
+        selectedScenario: "new-car",
+        sceneInput: rawInput,
+        parsedScene: pausedState.scene_brief,
+        parseDeepSeekMode: pausedState.deepseek_status,
+        sessionId,
+        selectedModuleId: pausedState.shopping_plan.modules[0]?.module_id ?? "",
+        expandedLogs: false,
+        expandedModel: false,
+        statusMessage: pausedState.agent_runtime.workflow_message,
+        searchSummary: []
+      }
     }));
-  }, { rawInput, sessionId, pausedState });
+  }, { rawInput, sessionId, pausedState, userId: authState.user!.id! });
   await page.goto("/?resume=1");
 
   await expect(page.getByRole("heading", { name: "淘宝登录已失效，真实搜索已安全暂停" })).toBeVisible();
@@ -363,7 +372,6 @@ test("Taobao login loss pauses the page and resumes the same durable job atomica
     response.request().method() === "POST" &&
     new URL(response.url()).pathname === "/api/cart/add"
   );
-  page.once("dialog", (dialog) => dialog.accept());
   await addButton.click();
   const explicitCartResponse = await explicitCartResponsePromise;
   expect(explicitCartResponse.ok(), await explicitCartResponse.text()).toBe(true);
