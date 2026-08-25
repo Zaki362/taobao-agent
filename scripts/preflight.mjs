@@ -172,7 +172,7 @@ function assertGitignore() {
     return;
   }
 
-  const required = ["node_modules", ".next", ".env.local", ".data", "search_*.json", "*.tsbuildinfo"];
+  const required = ["node_modules", ".next", ".next-*", ".env.local", ".data", "search_*.json", "*.tsbuildinfo"];
 
   for (const entry of required) {
     if (!gitignore.includes(entry)) {
@@ -264,6 +264,22 @@ function assertProductionBuildMigrationGate() {
     buildScript.includes('import("./db-check.mjs")')
   ) {
     fail("数据库迁移必须由独立 release 阶段执行并验证，Next.js 构建不得直接修改数据库");
+  }
+}
+
+function assertBuildConfigurationIsolation() {
+  const buildScript = tryReadText("scripts/build.mjs");
+  if (!buildScript) return;
+
+  if (
+    !buildScript.includes("withRestoredNextBuildConfiguration") ||
+    !buildScript.includes('path.join(resolvedRoot, "next-env.d.ts")') ||
+    !buildScript.includes("environment.NEXT_TSCONFIG_PATH") ||
+    !buildScript.includes("snapshotTrackedFile") ||
+    !buildScript.includes("restoreTrackedFile") ||
+    !buildScript.includes("finally")
+  ) {
+    fail("Next.js build 必须在成功或失败后恢复 next-env.d.ts 与构建使用的 tsconfig");
   }
 }
 
@@ -1296,6 +1312,7 @@ function run() {
   assertExecutorConfigurator();
   assertDevelopmentLauncher();
   assertProductionBuildMigrationGate();
+  assertBuildConfigurationIsolation();
   assertE2EServerIsolation();
   assertDeploymentAssets();
   assertRequiredFiles();
