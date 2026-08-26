@@ -1,15 +1,37 @@
 import { NextRequest } from "next/server";
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const { postgresRuntimeMock, queryMock } = vi.hoisted(() => ({
+  postgresRuntimeMock: vi.fn(() => false),
+  queryMock: vi.fn()
+}));
+
+vi.mock("@/lib/runtime/database", () => ({
+  isPostgresRuntimeEnabled: postgresRuntimeMock,
+  query: queryMock
+}));
+
 import {
   clearAuthRateLimit,
   acquireEventStreamLease,
+  enforceAiRateLimit,
   enforceAuthRateLimit,
   resetRateLimitsForTests,
   withAiConcurrencyLimit
 } from "@/lib/security/rate-limit";
 
 describe("authentication rate limit", () => {
-  beforeEach(() => resetRateLimitsForTests());
+  beforeEach(() => {
+    resetRateLimitsForTests();
+    postgresRuntimeMock.mockReset().mockReturnValue(false);
+    queryMock.mockReset().mockResolvedValue({ rowCount: 1, rows: [] });
+  });
+
+  afterEach(() => {
+    resetRateLimitsForTests();
+    vi.useRealTimers();
+    vi.unstubAllEnvs();
+  });
 
   it("blocks repeated attempts without storing the raw identity", async () => {
     const request = new NextRequest("http://localhost/api/auth/login", {
@@ -93,5 +115,49 @@ describe("authentication rate limit", () => {
     await releases[0]();
     const replacement = await acquireEventStreamLease(request, "user-1", "session-1");
     await Promise.all([...releases.slice(1).map((release) => release()), replacement()]);
+  });
+
+  it("keeps a daily quota exhausted until its 24-hour window expires", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-26T00:00:00.000Z"));
+    vi.stubEnv("SCENECART_AI_RATE_LIMIT_MINUTE_IP", "100");
+    vi.stubEnv("SCENECART_AI_RATE_LIMIT_MINUTE_ACCOUNT", "100");
+    vi.stubEnv("SCENECART_AI_RATE_LIMIT_DAILY_IP", "1");
+    vi.stubEnv("SCENECART_AI_RATE_LIMIT_DAILY_ACCOUNT", "100");
+
+    const request = new NextRequest("http://localhost/api/scene/plan", { method: "POST" });
+    await expect(enforceAiRateLimit(request, "daily-user")).resolves.toBeUndefined();
+    await expect(enforceAiRateLimit(request, "daily-user"))
+      .rejects.toMatchObject({ status: 429, code: "rate_limited" });
+
+    vi.advanceTimersByTime(60 * 60_000 + 1);
+    await expect(enforceAiRateLimit(request, "daily-user"))
+      .rejects.toMatchObject({ status: 429, code: "rate_limited" });
+
+    vi.advanceTimersByTime(23 * 60 * 60_000);
+    await expect(enforceAiRateLimit(request, "daily-user")).resolves.toBeUndefined();
+  });
+
+  it("marks PostgreSQL daily rules as fixed-window limits", async () => {
+    postgresRuntimeMock.mockReturnValue(true);
+    queryMock.mockResolvedValue({
+      rowCount: 1,
+      rows: [{ attempt_count: 1, blocked_until: null }]
+    });
+    vi.stubEnv("SCENECART_AI_RATE_LIMIT_MINUTE_IP", "100");
+    vi.stubEnv("SCENECART_AI_RATE_LIMIT_MINUTE_ACCOUNT", "100");
+    vi.stubEnv("SCENECART_AI_RATE_LIMIT_DAILY_IP", "1");
+    vi.stubEnv("SCENECART_AI_RATE_LIMIT_DAILY_ACCOUNT", "1");
+
+    const request = new NextRequest("http://localhost/api/scene/plan", { method: "POST" });
+    await enforceAiRateLimit(request, "postgres-daily-user");
+
+    expect(queryMock).toHaveBeenCalledTimes(4);
+    expect(queryMock.mock.calls[0]?.[1]?.[4]).toBe(true);
+    expect(queryMock.mock.calls[2]?.[1]?.[4]).toBe(false);
+    expect(queryMock.mock.calls[2]?.[0]).toContain("$5::boolean");
+    expect(queryMock.mock.calls[2]?.[0]).toContain(
+      "security_rate_limits.window_started_at + ($2::text || ' milliseconds')::interval"
+    );
   });
 });

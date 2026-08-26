@@ -19,6 +19,7 @@ interface RateLimitRule {
   limit: number;
   windowMs: number;
   blockMs: number;
+  resetWindowOnBlockExpiry: boolean;
 }
 
 declare global {
@@ -66,24 +67,31 @@ async function consumePostgresLimit(rule: RateLimitRule) {
      ON CONFLICT(key_hash) DO UPDATE SET
        attempt_count = CASE
          WHEN security_rate_limits.window_started_at <= NOW() - ($2::text || ' milliseconds')::interval
-           OR (security_rate_limits.blocked_until IS NOT NULL AND security_rate_limits.blocked_until <= NOW()) THEN 1
+           OR ($5::boolean AND security_rate_limits.blocked_until IS NOT NULL
+             AND security_rate_limits.blocked_until <= NOW()) THEN 1
          ELSE security_rate_limits.attempt_count + 1
        END,
        window_started_at = CASE
          WHEN security_rate_limits.window_started_at <= NOW() - ($2::text || ' milliseconds')::interval
-           OR (security_rate_limits.blocked_until IS NOT NULL AND security_rate_limits.blocked_until <= NOW()) THEN NOW()
+           OR ($5::boolean AND security_rate_limits.blocked_until IS NOT NULL
+             AND security_rate_limits.blocked_until <= NOW()) THEN NOW()
          ELSE security_rate_limits.window_started_at
        END,
        blocked_until = CASE
          WHEN security_rate_limits.blocked_until > NOW() THEN security_rate_limits.blocked_until
          WHEN security_rate_limits.window_started_at <= NOW() - ($2::text || ' milliseconds')::interval
-           OR (security_rate_limits.blocked_until IS NOT NULL AND security_rate_limits.blocked_until <= NOW()) THEN NULL
-         WHEN security_rate_limits.attempt_count + 1 > $3 THEN NOW() + ($4::text || ' milliseconds')::interval
+           OR ($5::boolean AND security_rate_limits.blocked_until IS NOT NULL
+             AND security_rate_limits.blocked_until <= NOW()) THEN NULL
+         WHEN security_rate_limits.attempt_count + 1 > $3 THEN
+           CASE
+             WHEN $5::boolean THEN NOW() + ($4::text || ' milliseconds')::interval
+             ELSE security_rate_limits.window_started_at + ($2::text || ' milliseconds')::interval
+           END
          ELSE NULL
        END,
        updated_at = NOW()
      RETURNING attempt_count, blocked_until`,
-    [rule.keyHash, rule.windowMs, rule.limit, rule.blockMs]
+    [rule.keyHash, rule.windowMs, rule.limit, rule.blockMs, rule.resetWindowOnBlockExpiry]
   );
   const row = result.rows[0];
   return row.blocked_until ? new Date(row.blocked_until).getTime() : 0;
@@ -98,12 +106,16 @@ function consumeLocalLimit(rule: RateLimitRule) {
     return 0;
   }
   if (existing.blockedUntil > now) return existing.blockedUntil;
-  if (existing.blockedUntil > 0) {
+  if (existing.blockedUntil > 0 && rule.resetWindowOnBlockExpiry) {
     entries.set(rule.keyHash, { count: 1, windowStartedAt: now, blockedUntil: 0 });
     return 0;
   }
   existing.count += 1;
-  if (existing.count > rule.limit) existing.blockedUntil = now + rule.blockMs;
+  if (existing.count > rule.limit) {
+    existing.blockedUntil = rule.resetWindowOnBlockExpiry
+      ? now + rule.blockMs
+      : existing.windowStartedAt + rule.windowMs;
+  }
   return existing.blockedUntil;
 }
 
@@ -133,10 +145,34 @@ function scopedRules(
   const address = requestAddress(request);
   const identityValue = identity?.trim() || `anonymous:${address}`;
   return [
-    { keyHash: identifierHash(namespace, "minute:ip", address), limit: input.minuteIp, windowMs: 60_000, blockMs: 60_000 },
-    { keyHash: identifierHash(namespace, "minute:identity", identityValue), limit: input.minuteIdentity, windowMs: 60_000, blockMs: 60_000 },
-    { keyHash: identifierHash(namespace, "daily:ip", address), limit: input.dailyIp, windowMs: 24 * 60 * 60_000, blockMs: 60 * 60_000 },
-    { keyHash: identifierHash(namespace, "daily:identity", identityValue), limit: input.dailyIdentity, windowMs: 24 * 60 * 60_000, blockMs: 60 * 60_000 }
+    {
+      keyHash: identifierHash(namespace, "minute:ip", address),
+      limit: input.minuteIp,
+      windowMs: 60_000,
+      blockMs: 60_000,
+      resetWindowOnBlockExpiry: true
+    },
+    {
+      keyHash: identifierHash(namespace, "minute:identity", identityValue),
+      limit: input.minuteIdentity,
+      windowMs: 60_000,
+      blockMs: 60_000,
+      resetWindowOnBlockExpiry: true
+    },
+    {
+      keyHash: identifierHash(namespace, "daily:ip", address),
+      limit: input.dailyIp,
+      windowMs: 24 * 60 * 60_000,
+      blockMs: 60 * 60_000,
+      resetWindowOnBlockExpiry: false
+    },
+    {
+      keyHash: identifierHash(namespace, "daily:identity", identityValue),
+      limit: input.dailyIdentity,
+      windowMs: 24 * 60 * 60_000,
+      blockMs: 60 * 60_000,
+      resetWindowOnBlockExpiry: false
+    }
   ];
 }
 
@@ -179,13 +215,15 @@ export async function enforceAuthRateLimit(
       keyHash: identifierHash(namespace, "ip", requestAddress(request)),
       limit: ipLimit,
       windowMs,
-      blockMs
+      blockMs,
+      resetWindowOnBlockExpiry: true
     },
     {
       keyHash: identifierHash(namespace, "subject", input.subject),
       limit: subjectLimit,
       windowMs,
-      blockMs
+      blockMs,
+      resetWindowOnBlockExpiry: true
     }
   ]);
 }
