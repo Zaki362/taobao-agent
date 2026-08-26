@@ -5,6 +5,9 @@ import { middleware } from "@/middleware";
 
 const originalAuthRequired = process.env.AUTH_REQUIRED;
 const originalAppOrigin = process.env.APP_ORIGIN;
+const originalAccessMode = process.env.SCENECART_ACCESS_MODE;
+const originalVercelEnvironment = process.env.VERCEL_ENV;
+const originalVercelUrl = process.env.VERCEL_URL;
 
 function restore(name: "AUTH_REQUIRED" | "APP_ORIGIN", value: string | undefined) {
   if (value === undefined) delete process.env[name];
@@ -27,6 +30,12 @@ describe("API mutation origin protection", () => {
   afterAll(() => {
     restore("AUTH_REQUIRED", originalAuthRequired);
     restore("APP_ORIGIN", originalAppOrigin);
+    if (originalAccessMode === undefined) delete process.env.SCENECART_ACCESS_MODE;
+    else process.env.SCENECART_ACCESS_MODE = originalAccessMode;
+    if (originalVercelEnvironment === undefined) delete process.env.VERCEL_ENV;
+    else process.env.VERCEL_ENV = originalVercelEnvironment;
+    if (originalVercelUrl === undefined) delete process.env.VERCEL_URL;
+    else process.env.VERCEL_URL = originalVercelUrl;
   });
 
   it("does not let an arbitrary Bearer value bypass Origin checks for a session request", async () => {
@@ -67,5 +76,17 @@ describe("API mutation origin protection", () => {
 
     expect(response.status).toBe(403);
     await expect(response.json()).resolves.toMatchObject({ code: "invalid_origin" });
+  });
+
+  it("allows the platform-provided host for a protected single-user Preview", () => {
+    process.env.SCENECART_ACCESS_MODE = "single_user";
+    process.env.VERCEL_ENV = "preview";
+    process.env.VERCEL_URL = "scenecart-owner-preview.example.vercel.app";
+
+    const response = middleware(mutationRequest({
+      origin: "https://scenecart-owner-preview.example.vercel.app"
+    }));
+
+    expect(response.headers.get("x-middleware-next")).toBe("1");
   });
 });

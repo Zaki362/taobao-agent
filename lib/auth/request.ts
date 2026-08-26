@@ -1,6 +1,11 @@
 import { cookies } from "next/headers";
 import { ApiRouteError } from "@/lib/api/responses";
 import { AUTH_COOKIE_NAME } from "@/lib/auth/constants";
+import {
+  configuredSingleUserId,
+  getSceneCartAccessMode,
+  resolveSingleUserOwner
+} from "@/lib/auth/access-mode";
 import { authenticateToken } from "@/lib/auth/service";
 import { isFormalProductMode } from "@/lib/runtime/product-mode";
 
@@ -23,11 +28,29 @@ export function shouldUseSecureAuthCookie() {
 }
 
 export function isAuthenticationRequired() {
-  // Formal product sessions and executor devices must always be isolated by account.
+  // Preview-only single-user mode keeps a stable owner without an interactive login.
+  if (getSceneCartAccessMode() === "single_user") {
+    configuredSingleUserId();
+    return false;
+  }
+  // Multi-user formal sessions and executor devices must always be isolated by account.
   return isFormalProductMode() || process.env.AUTH_REQUIRED === "true";
 }
 
 export async function getRequestIdentity() {
+  const accessMode = getSceneCartAccessMode();
+  if (accessMode === "single_user") {
+    const user = await resolveSingleUserOwner();
+    if (!user) {
+      throw new ApiRouteError("单用户 owner 未配置", 503, "single_user_owner_misconfigured");
+    }
+    return {
+      userId: user.id,
+      email: user.email,
+      authenticated: true as const,
+      accessMode: "single_user" as const
+    };
+  }
   const cookieStore = await cookies();
   const token = cookieStore.get(AUTH_COOKIE_NAME)?.value;
   const authenticated = token ? await authenticateToken(token) : null;
@@ -35,7 +58,8 @@ export async function getRequestIdentity() {
     return {
       userId: authenticated.user.id,
       email: authenticated.user.email,
-      authenticated: true as const
+      authenticated: true as const,
+      accessMode: "account" as const
     };
   }
   if (isAuthenticationRequired()) {
@@ -44,7 +68,8 @@ export async function getRequestIdentity() {
   return {
     userId: undefined,
     email: undefined,
-    authenticated: false as const
+    authenticated: false as const,
+    accessMode: "anonymous" as const
   };
 }
 

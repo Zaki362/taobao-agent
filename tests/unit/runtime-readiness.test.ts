@@ -11,6 +11,9 @@ const originalMcpDebug = process.env.SCENECART_ENABLE_MCP_DEBUG;
 const originalRuntimeStore = process.env.RUNTIME_STORE;
 const originalDatabaseUrl = process.env.DATABASE_URL;
 const originalAuthRequired = process.env.AUTH_REQUIRED;
+const originalAccessMode = process.env.SCENECART_ACCESS_MODE;
+const originalSingleUserId = process.env.SCENECART_SINGLE_USER_ID;
+const originalVercelEnvironment = process.env.VERCEL_ENV;
 const originalAuthCookieSecure = process.env.AUTH_COOKIE_SECURE;
 const originalAppOrigin = process.env.APP_ORIGIN;
 
@@ -20,6 +23,9 @@ beforeEach(() => {
   delete process.env.SCENECART_CRON_SECRET;
   delete process.env.SCENECART_RECOVERY_STALE_MS;
   delete process.env.SCENECART_ENABLE_MCP_DEBUG;
+  delete process.env.SCENECART_ACCESS_MODE;
+  delete process.env.SCENECART_SINGLE_USER_ID;
+  delete process.env.VERCEL_ENV;
 });
 
 afterEach(() => {
@@ -39,6 +45,12 @@ afterEach(() => {
   else process.env.DATABASE_URL = originalDatabaseUrl;
   if (originalAuthRequired === undefined) delete process.env.AUTH_REQUIRED;
   else process.env.AUTH_REQUIRED = originalAuthRequired;
+  if (originalAccessMode === undefined) delete process.env.SCENECART_ACCESS_MODE;
+  else process.env.SCENECART_ACCESS_MODE = originalAccessMode;
+  if (originalSingleUserId === undefined) delete process.env.SCENECART_SINGLE_USER_ID;
+  else process.env.SCENECART_SINGLE_USER_ID = originalSingleUserId;
+  if (originalVercelEnvironment === undefined) delete process.env.VERCEL_ENV;
+  else process.env.VERCEL_ENV = originalVercelEnvironment;
   if (originalAuthCookieSecure === undefined) delete process.env.AUTH_COOKIE_SECURE;
   else process.env.AUTH_COOKIE_SECURE = originalAuthCookieSecure;
   if (originalAppOrigin === undefined) delete process.env.APP_ORIGIN;
@@ -46,6 +58,31 @@ afterEach(() => {
 });
 
 describe("production readiness", () => {
+  it("recognizes a fixed Preview owner without marking the build production-ready", async () => {
+    const ownerId = "11111111-1111-4111-8111-111111111111";
+    const now = new Date().toISOString();
+    await localRuntimeRepository.createUser({
+      id: ownerId,
+      email: "owner@example.com",
+      password_hash: "unused",
+      created_at: now,
+      updated_at: now
+    });
+    process.env.SCENECART_ACCESS_MODE = "single_user";
+    process.env.SCENECART_SINGLE_USER_ID = ownerId;
+    process.env.VERCEL_ENV = "preview";
+
+    const readiness = await inspectRuntimeReadiness(ownerId);
+    const accessCheck = readiness.checks.find((item) => item.id === "authentication");
+
+    expect(readiness.access_mode).toBe("single_user");
+    expect(readiness.ready_for_production).toBe(false);
+    expect(accessCheck).toMatchObject({
+      status: "pass",
+      detail: expect.stringContaining("固定 owner")
+    });
+  });
+
   it("fails closed when the application still uses development runtime settings", async () => {
     const readiness = await inspectRuntimeReadiness();
     const checks = new Map(readiness.checks.map((item) => [item.id, item]));

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { AUTH_COOKIE_NAME, shouldUseSecureAuthCookie } from "@/lib/auth/request";
+import { assertInteractiveAuthenticationEnabled } from "@/lib/auth/access-mode";
 import { loginUser } from "@/lib/auth/service";
 import { apiRouteError, requireString } from "@/lib/api/responses";
 import { clearAuthRateLimit, enforceAuthRateLimit } from "@/lib/security/rate-limit";
@@ -7,6 +8,7 @@ import { readJsonObject } from "@/lib/api/validation";
 
 export async function POST(request: NextRequest) {
   try {
+    assertInteractiveAuthenticationEnabled();
     const body = await readJsonObject(request, 16 * 1024);
     const email = requireString(body.email, "email");
     await enforceAuthRateLimit(request, { action: "login", subject: email });

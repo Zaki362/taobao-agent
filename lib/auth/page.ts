@@ -1,9 +1,13 @@
 import { redirect } from "next/navigation";
+import { connection } from "next/server";
+import { isSingleUserAccessMode } from "@/lib/auth/access-mode";
 import { getRequestIdentity, isAuthenticationRequired } from "@/lib/auth/request";
 import { normalizeAuthReturnPath } from "@/lib/auth/return-path";
 import type { Route } from "next";
 
 export async function requirePageIdentity() {
+  await connection();
+  if (isSingleUserAccessMode()) return getRequestIdentity();
   if (!isAuthenticationRequired()) return null;
   const identity = await getRequestIdentity().catch(() => null);
   if (!identity?.authenticated) redirect("/login");
@@ -11,7 +15,10 @@ export async function requirePageIdentity() {
 }
 
 export async function requireAuthenticatedPageIdentity(returnTo: Route = "/") {
-  const identity = await getRequestIdentity().catch(() => null);
+  await connection();
+  const identity = isSingleUserAccessMode()
+    ? await getRequestIdentity()
+    : await getRequestIdentity().catch(() => null);
   if (!identity?.authenticated) {
     const safeReturnTo = normalizeAuthReturnPath(returnTo);
     redirect(`/login?next=${encodeURIComponent(safeReturnTo)}`);
@@ -20,6 +27,9 @@ export async function requireAuthenticatedPageIdentity(returnTo: Route = "/") {
 }
 
 export async function redirectAuthenticatedUser(returnTo: Route = "/") {
-  const identity = await getRequestIdentity().catch(() => null);
+  await connection();
+  const identity = isSingleUserAccessMode()
+    ? await getRequestIdentity()
+    : await getRequestIdentity().catch(() => null);
   if (identity?.authenticated) redirect(normalizeAuthReturnPath(returnTo));
 }

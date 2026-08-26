@@ -7,6 +7,9 @@ const original = {
   runtimeStore: process.env.RUNTIME_STORE,
   databaseUrl: process.env.DATABASE_URL,
   authRequired: process.env.AUTH_REQUIRED,
+  accessMode: process.env.SCENECART_ACCESS_MODE,
+  singleUserId: process.env.SCENECART_SINGLE_USER_ID,
+  vercelEnvironment: process.env.VERCEL_ENV,
   authCookieSecure: process.env.AUTH_COOKIE_SECURE,
   appOrigin: process.env.APP_ORIGIN
 };
@@ -22,6 +25,9 @@ afterEach(() => {
   restore("runtimeStore", "RUNTIME_STORE");
   restore("databaseUrl", "DATABASE_URL");
   restore("authRequired", "AUTH_REQUIRED");
+  restore("accessMode", "SCENECART_ACCESS_MODE");
+  restore("singleUserId", "SCENECART_SINGLE_USER_ID");
+  restore("vercelEnvironment", "VERCEL_ENV");
   restore("authCookieSecure", "AUTH_COOKIE_SECURE");
   restore("appOrigin", "APP_ORIGIN");
 });
@@ -32,6 +38,23 @@ describe("formal runtime safety", () => {
     process.env.AUTH_REQUIRED = "false";
 
     expect(isAuthenticationRequired()).toBe(true);
+  });
+
+  it("allows a fixed-owner access mode only outside Vercel Production", () => {
+    process.env.SCENECART_PRODUCT_MODE = "production";
+    process.env.SCENECART_ACCESS_MODE = "single_user";
+    process.env.SCENECART_SINGLE_USER_ID = "11111111-1111-4111-8111-111111111111";
+    process.env.VERCEL_ENV = "preview";
+
+    expect(isAuthenticationRequired()).toBe(false);
+  });
+
+  it("makes the authentication contract fail closed in Vercel Production", () => {
+    process.env.SCENECART_ACCESS_MODE = "single_user";
+    process.env.SCENECART_SINGLE_USER_ID = "11111111-1111-4111-8111-111111111111";
+    process.env.VERCEL_ENV = "production";
+
+    expect(() => isAuthenticationRequired()).toThrow("不能用于 Production");
   });
 
   it("refuses to use the local repository in formal product mode", () => {

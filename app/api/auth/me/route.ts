@@ -8,6 +8,7 @@ export async function GET() {
     return apiOk({
       authenticated: identity.authenticated,
       authentication_required: isAuthenticationRequired(),
+      access_mode: identity.accessMode,
       user: identity.authenticated ? { id: identity.userId, email: identity.email } : null,
       runtime_store: runtimeStoreMode()
     });

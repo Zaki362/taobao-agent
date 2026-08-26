@@ -8,6 +8,15 @@ function expectedOrigins(request: NextRequest) {
     .split(",")
     .map((item) => item.trim())
     .filter(Boolean);
+  // Vercel assigns every Preview an immutable host after the build starts. In the
+  // protected single-user mode, trust only that platform-provided host in addition
+  // to the explicit allowlist; never derive an origin from forwarded headers.
+  const vercelPreviewOrigin = process.env.SCENECART_ACCESS_MODE === "single_user" &&
+    process.env.VERCEL_ENV === "preview" &&
+    process.env.VERCEL_URL?.trim()
+    ? `https://${process.env.VERCEL_URL.trim()}`
+    : "";
+  if (vercelPreviewOrigin) configured.push(vercelPreviewOrigin);
   if (configured.length > 0) return new Set(configured);
   // A forwarded host header is transport metadata, not an origin allowlist.
   // Formal deployments must configure APP_ORIGIN; only local development may

@@ -127,6 +127,8 @@ function assertEnvExample() {
     "TAOBAO_NATIVE_MCP_URL",
     "TAOBAO_MCP_BASE_URL",
     "SCENECART_ENABLE_MCP_DEBUG",
+    "SCENECART_ACCESS_MODE",
+    "SCENECART_SINGLE_USER_ID",
     "SCENECART_DEV_PORT",
     "APP_ORIGIN"
   ];
@@ -486,6 +488,10 @@ function assertRemovedLegacyFiles() {
 }
 
 function assertArchitectureContracts() {
+  const homePage = tryReadText("app/page.tsx");
+  const hostedPage = tryReadText("app/hosted/page.tsx");
+  const loginPage = tryReadText("app/login/page.tsx");
+  const executorSettingsPage = tryReadText("app/settings/executor/page.tsx");
   const deepseek = tryReadText("lib/llm/deepseek.ts");
   const matcher = tryReadText("lib/agent/product-matcher.ts");
   const planner = tryReadText("lib/agent/planner.ts");
@@ -559,6 +565,8 @@ function assertArchitectureContracts() {
   const localRuntimeRepository = tryReadText("lib/runtime/local-repository.ts");
   const postgresRuntimeRepository = tryReadText("lib/runtime/postgres-repository.ts");
   const authRequest = tryReadText("lib/auth/request.ts");
+  const authPage = tryReadText("lib/auth/page.ts");
+  const authAccessMode = tryReadText("lib/auth/access-mode.ts");
   const runtimeJobs = tryReadText("lib/runtime/jobs.ts");
   const sessionStore = tryReadText("lib/session/store.ts");
   const sessionGuards = tryReadText("lib/session/guards.ts");
@@ -569,6 +577,10 @@ function assertArchitectureContracts() {
   const releaseAudit = tryReadText("scripts/release-audit.mjs");
 
   if (
+    !homePage ||
+    !hostedPage ||
+    !loginPage ||
+    !executorSettingsPage ||
     !deepseek ||
     !matcher ||
     !planner ||
@@ -638,6 +650,8 @@ function assertArchitectureContracts() {
     !runtimeIndex ||
     !localRuntimeRepository ||
     !postgresRuntimeRepository ||
+    !authAccessMode ||
+    !authPage ||
     !authRequest ||
     !runtimeJobs ||
     !sessionStore ||
@@ -659,12 +673,23 @@ function assertArchitectureContracts() {
   }
 
   if (
+    !homePage.includes('export const dynamic = "force-dynamic"') ||
+    !hostedPage.includes('export const dynamic = "force-dynamic"') ||
+    !loginPage.includes('export const dynamic = "force-dynamic"') ||
+    !executorSettingsPage.includes('export const dynamic = "force-dynamic"') ||
     !runtimeIndex.includes("assertRuntimeRepositoryConfiguration") ||
     !runtimeIndex.includes("正式产品模式拒绝使用本地运行时") ||
+    !authRequest.includes('getSceneCartAccessMode() === "single_user"') ||
     !authRequest.includes('isFormalProductMode() || process.env.AUTH_REQUIRED === "true"') ||
+    !authAccessMode.includes("if (!protectedPreview && !localDevelopment)") ||
+    !authAccessMode.includes("SCENECART_SINGLE_USER_ID") ||
+    !authAccessMode.includes("findUserById") ||
+    !authRequest.includes("configuredSingleUserId();") ||
+    !authPage.includes('from "next/server"') ||
+    !authPage.includes("await connection();") ||
     !authRequest.includes("if (hasHttpsAppOrigin()) return true")
   ) {
-    fail("正式产品模式必须强制账号隔离、拒绝本地运行时，并阻止 HTTPS Cookie 被错误降级");
+    fail("身份相关页面必须动态渲染；正式产品保留账号隔离，Preview 单用户模式固定 owner、阻断 Production，并拒绝本地运行时与 Cookie 降级");
   }
 
   const contracts = [

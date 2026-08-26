@@ -2,6 +2,8 @@ import { AuthForm } from "@/components/auth-form";
 import { normalizeAuthReturnPath } from "@/lib/auth/return-path";
 import { redirectAuthenticatedUser } from "@/lib/auth/page";
 
+export const dynamic = "force-dynamic";
+
 export default async function LoginPage({
   searchParams
 }: {

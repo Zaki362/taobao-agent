@@ -1,6 +1,8 @@
 import { ExecutorSettings } from "@/components/executor-settings";
 import { requireAuthenticatedPageIdentity } from "@/lib/auth/page";
 
+export const dynamic = "force-dynamic";
+
 export default async function ExecutorSettingsPage() {
   await requireAuthenticatedPageIdentity("/settings/executor");
   return (

@@ -187,6 +187,8 @@ DATABASE_URL=postgresql://...
 DATABASE_SSL=true
 DATABASE_SSL_REJECT_UNAUTHORIZED=true
 AUTH_REQUIRED=true
+SCENECART_ACCESS_MODE=account
+SCENECART_SINGLE_USER_ID=
 APP_ORIGIN=https://your-scenecart.example.com
 SCENECART_API_URL=http://127.0.0.1:3000
 SCENECART_DEMO_CLOUD_URL=https://your-scenecart.example.com
@@ -210,6 +212,7 @@ SCENECART_CRON_SECRET=
 - `SCENECART_LOCAL_RUNTIME_PERSIST`：本地开发默认为 `true`，把设备令牌摘要、登录会话和任务队列原子写入被 Git 忽略的 `.data/runtime/local-runtime.json`，完整重启后无需重新注册设备；自动化测试会显式关闭。正式环境仍必须使用 PostgreSQL。
 - `DATABASE_URL`：PostgreSQL 连接串。配置后先运行 `npm run db:migrate`。
 - `AUTH_REQUIRED=true`：正式部署必须开启，确保 Session、设备与任务按用户隔离。
+- `SCENECART_ACCESS_MODE=single_user`：仅用于本地或受 Vercel Deployment Protection 保护的 Preview。配合既有 `app_users` 的 `SCENECART_SINGLE_USER_ID` 后不再显示应用登录页，但 Session、设备和任务仍固定绑定该 owner；Vercel Production 会直接拒绝该模式。
 - `APP_ORIGIN`：正式产品允许发起写请求的网页 Origin；多个地址使用逗号分隔。
 - `SCENECART_RELEASE_VERIFY_URL`：可选的正式发布探测地址；`npm run release:verify` 未显式传 `--url` 时优先使用它，否则使用 `APP_ORIGIN` 的第一个地址。
 - `SCENECART_DEMO_CLOUD_URL`：可选的云端面试网页根地址；`npm run demo:cloud` 未传 `--url` 时优先读取它。该命令只接受非本地 HTTPS 地址。

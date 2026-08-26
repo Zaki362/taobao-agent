@@ -1,4 +1,8 @@
 import { getConfiguredExecutionBackend, getExecutionBackend } from "@/lib/mcp/client";
+import {
+  getSceneCartAccessMode,
+  resolveSingleUserOwner
+} from "@/lib/auth/access-mode";
 import { isAuthenticationRequired, shouldUseSecureAuthCookie } from "@/lib/auth/request";
 import { query } from "@/lib/runtime/database";
 import { getRuntimeRepository, runtimeStoreMode } from "@/lib/runtime";
@@ -52,6 +56,20 @@ export async function inspectRuntimeReadiness(userId?: string) {
   const configuredExecutor = getConfiguredExecutionBackend();
   const authConfigured = process.env.AUTH_REQUIRED === "true";
   const authRequired = isAuthenticationRequired();
+  const accessMode = getSceneCartAccessMode();
+  let singleUserOwnerReady = false;
+  let singleUserOwnerDetail = "";
+  if (accessMode === "single_user") {
+    try {
+      const owner = await resolveSingleUserOwner();
+      singleUserOwnerReady = Boolean(owner);
+      singleUserOwnerDetail = owner
+        ? "单用户免登录已绑定固定 owner；会话、设备和任务仍按该 owner 隔离"
+        : "单用户 owner 未配置";
+    } catch (error) {
+      singleUserOwnerDetail = error instanceof Error ? error.message : "单用户 owner 校验失败";
+    }
+  }
   const secureCookieConfigured = process.env.AUTH_COOKIE_SECURE === "true";
   const secureCookie = shouldUseSecureAuthCookie();
   const deepSeekConfigured = configured(process.env.DEEPSEEK_API_KEY) && process.env.DEEPSEEK_DISABLED !== "true";
@@ -121,15 +139,21 @@ export async function inspectRuntimeReadiness(userId?: string) {
 
   checks.push(check(
     "authentication",
-    "用户认证",
-    authConfigured && authRequired ? "pass" : "fail",
+    "访问身份",
+    accessMode === "single_user"
+      ? (singleUserOwnerReady ? "pass" : "fail")
+      : (authConfigured && authRequired ? "pass" : "fail"),
     true,
-    authConfigured
-      ? "AUTH_REQUIRED 已开启"
-      : authRequired
-        ? "正式模式已强制账号隔离，但 AUTH_REQUIRED 尚未显式配置"
-        : "当前允许匿名使用",
-    "正式环境设置 AUTH_REQUIRED=true"
+    accessMode === "single_user"
+      ? singleUserOwnerDetail
+      : authConfigured
+        ? "AUTH_REQUIRED 已开启"
+        : authRequired
+          ? "正式模式已强制账号隔离，但 AUTH_REQUIRED 尚未显式配置"
+          : "当前允许匿名使用",
+    accessMode === "single_user"
+      ? "仅在受 Vercel Protection 保护的 Preview 配置既有 owner UUID；Production 使用 account 模式"
+      : "正式环境设置 AUTH_REQUIRED=true"
   ));
   const workflowRecoveryStatus: ReadinessStatus = !workflowRecoveryConfigured
     ? "fail"
@@ -317,18 +341,21 @@ export async function inspectRuntimeReadiness(userId?: string) {
     }
   }
 
-  const readyForProduction = checks.every((item) => !item.required || item.status === "pass");
+  const operationalConfigurationReady = checks.every((item) => !item.required || item.status === "pass");
+  // Single-user access is intentionally a Preview/local convenience and can never be production-ready.
+  const readyForProduction = operationalConfigurationReady && accessMode === "account";
   const executorReady =
     executorCapabilities.capabilities.module_search.available &&
     executorCapabilities.capabilities.add_to_cart.available;
   return {
     product_mode: productMode,
+    access_mode: accessMode,
     demo_cart_fallback: demoCartFallback,
     mcp_debug_enabled: isMcpDebugEnabled(),
     configured_executor_backend: configuredExecutor,
     effective_executor_backend: executor,
     ready_for_production: readyForProduction,
-    operational_for_shopping: readyForProduction && executorReady,
+    operational_for_shopping: operationalConfigurationReady && executorReady,
     executor_capabilities: executorCapabilities,
     workflow_recovery: {
       configured: workflowRecoveryConfigured,

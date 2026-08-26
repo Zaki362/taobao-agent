@@ -29,6 +29,7 @@ ALLOW_DEMO_CART_FALLBACK=false
 APP_ORIGIN=https://scenecart.example.com
 AUTH_COOKIE_SECURE=true
 AUTH_REQUIRED=true
+SCENECART_ACCESS_MODE=account
 RUNTIME_STORE=postgres
 DATABASE_SSL=true
 DATABASE_SSL_REJECT_UNAUTHORIZED=true
@@ -40,6 +41,8 @@ DATABASE_POOL_SIZE=1
 ```
 
 `DATABASE_URL`、`POSTGRES_PASSWORD`、`DEEPSEEK_API_KEY` 和 `SCENECART_CRON_SECRET` 应使用部署平台 Secret，不写入镜像、Compose 文件或 Git。设备令牌只保存在运行 `worker:local` 的用户机器 `.env.local` 中，不上传到部署平台。自托管 Compose 会启动独立 `recovery` 服务；其他平台应每分钟携带 Bearer Secret 调用 `/api/internal/workflow-recovery`。
+
+只供 owner 验收的受保护 Preview 可设置 `SCENECART_ACCESS_MODE=single_user` 和既有 owner 的 `SCENECART_SINGLE_USER_ID`，从而跳过 SceneCart 自身的登录页；Preview 仍必须保留 Vercel Deployment Protection。受保护 Preview 会把 Vercel 注入的当前 `VERCEL_URL` 加入同源写请求白名单，不需要把每次生成的随机域名手动写回 `APP_ORIGIN`，也不会信任客户端转发的 Host。该模式不会取消淘宝登录或执行器令牌，并会在 Vercel Production 环境直接拒绝运行。公开正式域名继续使用 `SCENECART_ACCESS_MODE=account`。
 
 当前 Vercel Hobby 面试部署在 `vercel.json` 固定使用单一 `sin1` Function Region；Neon 也应选择 `sin1`，让服务端事务与数据库同区。`DATABASE_POOL_SIZE=1` 用于限制每个 Serverless 实例持有的 PostgreSQL 连接数；连接字符串优先使用 Neon 提供的 pooled `DATABASE_URL`。纯本地运行不读取 `vercel.json`，仍由 `npm run dev` 和本地 runtime 独立工作。
 

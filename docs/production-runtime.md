@@ -40,6 +40,7 @@ DATABASE_SSL_REJECT_UNAUTHORIZED=true
 DATABASE_SSL_CA=
 DATABASE_POOL_SIZE=10
 AUTH_REQUIRED=true
+SCENECART_ACCESS_MODE=account
 AUTH_SESSION_TTL_DAYS=30
 SCENECART_CRON_SECRET=at-least-32-random-characters
 SCENECART_RECOVERY_STALE_MS=180000
@@ -49,7 +50,9 @@ DEEPSEEK_CHAT_MODEL=deepseek-chat
 DEEPSEEK_REASONER_MODEL=deepseek-reasoner
 ```
 
-正式模式采用 fail-closed 运行契约：即使误设 `AUTH_REQUIRED=false`，请求仍会被强制要求账号身份；即使误设 `AUTH_COOKIE_SECURE=false`，只要 `APP_ORIGIN` 是 HTTPS，登录 Cookie 仍会强制使用 `Secure`；如果未启用 PostgreSQL 或缺少 `DATABASE_URL`，会话、认证和任务仓库会直接拒绝读写，不会静默回退到本地开发存储。Readiness 仍会把这些被安全兜底的误配置标记为失败，必须修正环境变量后才能发布。
+正式模式采用 fail-closed 运行契约：默认 `SCENECART_ACCESS_MODE=account`，即使误设 `AUTH_REQUIRED=false`，请求仍会被强制要求账号身份；即使误设 `AUTH_COOKIE_SECURE=false`，只要 `APP_ORIGIN` 是 HTTPS，登录 Cookie 仍会强制使用 `Secure`；如果未启用 PostgreSQL 或缺少 `DATABASE_URL`，会话、认证和任务仓库会直接拒绝读写，不会静默回退到本地开发存储。Readiness 仍会把这些被安全兜底的误配置标记为失败，必须修正环境变量后才能发布。
+
+受 Vercel Deployment Protection 保护、且只供 owner 使用的 Preview 可以临时配置 `SCENECART_ACCESS_MODE=single_user` 与既有 `SCENECART_SINGLE_USER_ID`。网页会跳过交互登录，但所有 Session、设备和任务仍使用固定 owner UUID；旧 Cookie 不能切换身份。该模式在 `VERCEL_ENV=production` 下 fail closed，不能随 Preview 一起误提升到公开 Production。淘宝桌面版登录、设备 Bearer Token 与恢复 Secret 不受影响，仍必须保留。
 
 数据库迁移必须在独立 release 阶段运行 `npm run db:migrate && npm run db:check`；应用构建不会修改数据库。迁移器持有 transaction-level advisory lock，因此并发发布会串行核对迁移及 checksum。
 
