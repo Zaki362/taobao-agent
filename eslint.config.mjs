@@ -12,6 +12,7 @@ const config = [
       ".codex/**",
       ".data/**",
       ".next*/**",
+      "apps/public-demo/**",
       "coverage/**",
       "node_modules/**",
       "playwright-report/**",

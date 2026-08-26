@@ -76,7 +76,7 @@ npm run start
 
 `db/migrations/002_security_rate_limits.sql` 创建不保存邮箱或 IP 明文的认证限流表；`003_workflow_recovery_index.sql` 增加工作流恢复扫描索引；`004_runtime_service_heartbeats.sql` 保存恢复 Worker / Cron 心跳；`005_executor_authentication_state.sql` 增加登录暂停状态；`006_job_lease_token.sql` 增加租约代次保护；`007_executor_mcp_availability_state.sql` 增加 `mcp_unavailable` 设备状态；`008_job_lease_protocol.sql` 记录每次 Job 领取时使用的执行器协议。migration runner 会保存每个 SQL 文件的 SHA-256 checksum；已执行 migration 被修改时会拒绝继续，必须新增 migration。`db:check` 除了校验所有 migration checksum，还会直接检查包括 `runtime_service_heartbeats` 在内的运行时实体表，防止表被意外删除但 migration 记录仍存在时产生假健康。
 
-当前执行器协议为 **v5**。发布顺序必须是：停止旧 Worker；由 Vercel Production 构建自动执行（或在其他平台手工执行）包含 migration 008 的 `npm run db:migrate && npm run db:check`；如需保护升级前在途搜索、详情或加购，把 `SCENECART_EXECUTOR_V4_DRAIN_UNTIL` 临时设为未来不超过 2 小时的 ISO 时间；部署 v5 服务端；更新本机项目并重启 Worker；确认排空后删除该变量。v4 新任务领取始终返回 `426`，旧回填还必须同时匹配领取协议 `4`、原设备和原租约 token，且超过截止时间后自动关闭。v5 不需要新增数据库 migration。
+当前执行器协议为 **v5**。发布顺序必须是：停止旧 Worker；在独立 release 阶段显式执行包含 migration 008 与 009 的 `npm run db:migrate && npm run db:check`；如需保护升级前在途搜索、详情或加购，把 `SCENECART_EXECUTOR_V4_DRAIN_UNTIL` 临时设为未来不超过 2 小时的 ISO 时间；部署 v5 服务端；更新本机项目并重启 Worker；确认排空后删除该变量。v4 新任务领取始终返回 `426`，旧回填还必须同时匹配领取协议 `4`、原设备和原租约 token，且超过截止时间后自动关闭。migration 009 增加正式多实例使用的 AI 并发租约表。
 
 任务领取使用 PostgreSQL 事务和 `FOR UPDATE SKIP LOCKED`，支持多个执行器并发但不会重复领取同一任务。
 

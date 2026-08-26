@@ -5,6 +5,7 @@ const baseURL = `http://127.0.0.1:${port}`;
 
 export default defineConfig({
   testDir: "./tests/e2e",
+  testIgnore: "public-demo.spec.ts",
   fullyParallel: false,
   workers: 1,
   timeout: 180_000,

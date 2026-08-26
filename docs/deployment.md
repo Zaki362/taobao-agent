@@ -4,6 +4,8 @@
 
 正式部署只托管 Next.js、PostgreSQL、DeepSeek 调用和持久任务队列。用户本机运行 `worker:local`，用设备令牌领取任务并优先直连淘宝桌面版官方 HTTP MCP；HTTP 搜索异常时可降级桌面版官方 CLI，只读结果仍由本机回填。淘宝客户端、MCP/CLI、登录态与设备令牌都不进入 Web 容器，Qoder 不属于正式执行链路。
 
+公开体验是同仓库中的独立静态应用 `apps/public-demo`，部署到独立 Vercel 项目 `scenecart-public-demo`。该项目 Root Directory 为 `apps/public-demo`，允许构建步骤读取 Root Directory 外的共享源码，且环境变量保持为空。静态导出门禁只允许 `/`、`/demo` 和 404；正式产品继续从仓库根目录部署，不包含 `/demo` 路由。
+
 ## 本地生产预览
 
 ```bash
@@ -46,7 +48,7 @@ DATABASE_POOL_SIZE=1
 1. GitHub Actions `quality` 全部通过。
 2. 数据库 migration 由独立 release 阶段显式执行一次：`npm run db:migrate && npm run db:check`。`npm run build` 永远不会连接或修改数据库；迁移器使用 PostgreSQL advisory lock 防止并发发布重复执行。
 3. 设置 `SCENECART_RELEASE_VERIFY_URL=https://正式域名`，运行 `npm run release:verify`。它会依次验证静态配置、数据库 schema、公开 health 与受内部 Bearer 保护的只读 readiness，且不会打印 Key、Token 或数据库连接串。
-4. `npm run check`、`npm run eval:agent` 成功。
+4. `npm run check`、`npm run eval:agent` 成功；其中 `check` 同时验证正式产品构建与 Demo-only 静态导出边界。
 5. 注册测试设备并运行 `npm run executor:doctor`；登录后访问 `/api/runtime/readiness`，设备在线时应得到 `operational_for_shopping=true`。
 6. 使用隔离淘宝测试账号完成一次搜索；真实加购仅在明确授权且账号能力稳定时验收。
 7. 检查执行台中的任务积压、在线设备、模型 fallback、失败任务和“运行健康诊断”，不得带着严重告警发布。

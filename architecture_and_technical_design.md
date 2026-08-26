@@ -38,6 +38,7 @@ Local Executor on user's device
 - Agent 生成的预算安全组合可由用户显式采纳为 `bundle_adoption` 待处理清单；服务端从当前报告重建商品白名单，逐件加购仍复用原有高风险确认和异步回填链路。
 - 保守档位、模型失败、低置信度、越界动作或预算耗尽时，确定性策略始终可接管。
 - 旧 Qoder 直连、Codex hosted 与 experimental bridge 仅保留为开发兼容路径；production 强制使用 `local_executor`，并以 `410 legacy_hosted_disabled` 关闭旧 hosted Worker API。
+- 前端采用同仓库双应用：仓库根目录只构建正式产品，`apps/public-demo` 只构建冻结静态体验；两者直接复用同一组 workflow 组件和样式，但 Vercel 项目、路由面、环境变量与部署回执完全独立。
 
 当前生产边界：服务端运行时已具备正式架构，但真实淘宝能力仍依赖用户本机淘宝桌面版、官方 HTTP MCP、登录态与淘宝侧开放权限，不依赖 Qoder。系统不承诺绕过这些外部限制；交易能力止于用户显式确认后的淘宝购物车，不会自动下单、提交订单或支付。
 
