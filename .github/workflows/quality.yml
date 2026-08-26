@@ -41,8 +41,12 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      - name: Install frozen Demo dependencies
+        run: npm --prefix apps/public-demo ci
       - name: Audit production dependencies
         run: npm audit --omit=dev --audit-level=high --registry=https://registry.npmjs.org
+      - name: Audit frozen Demo production dependencies
+        run: npm --prefix apps/public-demo audit --omit=dev --audit-level=high --registry=https://registry.npmjs.org
       - run: npm run db:migrate
       - run: npm run db:check
       - run: npm run test:unit

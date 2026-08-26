@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import Link from "next/link";
 import {
   Archive,
   ArchiveRestore,
@@ -264,7 +263,7 @@ export function LandingPage({
   return (
     <div className="landing-shell">
       <header className="landing-nav">
-        <Link
+        <a
           href={onNavigationRequest ? "/demo" : "/"}
           className="flex items-center gap-3"
           onClick={(event) => {
@@ -276,7 +275,7 @@ export function LandingPage({
           <BrandMark />
           <span className="text-[15px] font-semibold tracking-tight">SceneCart</span>
           <span className="hidden text-xs text-muted-foreground sm:inline">场景化购物助手</span>
-        </Link>
+        </a>
         <nav className="flex items-center gap-1.5">
           <a
             href={onNavigationRequest ? "/demo" : "#recent-tasks"}

@@ -7,6 +7,7 @@
     ".next-e2e/types/**/*.ts"
   ],
   "exclude": [
-    "node_modules"
+    "node_modules",
+    "apps/public-demo"
   ]
 }

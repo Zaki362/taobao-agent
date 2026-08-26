@@ -185,7 +185,7 @@ test("frozen navigation and refresh actions stay inside the demo", async ({ cont
   await page.getByRole("link", { name: "执行器设置" }).click();
   await expect(page.getByText(/“执行器设置”入口/)).toBeVisible();
 
-  expect(new URL(page.url()).pathname).toBe("/demo");
+  expect(new URL(page.url()).pathname.replace(/\/$/, "")).toBe("/demo");
   expect(popupUrls).toEqual([]);
   expect(apiRequests).toEqual([]);
   expect(externalRequests).toEqual([]);
@@ -405,6 +405,7 @@ test("mobile result and cart layouts have no horizontal overflow", async ({ page
   await page.goto("/demo?demoSpeed=fast");
   await page.getByRole("button", { name: "启动自动演示" }).click();
   await expect(page.getByRole("heading", { name: "购物清单共 4 件" })).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByRole("button", { name: "重新自动演示" })).toBeVisible();
 
   const dimensions = await page.evaluate(() => ({
     innerWidth: window.innerWidth,
