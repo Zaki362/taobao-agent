@@ -349,6 +349,7 @@ export interface AgentRuntimeState {
   current_module_id?: string;
   continuation_count: number;
   workflow_message: string;
+  pause_reason?: "executor_startup_standby";
   last_transition_at?: string;
   initialized_at: string;
 }

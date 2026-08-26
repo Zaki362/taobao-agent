@@ -94,6 +94,123 @@ describe("executor protocol", () => {
     expect(currentWorkerResponse.status).not.toBe(426);
   });
 
+  it("limits native-CLI claims to read-only searches before leasing a job", async () => {
+    const registration = await registerExecutorDevice(
+      "user-native-cli-claim-scope",
+      "native CLI fallback worker",
+      ["module_search", "add_to_cart"]
+    );
+    const jobs = [
+      { id: "job-native-scope-cart", type: "add_to_cart" as const, priority: 300 },
+      { id: "job-native-scope-detail", type: "product_detail" as const, priority: 200 },
+      { id: "job-native-scope-search", type: "module_search" as const, priority: 100 }
+    ];
+    for (const candidate of jobs) {
+      await localRuntimeRepository.createJob({
+        id: candidate.id,
+        user_id: registration.device.user_id,
+        session_id: "session-native-cli-claim-scope",
+        job_type: candidate.type,
+        idempotency_key: candidate.id,
+        payload: {},
+        priority: candidate.priority
+      });
+    }
+
+    const response = await claimJob(new NextRequest(
+      "http://localhost/api/executor/jobs/claim",
+      {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${registration.token}`,
+          "content-type": "application/json",
+          [EXECUTOR_PROTOCOL_HEADER]: EXECUTOR_PROTOCOL_VERSION
+        },
+        body: JSON.stringify({
+          transport: "native_cli",
+          available_tools: ["search_products", "list_available_pages"]
+        })
+      }
+    ));
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      job: { id: "job-native-scope-search", job_type: "module_search", attempts: 1 }
+    });
+    await expect(localRuntimeRepository.getJob("job-native-scope-cart")).resolves.toMatchObject({
+      status: "pending",
+      attempts: 0
+    });
+    await expect(localRuntimeRepository.getJob("job-native-scope-detail")).resolves.toMatchObject({
+      status: "pending",
+      attempts: 0
+    });
+  });
+
+  it("does not lease cart work when the current HTTP MCP session lacks cart tools", async () => {
+    const registration = await registerExecutorDevice(
+      "user-http-mcp-claim-scope",
+      "HTTP MCP worker without cart tools",
+      ["module_search", "add_to_cart"]
+    );
+    await localRuntimeRepository.createJob({
+      id: "job-http-scope-cart",
+      user_id: registration.device.user_id,
+      session_id: "session-http-mcp-claim-scope",
+      job_type: "add_to_cart",
+      idempotency_key: "job-http-scope-cart",
+      payload: {},
+      priority: 300
+    });
+    await localRuntimeRepository.createJob({
+      id: "job-http-scope-detail",
+      user_id: registration.device.user_id,
+      session_id: "session-http-mcp-claim-scope",
+      job_type: "product_detail",
+      idempotency_key: "job-http-scope-detail",
+      payload: {},
+      priority: 200
+    });
+    await localRuntimeRepository.createJob({
+      id: "job-http-scope-search",
+      user_id: registration.device.user_id,
+      session_id: "session-http-mcp-claim-scope",
+      job_type: "module_search",
+      idempotency_key: "job-http-scope-search",
+      payload: {},
+      priority: 100
+    });
+
+    const response = await claimJob(new NextRequest(
+      "http://localhost/api/executor/jobs/claim",
+      {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${registration.token}`,
+          "content-type": "application/json",
+          [EXECUTOR_PROTOCOL_HEADER]: EXECUTOR_PROTOCOL_VERSION
+        },
+        body: JSON.stringify({
+          transport: "http_mcp",
+          available_tools: ["search_products", "get_current_tab"]
+        })
+      }
+    ));
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      job: { id: "job-http-scope-search", job_type: "module_search", attempts: 1 }
+    });
+    await expect(localRuntimeRepository.getJob("job-http-scope-cart")).resolves.toMatchObject({
+      status: "pending",
+      attempts: 0
+    });
+    await expect(localRuntimeRepository.getJob("job-http-scope-detail")).resolves.toMatchObject({
+      status: "pending",
+      attempts: 0
+    });
+  });
+
   it("grandfathers only exact in-flight v4 work while keeping v4 claims closed", () => {
     const request = new Request("http://localhost/api/executor/heartbeat", {
       headers: { [EXECUTOR_PROTOCOL_HEADER]: "4" }

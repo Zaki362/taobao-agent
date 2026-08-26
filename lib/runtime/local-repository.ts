@@ -5,7 +5,7 @@ import { getSession, listSessions, saveSession } from "@/lib/session/store";
 import type { SessionState } from "@/lib/session/types";
 import { allowUnownedRuntimeJobs } from "@/lib/runtime/product-mode";
 import { isExecutorStartupStandby } from "@/lib/runtime/startup-standby";
-import { executorCapabilityForJobType } from "@/lib/runtime/types";
+import { claimableJobTypes, executorCapabilityForJobType } from "@/lib/runtime/types";
 import type {
   AuthenticationFailureHold,
   AuthSessionRecord,
@@ -496,12 +496,13 @@ export const localRuntimeRepository: RuntimeRepository = {
       .map(copy);
   },
 
-  async claimJob(device, leaseMs, protocolVersion = "5") {
+  async claimJob(device, leaseMs, protocolVersion = "5", scope) {
     if (device.status !== "online") return null;
     await this.recoverExpiredJobs();
     const state = runtimeState();
     const storedDevice = state.devices.get(device.id);
     if (!storedDevice || storedDevice.status !== "online") return null;
+    const allowedJobTypes = new Set(claimableJobTypes(storedDevice.capabilities, scope));
     const now = Date.now();
     const job = [...state.jobs.values()]
       .filter(
@@ -523,7 +524,7 @@ export const localRuntimeRepository: RuntimeRepository = {
             !isPausedCurrentWorkflowJob(session ?? null, item) &&
             new Date(item.available_at).getTime() <= now &&
             (item.user_id === storedDevice.user_id || (!item.user_id && allowUnownedRuntimeJobs())) &&
-            storedDevice.capabilities.includes(executorCapabilityForJobType(item.job_type));
+            allowedJobTypes.has(item.job_type);
         }
       )
       .sort((a, b) => b.priority - a.priority || a.created_at.localeCompare(b.created_at))[0];

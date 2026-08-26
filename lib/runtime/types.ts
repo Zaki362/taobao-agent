@@ -10,15 +10,49 @@ export type RuntimeJobStatus =
 
 export type ExecutorCapability = "module_search" | "add_to_cart";
 export type RuntimeJobType = ExecutorCapability | "product_detail";
+export type ExecutorTransport = "http_mcp" | "native_cli";
+
+export interface ExecutorClaimScope {
+  transport: ExecutorTransport;
+  available_tools?: string[];
+}
 
 export function executorCapabilityForJobType(jobType: RuntimeJobType): ExecutorCapability {
   return jobType === "product_detail" ? "module_search" : jobType;
 }
 
-export function claimableJobTypes(capabilities: ExecutorCapability[]): RuntimeJobType[] {
-  return capabilities.includes("module_search")
+export function claimableJobTypes(
+  capabilities: ExecutorCapability[],
+  scope?: ExecutorClaimScope
+): RuntimeJobType[] {
+  const registeredJobTypes: RuntimeJobType[] = capabilities.includes("module_search")
     ? [...capabilities, "product_detail"]
     : [...capabilities];
+
+  // The native CLI fallback is deliberately read-only. It must never lease a
+  // job whose implementation depends on the stateful HTTP MCP transport.
+  if (scope?.transport === "native_cli") {
+    return registeredJobTypes.filter((jobType) => jobType === "module_search");
+  }
+
+  // New Workers report the tools exposed by their current HTTP MCP session.
+  // Use that report only to narrow registered permissions; it can never grant
+  // a capability that is absent from the persisted device registration.
+  if (scope?.transport === "http_mcp" && Array.isArray(scope.available_tools)) {
+    const availableTools = new Set(scope.available_tools);
+    const detailReady = availableTools.has("navigate_to_url") && availableTools.has("read_page_content");
+    const cartReady = availableTools.has("get_product_skus") && availableTools.has("add_to_cart");
+    return registeredJobTypes.filter((jobType) => {
+      if (jobType === "product_detail") return detailReady;
+      if (jobType === "add_to_cart") return cartReady;
+      return true;
+    });
+  }
+
+  // Older HTTP-MCP Workers do not send a claim scope. Preserve their existing
+  // behavior; they do not contain the CLI fallback and therefore cannot enter
+  // the unsafe transport/capability combination guarded above.
+  return registeredJobTypes;
 }
 
 export type ExecutorDeviceStatus =
@@ -149,7 +183,12 @@ export interface RuntimeRepository {
   createJob(input: CreateRuntimeJobInput): Promise<RuntimeJob>;
   getJob(jobId: string): Promise<RuntimeJob | null>;
   listJobs(sessionId: string, userId?: string): Promise<RuntimeJob[]>;
-  claimJob(device: ExecutorDevice, leaseMs: number, protocolVersion?: string): Promise<RuntimeJob | null>;
+  claimJob(
+    device: ExecutorDevice,
+    leaseMs: number,
+    protocolVersion?: string,
+    scope?: ExecutorClaimScope
+  ): Promise<RuntimeJob | null>;
   renewJobLease(
     jobId: string,
     deviceId: string,

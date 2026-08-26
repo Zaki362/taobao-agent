@@ -22,6 +22,7 @@ import {
   establishAuthenticationFailureHold
 } from "@/lib/runtime/jobs";
 import { localRuntimeRepository, resetLocalRuntimeForTests } from "@/lib/runtime/local-repository";
+import { EXECUTOR_STARTUP_STANDBY_MESSAGE } from "@/lib/runtime/startup-standby";
 import type { ExecutorDevice } from "@/lib/runtime/types";
 import type { ProductCandidate } from "@/lib/session/types";
 import { createSessionFixture } from "@/tests/fixtures/session";
@@ -755,15 +756,27 @@ describe("server-managed Agent workflow", () => {
     const pausedState = await localRuntimeRepository.getSession(sessionId, device.user_id);
     expect(pausedState?.agent_runtime).toMatchObject({
       workflow_status: "paused",
-      auto_continue: false
+      auto_continue: false,
+      pause_reason: "executor_startup_standby"
     });
     expect(pausedState?.agent_runtime.workflow_message).toContain("点击“继续搜索”");
+
+    pausedState!.agent_runtime.workflow_message = "Executor ready; resume this workflow from the page.";
+    await localRuntimeRepository.saveSession(pausedState!);
     expect(await localRuntimeRepository.claimJob(device, 30_000)).toBeNull();
     expect((await localRuntimeRepository.getJob(queuedJobId!))?.status).toBe("pending");
+
+    // Historical snapshots predate pause_reason. Keep their exact legacy
+    // message gate until the user explicitly resumes them.
+    pausedState!.agent_runtime.pause_reason = undefined;
+    pausedState!.agent_runtime.workflow_message = EXECUTOR_STARTUP_STANDBY_MESSAGE;
+    await localRuntimeRepository.saveSession(pausedState!);
+    expect(await localRuntimeRepository.claimJob(device, 30_000)).toBeNull();
 
     const resumed = await resumeAgentWorkflow(sessionId, device.user_id);
     expect(resumed.outcome).toBe("waiting");
     expect(resumed.state.agent_runtime.auto_continue).toBe(true);
+    expect(resumed.state.agent_runtime.pause_reason).toBeUndefined();
     await expect(localRuntimeRepository.claimJob(device, 30_000)).resolves.toMatchObject({
       id: queuedJobId,
       status: "leased"

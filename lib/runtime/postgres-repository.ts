@@ -17,7 +17,10 @@ import type {
   RuntimeServiceHeartbeat,
   RuntimeUser
 } from "@/lib/runtime/types";
-import { EXECUTOR_STARTUP_STANDBY_MESSAGE } from "@/lib/runtime/startup-standby";
+import {
+  EXECUTOR_STARTUP_STANDBY_MESSAGE,
+  EXECUTOR_STARTUP_STANDBY_REASON
+} from "@/lib/runtime/startup-standby";
 import type { SessionState } from "@/lib/session/types";
 import { normalizeSessionState } from "@/lib/session/store";
 
@@ -511,7 +514,7 @@ export const postgresRuntimeRepository: RuntimeRepository = {
     return result.rows.map(normalizeJob);
   },
 
-  async claimJob(device, leaseMs, protocolVersion = "5") {
+  async claimJob(device, leaseMs, protocolVersion = "5", scope) {
     if (device.status !== "online") return null;
     return withTransaction(async (client) => {
       const deviceResult = await client.query(
@@ -583,7 +586,13 @@ export const postgresRuntimeRepository: RuntimeRepository = {
                AND agent_jobs.job_type IN ('module_search', 'product_detail')
                AND paused_sessions.state #>> '{agent_runtime,workflow_status}' = 'paused'
                AND COALESCE(paused_sessions.state #>> '{agent_runtime,auto_continue}', 'false') <> 'true'
-               AND paused_sessions.state #>> '{agent_runtime,workflow_message}' = $3
+               AND (
+                 paused_sessions.state #>> '{agent_runtime,pause_reason}' = $3
+                 OR (
+                   paused_sessions.state #>> '{agent_runtime,pause_reason}' IS NULL
+                   AND paused_sessions.state #>> '{agent_runtime,workflow_message}' = $4
+                 )
+               )
                AND COALESCE(paused_sessions.state #>> '{agent_runtime,workflow_run_id}', '') <> ''
                AND paused_sessions.state #>> '{agent_runtime,workflow_run_id}' =
                  agent_jobs.payload->>'workflow_run_id'
@@ -593,7 +602,8 @@ export const postgresRuntimeRepository: RuntimeRepository = {
          LIMIT 1`,
         [
           storedDevice.user_id,
-          claimableJobTypes(storedDevice.capabilities),
+          claimableJobTypes(storedDevice.capabilities, scope),
+          EXECUTOR_STARTUP_STANDBY_REASON,
           EXECUTOR_STARTUP_STANDBY_MESSAGE
         ]
       );

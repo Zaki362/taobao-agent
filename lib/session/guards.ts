@@ -388,6 +388,7 @@ function isAgentRuntimeState(value: unknown) {
     typeof value.continuation_count === "number" &&
     Number.isFinite(value.continuation_count) &&
     typeof value.workflow_message === "string" &&
+    (value.pause_reason === undefined || value.pause_reason === "executor_startup_standby") &&
     (value.last_transition_at === undefined || typeof value.last_transition_at === "string") &&
     typeof value.initialized_at === "string"
   );

@@ -107,6 +107,7 @@ process.exit(1);
     let resolveCount = 0;
     let httpSearchCount = 0;
     const heartbeatBodies = [];
+    const claimBodies = [];
 
     const apiServer = http.createServer(async (request, response) => {
       if (request.url === "/api/runtime/health") {
@@ -136,6 +137,7 @@ process.exit(1);
         });
       }
       if (request.url === "/api/executor/jobs/claim") {
+        claimBodies.push(await readJson(request));
         if (claimed) {
           return json(response, 200, {
             job: null,
@@ -253,6 +255,10 @@ process.exit(1);
         () => resolvedBody !== null,
         `Worker never completed the CLI fallback. Output:\n${output}`
       );
+      await waitFor(
+        () => claimBodies.some((body) => body.transport === "native_cli"),
+        `Worker never narrowed its claim scope after switching to the CLI. Output:\n${output}`
+      );
       const cliCalls = (await fs.readFile(cliLogPath, "utf8"))
         .trim()
         .split("\n")
@@ -278,6 +284,10 @@ process.exit(1);
       expect(output).toContain("using the official Taobao CLI for read-only searches");
       expect(output).not.toContain(`job ${jobId} failed`);
       expect(heartbeatBodies.some((body) => body.executor_state === "online")).toBe(true);
+      expect(claimBodies).toContainEqual({
+        transport: "native_cli",
+        available_tools: ["list_available_pages", "search_products"]
+      });
     } finally {
       await stopChild(child);
       await fs.rm(stateDirectory, { recursive: true, force: true });

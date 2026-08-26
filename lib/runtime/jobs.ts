@@ -1026,7 +1026,14 @@ async function persistCompletedRuntimeJobResult(
       };
     }
     updateRuntimeSearchTrace(state, job, incomingCandidates.length, previousCandidateCount, candidates);
-    if (candidates[0] && taobaoMcpEvidence) {
+    if (
+      candidates[0] &&
+      taobaoMcpEvidence &&
+      taobaoMcpEvidence.transport !== "native_cli"
+    ) {
+      // Product-detail evidence depends on stateful HTTP MCP navigation. A
+      // native-CLI search is complete on its own; queuing an incompatible
+      // follow-up would leave this workflow waiting behind an unclaimable job.
       const detailJob = await enqueuePreferredProductDetailJob(state, job, candidates[0]);
       if (detailJob) {
         followUpJobId = detailJob.id;

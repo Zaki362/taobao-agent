@@ -59,6 +59,7 @@ function liveTaobaoSearchResult(input: {
   workflowRunId: string;
   keyword: string;
   capturedAt?: string;
+  transport?: "http_mcp" | "native_cli";
 }) {
   return {
     summary: `已通过淘宝工具搜索“${input.keyword}”`,
@@ -94,7 +95,8 @@ function liveTaobaoSearchResult(input: {
       keyword: input.keyword,
       captured_at: input.capturedAt ?? new Date().toISOString(),
       cache_hit: false,
-      raw_result_count: 48
+      raw_result_count: 48,
+      ...(input.transport ? { transport: input.transport } : {})
     }
   };
 }
@@ -491,6 +493,48 @@ describe("durable job queue contract", () => {
       source: "taobao-mcp",
       raw_result_count: 48
     });
+
+    await fs.unlink(path.join(process.cwd(), ".data", "sessions", `${sessionId}.json`)).catch(() => undefined);
+  });
+
+  it("continues after a native-CLI search without queuing an HTTP-only detail job", async () => {
+    await localRuntimeRepository.createDevice(device);
+    const sessionId = `session-native-cli-evidence-${Date.now()}`;
+    const workflowRunId = "workflow-native-cli-evidence";
+    const state = createSessionFixture({ session_id: sessionId, owner_id: device.user_id });
+    state.agent_runtime.workflow_run_id = workflowRunId;
+    const module = state.shopping_plan.modules[0];
+    const keyword = module.search_strategy!.primary_keyword;
+    const job = await enqueueModuleSearchJob(state, {
+      moduleId: module.module_id,
+      moduleName: module.module_name,
+      keyword
+    });
+    await localRuntimeRepository.saveSession(state);
+    await expect(localRuntimeRepository.claimJob(device, 30_000, "5", {
+      transport: "native_cli",
+      available_tools: ["search_products", "list_available_pages"]
+    })).resolves.toMatchObject({ id: job.id, job_type: "module_search" });
+
+    const completion = await applyCompletedRuntimeJob(job.id, device, liveTaobaoSearchResult({
+      jobId: job.id,
+      moduleId: module.module_id,
+      workflowRunId,
+      keyword,
+      transport: "native_cli"
+    }));
+
+    expect(completion.follow_up_job_id).toBeUndefined();
+    await expect(shouldContinueWorkflowAfterCompletion({
+      job: completion.job,
+      alreadyCompleted: completion.alreadyCompleted,
+      followUpJobId: completion.follow_up_job_id
+    })).resolves.toBe(true);
+    expect((await localRuntimeRepository.listJobs(sessionId, device.user_id))
+      .filter((candidate) => candidate.job_type === "product_detail")).toEqual([]);
+    expect((await localRuntimeRepository.getSession(sessionId, device.user_id))
+      ?.hosted_tasks.find((task) => task.task_id === job.id)?.payload.taobao_mcp_evidence)
+      .toMatchObject({ transport: "native_cli" });
 
     await fs.unlink(path.join(process.cwd(), ".data", "sessions", `${sessionId}.json`)).catch(() => undefined);
   });

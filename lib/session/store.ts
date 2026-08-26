@@ -483,6 +483,10 @@ export function normalizeSessionState(state: SessionState): SessionState {
         typeof (state as Partial<SessionState>).agent_runtime?.workflow_message === "string"
           ? (state as Partial<SessionState>).agent_runtime!.workflow_message
           : "等待用户开始搜索",
+      pause_reason:
+        (state as Partial<SessionState>).agent_runtime?.pause_reason === "executor_startup_standby"
+          ? "executor_startup_standby"
+          : undefined,
       last_transition_at:
         typeof (state as Partial<SessionState>).agent_runtime?.last_transition_at === "string"
           ? (state as Partial<SessionState>).agent_runtime?.last_transition_at

@@ -21,7 +21,10 @@ import {
   releaseAuthenticationFailureHoldForUser
 } from "@/lib/runtime/jobs";
 import { isExecutorDeviceOnline } from "@/lib/runtime/executor-status";
-import { EXECUTOR_STARTUP_STANDBY_MESSAGE } from "@/lib/runtime/startup-standby";
+import {
+  EXECUTOR_STARTUP_STANDBY_MESSAGE,
+  EXECUTOR_STARTUP_STANDBY_REASON
+} from "@/lib/runtime/startup-standby";
 import type { ExecutorDevice } from "@/lib/runtime/types";
 import type { AgentDecision, SessionState } from "@/lib/session/types";
 
@@ -93,11 +96,13 @@ function transition(
     message: string;
     moduleId?: string;
     autoContinue?: boolean;
+    pauseReason?: SessionState["agent_runtime"]["pause_reason"];
   }
 ) {
   state.agent_runtime.workflow_status = input.status;
   state.agent_runtime.workflow_message = input.message;
   state.agent_runtime.current_module_id = input.moduleId;
+  state.agent_runtime.pause_reason = input.status === "paused" ? input.pauseReason : undefined;
   state.agent_runtime.last_transition_at = new Date().toISOString();
   if (input.autoContinue !== undefined) {
     state.agent_runtime.auto_continue = input.autoContinue;
@@ -125,6 +130,7 @@ async function emitWorkflowEvent(
       decision_action: decision?.action,
       completion_status: state.completion_report?.status,
       completion_coverage_ratio: state.completion_report?.coverage_ratio,
+      pause_reason: state.agent_runtime.pause_reason,
       message: state.agent_runtime.workflow_message
     }
   });
@@ -464,7 +470,8 @@ export async function establishExecutorStartupStandby(device: ExecutorDevice) {
         status: "paused",
         moduleId: activeTask?.module_id ?? state.agent_runtime.current_module_id,
         message: EXECUTOR_STARTUP_STANDBY_MESSAGE,
-        autoContinue: false
+        autoContinue: false,
+        pauseReason: EXECUTOR_STARTUP_STANDBY_REASON
       });
       await persistSession(state);
       await emitWorkflowEvent(state, "executor_startup_standby", "paused");

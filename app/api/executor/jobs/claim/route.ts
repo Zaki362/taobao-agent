@@ -1,8 +1,10 @@
 import { NextRequest } from "next/server";
 import { ApiRouteError, apiOk, apiRouteError } from "@/lib/api/responses";
+import { API_INPUT_LIMITS, boundedStringArray, readJsonObject } from "@/lib/api/validation";
 import { getRuntimeRepository } from "@/lib/runtime";
 import { authenticateExecutorToken, bearerToken, DEFAULT_JOB_LEASE_MS } from "@/lib/runtime/jobs";
 import { assertExecutorProtocol, EXECUTOR_PROTOCOL_VERSION } from "@/lib/runtime/executor-protocol";
+import type { ExecutorClaimScope } from "@/lib/runtime/types";
 import {
   recoverAgentWorkflowForExecutor,
   type WorkflowRecoveryResult
@@ -13,6 +15,21 @@ export async function POST(request: NextRequest) {
     assertExecutorProtocol(request);
     const device = await authenticateExecutorToken(bearerToken(request));
     if (!device) throw new ApiRouteError("invalid executor token", 401, "invalid_executor_token");
+    const body = await readJsonObject(request, API_INPUT_LIMITS.executorBodyBytes);
+    const transport = body.transport;
+    if (transport !== undefined && transport !== "http_mcp" && transport !== "native_cli") {
+      throw new ApiRouteError("invalid executor transport", 400, "invalid_executor_transport");
+    }
+    const claimScope: ExecutorClaimScope | undefined = transport
+      ? {
+          transport,
+          available_tools: boundedStringArray(body.available_tools, "available_tools", {
+            maxItems: 32,
+            maxItemLength: 80,
+            fallback: []
+          })
+        }
+      : undefined;
     const repository = getRuntimeRepository();
     if (device.status === "authentication_required") {
       await repository.heartbeatDevice(device.id, "authentication_required");
@@ -34,7 +51,12 @@ export async function POST(request: NextRequest) {
     }
     const activeDevice = await repository.heartbeatDevice(device.id, "online");
     if (!activeDevice) throw new ApiRouteError("executor device unavailable", 401, "invalid_executor_token");
-    let job = await repository.claimJob(activeDevice, DEFAULT_JOB_LEASE_MS, EXECUTOR_PROTOCOL_VERSION);
+    let job = await repository.claimJob(
+      activeDevice,
+      DEFAULT_JOB_LEASE_MS,
+      EXECUTOR_PROTOCOL_VERSION,
+      claimScope
+    );
     let recovery: WorkflowRecoveryResult = { recovered: false };
     if (!job) {
       try {
@@ -48,7 +70,12 @@ export async function POST(request: NextRequest) {
       }
     }
     if (!job && recovery.recovered) {
-      job = await repository.claimJob(activeDevice, DEFAULT_JOB_LEASE_MS, EXECUTOR_PROTOCOL_VERSION);
+      job = await repository.claimJob(
+        activeDevice,
+        DEFAULT_JOB_LEASE_MS,
+        EXECUTOR_PROTOCOL_VERSION,
+        claimScope
+      );
     }
     if (job) {
       await repository.appendEvent({
@@ -61,7 +88,8 @@ export async function POST(request: NextRequest) {
           device_name: activeDevice.name,
           attempt: job.attempts,
           lease_token: job.lease_token,
-          protocol_version: EXECUTOR_PROTOCOL_VERSION
+          protocol_version: EXECUTOR_PROTOCOL_VERSION,
+          transport: claimScope?.transport ?? "legacy_http_mcp"
         }
       });
     }

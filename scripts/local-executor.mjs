@@ -922,7 +922,13 @@ async function loop() {
       if (mcpUnavailable || authenticationPaused) continue;
     }
     try {
-      const { job } = await api("/api/executor/jobs/claim", { method: "POST", body: "{}" });
+      const { job } = await api("/api/executor/jobs/claim", {
+        method: "POST",
+        body: JSON.stringify({
+          transport: taobaoSearchTransport,
+          available_tools: [...availableTaobaoToolNames].sort()
+        })
+      });
       if (!job) {
         await sleep(pollMs);
         continue;
