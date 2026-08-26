@@ -388,7 +388,7 @@ test("auto tour pauses on any page click and resumes without duplicate cart writ
   )).toBe(1);
 });
 
-test("mobile result and cart layouts have no horizontal overflow", async ({ page }) => {
+test("mobile result and cart layouts have no horizontal overflow", async ({ page }, testInfo) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/demo");
   await page.getByRole("button", { name: "启动自动演示" }).click();
@@ -432,7 +432,7 @@ test("mobile result and cart layouts have no horizontal overflow", async ({ page
   expect(mobileGeometry.sidebar[1]).toBe(358);
   expect(mobileGeometry.sidebar[2]).toBeGreaterThan(mobileGeometry.resultsBottom);
   expect(mobileGeometry.scrollWidth).toBeLessThanOrEqual(mobileGeometry.innerWidth);
-  await page.screenshot({ path: "/private/tmp/scenecart-demo-results-mobile.png", fullPage: true });
+  await page.screenshot({ path: testInfo.outputPath("scenecart-demo-results-mobile.png"), fullPage: true });
 });
 
 test("reduced motion still completes the real flow without cursor travel", async ({ page }) => {
