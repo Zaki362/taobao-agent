@@ -84,7 +84,7 @@ describe("local executor lease guard", () => {
     expect(guard.currentLeaseToken).toBe("lease-current");
   });
 
-  it("requires a lease token before starting a v4 operation", () => {
+  it("requires a lease token before starting an executor operation", () => {
     const guard = new ExecutorLeaseGuard();
     expect(() => guard.start("job-no-token", "")).toThrow("executor lease token is required");
     expect(guard.currentJobId).toBeNull();

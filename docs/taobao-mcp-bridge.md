@@ -12,7 +12,7 @@ Browser -> Next.js Agent workflow -> durable Job Queue
         -> idempotent result callback -> Session -> Browser
 ```
 
-浏览器不直接调用淘宝，Next.js 请求也不等待淘宝长任务。用户在网页确认规划后，服务端持久化 `module_search` Job；本机 `worker:local` 用设备令牌领取任务，再直连淘宝桌面版官方 HTTP MCP。正式链路不经过 Qoder、Codex hosted、旧 bridge 或 mock adapter。
+浏览器不直接调用淘宝，Next.js 请求也不等待淘宝长任务。用户在网页确认规划后，服务端持久化 `module_search` Job；本机 `worker:local` 用设备令牌领取任务，再优先直连淘宝桌面版官方 HTTP MCP，必要时仅对搜索使用桌面版官方 CLI。正式链路不经过 Qoder、Codex hosted、旧 bridge 或 mock adapter。
 
 默认 MCP 地址为：
 
@@ -34,15 +34,15 @@ ALLOW_DEMO_CART_FALLBACK=false
 1. 启动并登录淘宝桌面版，开启官方本地 MCP / AI 应用授权。
 2. 启动 `npm run dev`，在 `/settings/executor` 注册本机设备并复制一次性令牌。
 3. 运行 `npm run executor:configure`，按提示保存页面地址和设备令牌。
-4. 运行 `npm run executor:doctor`。Doctor 只检查 MCP 工具列表、SceneCart 服务和设备令牌，不执行商品搜索。
-5. 保持 `npm run dev` 运行；默认启动器会在发现令牌后接入并监督唯一的 `worker:local`，异常退出时指数退避重启。需要单独管理 Worker 时运行 `npm run worker:local`。
-6. 在网页中逐步填写需求、确认 Scene Brief 和购物规划，再点击开始搜索。第一条真实搜索才会验证淘宝当前登录态。
+4. 运行 `npm run executor:doctor`。Doctor 检查 HTTP MCP 工具列表；若该端口不可用，则调用官方 CLI 的只读页面列表验证真实执行层。它不会执行商品搜索。
+5. 保持 `npm run dev` 运行；默认启动器会在发现令牌后接入并监督唯一的 `worker:local`，异常退出时指数退避重启。Worker 启动只建立待命状态，历史搜索必须回网页确认继续。需要单独管理 Worker 时运行 `npm run worker:local`。
+6. 在网页中逐步填写需求、确认 Scene Brief 和购物规划，再点击开始搜索；若是启动前遗留任务则点击“继续搜索”。第一条真实搜索才会验证淘宝当前登录态。
 
-正式 Worker 使用官方工具 `search_products` 获取候选；具备真实加购能力的设备还会使用 `get_product_skus` 和 `add_to_cart`。`get_current_tab` 只在真实调用已经明确报告登录失效后，用于低频检测登录是否恢复，不作为每次任务的预探针。
+正式 Worker 优先使用 HTTP MCP 的官方 `search_products` 获取候选；若该只读调用返回内测误报或 HTTP 工具层失效，则在同一 Job attempt 内安全降级到桌面版自带的 `taobao-native search_products`。证据会标记 `http_mcp` 或 `native_cli`，不会把兜底伪装成 HTTP MCP。具备真实加购能力的设备仍只通过 HTTP MCP 使用 `get_product_skus` 和 `add_to_cart`，CLI 兜底绝不触发加购。`get_current_tab` 只在真实调用已经明确报告登录失效后，用于低频检测登录是否恢复，不作为每次任务的预探针。
 
 ## MCP 暂不可用时
 
-淘宝桌面版尚未加载工具层、MCP 端口暂不可达或必需工具缺失时，Worker 会保持 `mcp_unavailable` 心跳并按上限 30 秒的指数退避重复无副作用的 `tools/list` 检查。该状态下服务端不会向此设备分配 Job，网页显示“等待淘宝桌面版工具恢复”；未领取搜索仍留在持久队列，不增加尝试次数。工具恢复后 Worker 自动切回 `online`，未完成搜索队列继续执行，不需要用户重复点击开始，也不会回退 mock。
+淘宝桌面版尚未加载工具层时，Worker 会先检查 HTTP MCP `tools/list`，再检查官方 CLI 的真实工具执行层。只要 CLI 仍能执行只读工具，搜索队列可以继续；HTTP 详情与加购保持关闭。只有两条搜索传输都不可用时，Worker 才保持 `mcp_unavailable` 心跳并按上限 30 秒指数退避。未领取搜索仍留在持久队列，不增加尝试次数，也不会回退 mock。
 
 这条自动恢复只适用于“工具尚不可用”。如果一次真实调用已经明确返回登录失效，必须进入下面的 `authentication_required` 分支；如果 MCP 在真实加购期间断开，恢复后也不会自动重放加购。
 

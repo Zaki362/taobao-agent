@@ -48,12 +48,12 @@ describe("cloud interview demo launcher", () => {
       runtime_store: "postgres",
       configured_executor_backend: "local_executor",
       effective_executor_backend: "local_executor",
-      executor_protocol_version: "4"
+      executor_protocol_version: "5"
     };
-    expect(validateCloudRuntime(valid, "4")).toEqual([]);
-    expect(validateCloudRuntime({ ...valid, runtime_store: "local" }, "4"))
+    expect(validateCloudRuntime(valid, "5")).toEqual([]);
+    expect(validateCloudRuntime({ ...valid, runtime_store: "local" }, "5"))
       .toContain("RUNTIME_STORE 不是 postgres");
-    expect(validateCloudRuntime({ ...valid, executor_protocol_version: "3" }, "4")[0])
+    expect(validateCloudRuntime({ ...valid, executor_protocol_version: "4" }, "5")[0])
       .toMatch(/协议不一致/);
   });
 

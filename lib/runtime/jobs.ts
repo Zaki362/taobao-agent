@@ -1090,7 +1090,8 @@ async function persistCompletedRuntimeJobResult(
               keyword: taobaoMcpEvidence.keyword,
               captured_at: taobaoMcpEvidence.captured_at,
               cache_hit: taobaoMcpEvidence.cache_hit,
-              raw_result_count: taobaoMcpEvidence.raw_result_count
+              raw_result_count: taobaoMcpEvidence.raw_result_count,
+              transport: taobaoMcpEvidence.transport ?? "http_mcp"
             }
           }
         : {})

@@ -28,7 +28,7 @@ Local Executor on user's device
 正式实现的关键变化：
 
 - Session 不再只依赖 Next.js 进程内 Map 或本地 JSON；`RUNTIME_STORE=postgres` 时按用户持久化到 PostgreSQL。
-- 淘宝桌面自动化不在 `/api/modules/search` 或 `/api/cart/add` 的长请求内运行；API 只创建任务并立即返回，本地执行器再通过官方 HTTP MCP 完成动作。
+- 淘宝桌面自动化不在 `/api/modules/search` 或 `/api/cart/add` 的长请求内运行；API 只创建任务并立即返回，本地执行器优先通过官方 HTTP MCP 完成动作，HTTP 搜索失效时只读搜索可降级桌面版官方 CLI。
 - 本地执行器使用一次性设备令牌、15 秒心跳、任务租约、最大重试次数和结果账本。
 - 默认开发入口 `npm run dev` 同时管理网页与本地执行器：先确定唯一可用端口并启动 Web，再从受保护的 `.env.local` 热发现设备令牌，Web 健康后启动 Worker；`dev:web` 保留给测试和纯 UI 排障，避免 E2E 意外领取真实淘宝任务。
 - 搜索、失败重试、Agent 状态转换和加购结果以执行事件写入，并通过 SSE 自动刷新当前浏览器会话。
@@ -979,7 +979,7 @@ DeepSeek 目前承担六类结构化任务：
 
 这些工具不直接暴露给前端，而由后端通过 executor 调用。
 
-executor 不只负责转发工具调用，也负责把 adapter 输出归一化成统一结构：搜索结果会过滤缺少商品 ID 或标题的脏数据、按商品 ID 去重、价格转成数字、店铺/标签/卖点裁剪到可展示范围；详情与加购输出也会补齐必要字段并校验高风险结果。这层防线让淘宝桌面版官方 HTTP MCP 与显式开发兼容 adapter 的返回差异不会直接污染推荐链路和前端页面。
+executor 不只负责转发工具调用，也负责把 adapter 输出归一化成统一结构：搜索结果会过滤缺少商品 ID 或标题的脏数据、按商品 ID 去重、价格转成数字、店铺/标签/卖点裁剪到可展示范围；详情与加购输出也会补齐必要字段并校验高风险结果。这层防线让淘宝桌面版官方 HTTP MCP、官方 CLI 搜索兜底与显式开发兼容 adapter 的返回差异不会直接污染推荐链路和前端页面。
 
 ### 5.2 search / open detail / extract info / add to cart 如何组织
 
@@ -1005,11 +1005,11 @@ executor 不只负责转发工具调用，也负责把 adapter 输出归一化�
 
 #### preferred product detail evidence
 
-每个模块的真实搜索完成后，服务端先完成候选合并、规则重排和 DeepSeek 候选池复盘，确定最终首选商品；随后创建一个只读 `product_detail` Job，并暂停该工作流的下一模块推进。具备 `module_search` 能力的 v4 Worker 会依次调用 `navigate_to_url` 与 `read_page_content`，读取首选商品的可信淘宝/天猫详情链接。详情任务无论形成 `verified` 证据还是明确的 `unavailable` 结果，都会终态落盘后再继续下一模块，因此最终推荐页不会把尚未完成的详情读取冒充成已验证理由。
+每个模块的真实搜索完成后，服务端先完成候选合并、规则重排和 DeepSeek 候选池复盘，确定最终首选商品；随后创建一个只读 `product_detail` Job，并暂停该工作流的下一模块推进。具备 `module_search` 能力的当前 Worker 会依次调用 `navigate_to_url` 与 `read_page_content`，读取首选商品的可信淘宝/天猫详情链接。详情任务无论形成 `verified` 证据还是明确的 `unavailable` 结果，都会终态落盘后再继续下一模块，因此最终推荐页不会把尚未完成的详情读取冒充成已验证理由。
 
 详情证据绑定 search Job、detail Job、workflow、module、product ID、可信详情 URL 与采集时间。服务端只接受当前候选池第一名的回填；补搜改变首选后到达的旧回调会被拒绝。Worker 不上传页面原始正文，只返回页面标题、URL、正文 SHA-256、页面中逐字命中的服务端白名单事实，以及明确标为“非 SKU 权威价格”的可见价格字符串。服务端据此生成简短推荐理由；若详情工具缺失、登录态不可用或页面读取失败，仍保留真实搜索候选，但页面明确标为搜索摘要级判断。
 
-`product_detail` 是只读任务，不调用 `get_product_skus` 或 `add_to_cart`，也不会因为详情失败而自动重放任何交易动作。该新任务类型使执行器协议升级为 v4；服务端严格拒绝 v3 领取新 Job。只有显式配置未来不超过两小时的 `SCENECART_EXECUTOR_V3_DRAIN_UNTIL` 时，升级前由同一设备、以 v3 和同一租约代次领取的旧搜索/加购才可继续 heartbeat / resolve；超时自动关闭，避免旧分支误解释详情 Job，也避免把迟到回调写进新的租约。
+`product_detail` 是只读任务，不调用 `get_product_skus` 或 `add_to_cart`，也不会因为详情失败而自动重放任何交易动作。该任务类型在 v4 引入；v5 进一步增加 Worker 启动待命登记和暂停 workflow 的领取门。服务端严格拒绝 v4 领取新 Job，只有显式配置未来不超过两小时的 `SCENECART_EXECUTOR_V4_DRAIN_UNTIL` 时，升级前由同一设备、以 v4 和同一租约代次领取的旧搜索、详情或加购才可继续 heartbeat / resolve；超时自动关闭，避免旧 Worker 绕过启动确认，也避免把迟到回调写进新的租约。
 
 #### add to cart
 

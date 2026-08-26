@@ -13,6 +13,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import type { HostedWorkerStatus, MpcStatus } from "@/components/dashboard-types";
 import type { SessionState } from "@/lib/session/types";
+import { isExecutorStartupStandby } from "@/lib/runtime/startup-standby";
 import { getScenarioConfig } from "@/lib/scenarios";
 
 export function SearchProgressPage({
@@ -53,6 +54,7 @@ export function SearchProgressPage({
   const progress = modules.length > 0 ? Math.round((completedModules.length / modules.length) * 100) : 0;
   const workflowActive = session.agent_runtime.workflow_status === "running" || session.agent_runtime.workflow_status === "waiting_for_tools";
   const workflowPaused = session.agent_runtime.workflow_status === "paused";
+  const startupStandby = isExecutorStartupStandby(session);
   const authenticationPaused = isTaobaoAuthenticationPause(session);
   const mcpReconnecting = isTaobaoMcpReconnecting(mcpStatus);
   const executorUnavailable = isLocalExecutorUnavailable(mcpStatus);
@@ -63,7 +65,9 @@ export function SearchProgressPage({
   const agentTitle = authenticationPaused
     ? "淘宝登录已失效，真实搜索已安全暂停"
     : workflowPaused
-      ? "搜索已暂停，已有结果不会丢失"
+      ? startupStandby
+        ? "本地执行器已就绪，等待你确认继续"
+        : "搜索已暂停，已有结果不会丢失"
       : mcpReconnecting
         ? "淘宝工具重连中，搜索任务已保存"
         : executorUnavailable
@@ -81,7 +85,9 @@ export function SearchProgressPage({
         description={authenticationPaused
           ? `淘宝登录态失效后已停止提交新的真实搜索。已经回填的 ${candidateCount} 个候选仍保存在当前任务中。`
           : workflowPaused
-            ? `当前搜索已安全暂停。已经回填的 ${candidateCount} 个候选和待执行队列都已保存，点击继续搜索后会从断点恢复。`
+            ? startupStandby
+              ? `检测到上次遗留的搜索任务。为避免只启动终端就操作淘宝，系统没有领取任务；已经回填的 ${candidateCount} 个候选仍保留，点击继续搜索后才会从断点恢复。`
+              : `当前搜索已安全暂停。已经回填的 ${candidateCount} 个候选和待执行队列都已保存，点击继续搜索后会从断点恢复。`
             : mcpReconnecting
               ? `本地执行器正在自动检测淘宝桌面工具。当前 Session、搜索队列和已经回填的 ${candidateCount} 个候选都已保存，连接恢复后会自动继续。`
               : executorUnavailable
@@ -147,7 +153,7 @@ export function SearchProgressPage({
                 {authenticationPaused
                   ? "等待恢复淘宝登录"
                   : workflowPaused
-                    ? "搜索已暂停"
+                    ? startupStandby ? "等待网页确认继续" : "搜索已暂停"
                     : mcpReconnecting
                       ? "等待淘宝工具自动恢复"
                       : executorUnavailable

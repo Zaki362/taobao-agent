@@ -2,7 +2,7 @@
 
 ## 部署边界
 
-正式部署只托管 Next.js、PostgreSQL、DeepSeek 调用和持久任务队列。用户本机运行 `worker:local`，用设备令牌领取任务并直连淘宝桌面版官方 HTTP MCP；淘宝客户端、MCP 地址、登录态与设备令牌都不进入 Web 容器。Qoder 不属于正式执行链路。
+正式部署只托管 Next.js、PostgreSQL、DeepSeek 调用和持久任务队列。用户本机运行 `worker:local`，用设备令牌领取任务并优先直连淘宝桌面版官方 HTTP MCP；HTTP 搜索异常时可降级桌面版官方 CLI，只读结果仍由本机回填。淘宝客户端、MCP/CLI、登录态与设备令牌都不进入 Web 容器，Qoder 不属于正式执行链路。
 
 ## 本地生产预览
 

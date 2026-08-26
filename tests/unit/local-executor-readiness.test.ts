@@ -8,12 +8,14 @@ import * as readiness from "../../scripts/local-executor-readiness.mjs";
 const {
   executorDoctorExitCode,
   isMcpReadinessError,
+  isTaobaoLimitedBetaError,
   MCP_READINESS_EXIT_CODE,
   mcpReadinessBackoffMs,
   missingTaobaoCartTools,
   missingTaobaoDetailTools,
   missingTaobaoTools,
-  requiredTaobaoTools
+  requiredTaobaoTools,
+  shouldFallbackToTaobaoNativeCli
 } = readiness;
 
 describe("local executor MCP readiness", () => {
@@ -46,6 +48,15 @@ describe("local executor MCP readiness", () => {
     expect(isMcpReadinessError({ code: "mcp_unavailable", message: "retry" })).toBe(true);
     expect(isMcpReadinessError(new Error("未登录，请先登录淘宝账号"))).toBe(false);
     expect(isMcpReadinessError(new Error("搜索结果缺少商品证据"))).toBe(false);
+  });
+
+  it("uses the official CLI only for safe read-only transport and beta-gate fallback", () => {
+    const limitedBeta = new Error("内测期间仅开放部分用户使用，请关注后续公告");
+    expect(isTaobaoLimitedBetaError(limitedBeta)).toBe(true);
+    expect(shouldFallbackToTaobaoNativeCli(limitedBeta)).toBe(true);
+    expect(shouldFallbackToTaobaoNativeCli(new Error("fetch failed"))).toBe(true);
+    expect(shouldFallbackToTaobaoNativeCli(new Error("淘宝桌面版当前未登录"))).toBe(false);
+    expect(shouldFallbackToTaobaoNativeCli(new Error("商品证据格式无效"))).toBe(false);
   });
 
   it("uses a capped exponential retry delay", () => {

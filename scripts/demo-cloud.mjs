@@ -42,7 +42,8 @@ function help() {
 默认会检查云端生产契约、淘宝 MCP、设备令牌与恢复密钥。如果淘宝桌面版尚未就绪，
 会以最多 30 秒的退避持续等待，恢复后自动启动本机淘宝 Worker 和恢复 Worker。
 --check 只执行一次快速检查，未就绪时立即退出；不会无限等待。只有已经配置外部
-分钟级恢复调度时才使用 --skip-recovery。按 Ctrl+C 统一退出。
+分钟级恢复调度时才使用 --skip-recovery。启动前遗留的搜索会保持暂停，必须回到
+网页点击“继续搜索”才会执行；Worker 在线后从网页新开始的搜索不受影响。按 Ctrl+C 统一退出。
 `);
 }
 
@@ -335,7 +336,7 @@ export async function startCloudDemo(args = process.argv.slice(2)) {
   executorSupervisor.reconcile({ token: deviceToken, env: childEnvironment });
 
   process.stdout.write(`\nREADY cloud_demo: ${apiBaseUrl}\n`);
-  process.stdout.write("保持本终端、淘宝桌面版和淘宝登录状态在线；现在可在云端网页逐步演示。\n");
+  process.stdout.write("保持本终端、淘宝桌面版和淘宝登录状态在线；历史搜索已安全暂停，请在云端网页点击继续搜索后再执行。\n");
   process.stdout.write("演示结束按 Ctrl+C。此命令适合面试时段，不建议在 Hobby 免费额度下 24 小时常驻。\n\n");
   await shutdownRequested;
 }

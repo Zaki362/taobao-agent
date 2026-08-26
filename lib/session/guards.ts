@@ -48,7 +48,12 @@ export function isTaobaoMcpSearchEvidence(value: unknown): value is TaobaoMcpSea
     value.cache_hit === false &&
     typeof value.raw_result_count === "number" &&
     Number.isInteger(value.raw_result_count) &&
-    value.raw_result_count >= 0
+    value.raw_result_count >= 0 &&
+    (
+      value.transport === undefined ||
+      value.transport === "http_mcp" ||
+      value.transport === "native_cli"
+    )
   );
 }
 

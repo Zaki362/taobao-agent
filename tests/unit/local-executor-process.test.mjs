@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import fs from "node:fs/promises";
 import path from "node:path";
 
-const protocolVersion = "4";
+const protocolVersion = "5";
 const openServers = new Set();
 const openChildren = new Set();
 
@@ -69,8 +69,10 @@ afterEach(async () => {
 
 describe("local executor process readiness recovery", () => {
   it("stays alive without claiming jobs, then automatically claims after Taobao MCP recovers", async () => {
+    const stateDirectory = await fs.mkdtemp(path.join("/tmp", "scenecart-readiness-worker-"));
     let mcpReady = false;
     let claimCount = 0;
+    let startupStandbyCount = 0;
     const heartbeatStates = [];
     const mcpMethods = [];
 
@@ -94,6 +96,15 @@ describe("local executor process readiness recovery", () => {
           executor_state: body.executor_state,
           protocol_version: protocolVersion,
           lease_renewed: false
+        });
+      }
+      if (request.url === "/api/executor/startup") {
+        startupStandbyCount += 1;
+        return json(response, 200, {
+          startup_standby_established: true,
+          paused_workflows: 0,
+          paused_session_ids: [],
+          protocol_version: protocolVersion
         });
       }
       if (request.url === "/api/executor/jobs/claim") {
@@ -151,7 +162,9 @@ describe("local executor process readiness recovery", () => {
         SCENECART_API_URL: apiOrigin,
         SCENECART_DEVICE_TOKEN: "process_readiness_device_token_123456789012345",
         TAOBAO_NATIVE_MCP_URL: `${mcpOrigin}/mcp`,
+        TAOBAO_NATIVE_CLI_PATH: path.join("/tmp", "scenecart-missing-taobao-cli"),
         TAOBAO_SOURCE_APP: "SceneCartAI",
+        EXECUTOR_STATE_DIR: stateDirectory,
         EXECUTOR_POLL_MS: "500",
         EXECUTOR_TAOBAO_READINESS_BACKOFF_BASE_MS: "250",
         EXECUTOR_TAOBAO_READINESS_BACKOFF_MAX_MS: "500",
@@ -164,24 +177,91 @@ describe("local executor process readiness recovery", () => {
     child.stdout.on("data", (chunk) => { output += chunk.toString(); });
     child.stderr.on("data", (chunk) => { output += chunk.toString(); });
 
-    await waitFor(
-      () => heartbeatStates.includes("mcp_unavailable") && mcpMethods.includes("initialize"),
-      `Worker never entered MCP reconnect state. Output:\n${output}`
-    );
-    expect(child.exitCode).toBeNull();
-    expect(claimCount).toBe(0);
+    try {
+      await waitFor(
+        () => heartbeatStates.includes("mcp_unavailable") && mcpMethods.includes("initialize"),
+        `Worker never entered MCP reconnect state. Output:\n${output}`
+      );
+      expect(child.exitCode).toBeNull();
+      expect(startupStandbyCount).toBe(1);
+      expect(claimCount).toBe(0);
 
-    mcpReady = true;
-    await waitFor(
-      () => heartbeatStates.includes("online") && claimCount > 0,
-      `Worker never recovered and claimed jobs. Output:\n${output}`
-    );
-    expect(child.exitCode).toBeNull();
-    expect(heartbeatStates[0]).toBe("mcp_unavailable");
-    expect(mcpMethods).toContain("tools/list");
-
-    await stopChild(child);
+      mcpReady = true;
+      await waitFor(
+        () => heartbeatStates.includes("online") && claimCount > 0,
+        `Worker never recovered and claimed jobs. Output:\n${output}`
+      );
+      expect(child.exitCode).toBeNull();
+      expect(heartbeatStates[0]).toBe("mcp_unavailable");
+      expect(mcpMethods).toContain("tools/list");
+    } finally {
+      await stopChild(child);
+      await fs.rm(stateDirectory, { recursive: true, force: true });
+    }
   }, 20_000);
+
+  it("fails closed without claiming when the server cannot establish startup standby", async () => {
+    const stateDirectory = await fs.mkdtemp(path.join("/tmp", "scenecart-startup-standby-failure-"));
+    let claimCount = 0;
+    const apiServer = http.createServer(async (request, response) => {
+      if (request.url === "/api/runtime/health") {
+        return json(response, 200, {
+          status: "healthy",
+          runtime_store: "local",
+          effective_executor_backend: "local_executor",
+          executor_protocol_version: protocolVersion
+        });
+      }
+      if (request.url === "/api/executor/heartbeat") {
+        const body = await readJson(request);
+        return json(response, 200, {
+          device: { id: "startup-failure-device", capabilities: ["module_search"] },
+          executor_state: body.executor_state,
+          protocol_version: protocolVersion,
+          lease_renewed: false
+        });
+      }
+      if (request.url === "/api/executor/startup") {
+        return json(response, 503, {
+          error: "startup standby persistence unavailable",
+          code: "startup_standby_unavailable"
+        });
+      }
+      if (request.url === "/api/executor/jobs/claim") claimCount += 1;
+      return json(response, 404, { error: "not found" });
+    });
+    const apiOrigin = await listen(apiServer);
+    const child = spawn(process.execPath, ["scripts/local-executor.mjs"], {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        NODE_ENV: "test",
+        SCENECART_API_URL: apiOrigin,
+        SCENECART_DEVICE_TOKEN: "startup_failure_device_token_123456789012345",
+        TAOBAO_NATIVE_MCP_URL: "http://127.0.0.1:9/mcp",
+        TAOBAO_SOURCE_APP: "SceneCartAI",
+        EXECUTOR_STATE_DIR: stateDirectory
+      },
+      stdio: ["ignore", "pipe", "pipe"]
+    });
+    openChildren.add(child);
+    let output = "";
+    child.stdout.on("data", (chunk) => { output += chunk.toString(); });
+    child.stderr.on("data", (chunk) => { output += chunk.toString(); });
+
+    try {
+      await waitFor(
+        () => child.exitCode !== null,
+        `Worker did not fail closed after startup standby failure. Output:\n${output}`
+      );
+      expect(child.exitCode).toBe(1);
+      expect(claimCount).toBe(0);
+      expect(output).toContain("startup standby persistence unavailable");
+    } finally {
+      await stopChild(child);
+      await fs.rm(stateDirectory, { recursive: true, force: true });
+    }
+  });
 
   it("reads one preferred product through listed detail tools without any cart mutation", async () => {
     const jobId = `detail-process-${Date.now()}`;
@@ -210,6 +290,14 @@ describe("local executor process readiness recovery", () => {
           executor_state: body.executor_state,
           protocol_version: protocolVersion,
           lease_renewed: Boolean(body.current_job_id)
+        });
+      }
+      if (request.url === "/api/executor/startup") {
+        return json(response, 200, {
+          startup_standby_established: true,
+          paused_workflows: 0,
+          paused_session_ids: [],
+          protocol_version: protocolVersion
         });
       }
       if (request.url === "/api/executor/jobs/claim") {
@@ -400,6 +488,14 @@ describe("local executor process readiness recovery", () => {
           lease_renewed: Boolean(
             body.current_job_id === jobId && body.lease_token === leaseToken
           )
+        });
+      }
+      if (request.url === "/api/executor/startup") {
+        return json(response, 200, {
+          startup_standby_established: true,
+          paused_workflows: 0,
+          paused_session_ids: [],
+          protocol_version: protocolVersion
         });
       }
       if (request.url === "/api/executor/jobs/claim") {

@@ -4,6 +4,7 @@ import { NextRequest } from "next/server";
 import { POST as claimJob } from "@/app/api/executor/jobs/claim/route";
 import { POST as heartbeat } from "@/app/api/executor/heartbeat/route";
 import { POST as resolveJob } from "@/app/api/executor/jobs/[jobId]/resolve/route";
+import { POST as establishStartupStandby } from "@/app/api/executor/startup/route";
 import {
   assertPreviousProtocolInFlightJob,
   assertExecutorProtocol,
@@ -30,7 +31,7 @@ function job(overrides: Partial<RuntimeJob> = {}): RuntimeJob {
     max_attempts: 3,
     available_at: new Date().toISOString(),
     lease_owner_id: "device-protocol-drain",
-    lease_protocol: "3",
+    lease_protocol: "4",
     created_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),
     ...overrides
@@ -42,25 +43,25 @@ describe("executor protocol", () => {
     resetLocalRuntimeForTests();
     vi.stubEnv("NODE_ENV", "test");
     process.env.SCENECART_PRODUCT_MODE = "development";
-    process.env.SCENECART_EXECUTOR_V3_DRAIN_UNTIL = new Date(Date.now() + 30 * 60 * 1000).toISOString();
+    process.env.SCENECART_EXECUTOR_V4_DRAIN_UNTIL = new Date(Date.now() + 30 * 60 * 1000).toISOString();
   });
 
   afterEach(() => {
-    delete process.env.SCENECART_EXECUTOR_V3_DRAIN_UNTIL;
+    delete process.env.SCENECART_EXECUTOR_V4_DRAIN_UNTIL;
     if (originalProductMode === undefined) delete process.env.SCENECART_PRODUCT_MODE;
     else process.env.SCENECART_PRODUCT_MODE = originalProductMode;
     vi.unstubAllEnvs();
   });
 
   it("accepts the current protocol version", () => {
-    expect(EXECUTOR_PROTOCOL_VERSION).toBe("4");
+    expect(EXECUTOR_PROTOCOL_VERSION).toBe("5");
     const request = new Request("http://localhost/api/executor/heartbeat", {
       headers: { [EXECUTOR_PROTOCOL_HEADER]: EXECUTOR_PROTOCOL_VERSION }
     });
     expect(() => assertExecutorProtocol(request)).not.toThrow();
   });
 
-  it.each([undefined, "0", "1", "2", "3"])("rejects a missing or outdated protocol with 426: %s", (version) => {
+  it.each([undefined, "0", "1", "2", "3", "4"])("rejects a missing or outdated protocol with 426: %s", (version) => {
     const headers = version ? { [EXECUTOR_PROTOCOL_HEADER]: version } : undefined;
     const request = new Request("http://localhost/api/executor/heartbeat", { headers });
 
@@ -74,11 +75,12 @@ describe("executor protocol", () => {
 
   it.each([
     ["claim", claimJob, "http://localhost/api/executor/jobs/claim"],
-    ["heartbeat", heartbeat, "http://localhost/api/executor/heartbeat"]
-  ])("rejects a v3 Worker at the %s route before it can receive work", async (_name, handler, url) => {
+    ["heartbeat", heartbeat, "http://localhost/api/executor/heartbeat"],
+    ["startup standby", establishStartupStandby, "http://localhost/api/executor/startup"]
+  ])("rejects a v4 Worker at the %s route before it can receive work", async (_name, handler, url) => {
     const oldWorkerResponse = await handler(new NextRequest(url, {
       method: "POST",
-      headers: { [EXECUTOR_PROTOCOL_HEADER]: "3" }
+      headers: { [EXECUTOR_PROTOCOL_HEADER]: "4" }
     }));
     expect(oldWorkerResponse.status).toBe(426);
     await expect(oldWorkerResponse.json()).resolves.toMatchObject({
@@ -92,14 +94,18 @@ describe("executor protocol", () => {
     expect(currentWorkerResponse.status).not.toBe(426);
   });
 
-  it("grandfathers only exact in-flight v3 search/cart work while keeping v3 claims closed", () => {
+  it("grandfathers only exact in-flight v4 work while keeping v4 claims closed", () => {
     const request = new Request("http://localhost/api/executor/heartbeat", {
-      headers: { [EXECUTOR_PROTOCOL_HEADER]: "3" }
+      headers: { [EXECUTOR_PROTOCOL_HEADER]: "4" }
     });
     expect(isPreviousExecutorProtocolDrain(request)).toBe(true);
     expect(() => assertPreviousProtocolInFlightJob(job(), "device-protocol-drain")).not.toThrow();
     expect(() => assertPreviousProtocolInFlightJob(
       job({ job_type: "add_to_cart", status: "running" }),
+      "device-protocol-drain"
+    )).not.toThrow();
+    expect(() => assertPreviousProtocolInFlightJob(
+      job({ job_type: "product_detail", status: "running" }),
       "device-protocol-drain"
     )).not.toThrow();
     expect(() => assertPreviousProtocolInFlightJob(
@@ -109,22 +115,18 @@ describe("executor protocol", () => {
     )).not.toThrow();
 
     expect(() => assertPreviousProtocolInFlightJob(
-      job({ job_type: "product_detail" }),
-      "device-protocol-drain"
-    )).toThrowError(ApiRouteError);
-    expect(() => assertPreviousProtocolInFlightJob(
       job({ status: "pending" }),
       "device-protocol-drain"
     )).toThrowError(ApiRouteError);
     expect(() => assertPreviousProtocolInFlightJob(
-      job({ lease_protocol: "4" }),
+      job({ lease_protocol: "5" }),
       "device-protocol-drain"
     )).toThrowError(ApiRouteError);
     expect(() => assertPreviousProtocolInFlightJob(job(), "another-device"))
       .toThrowError(ApiRouteError);
   });
 
-  it("lets an authenticated v3 Worker renew only its already leased legacy job", async () => {
+  it("lets an authenticated v4 Worker renew only its already leased legacy job", async () => {
     const registration = await registerExecutorDevice(
       "user-protocol-drain",
       "protocol drain worker",
@@ -132,21 +134,21 @@ describe("executor protocol", () => {
     );
     const activeDevice = await localRuntimeRepository.heartbeatDevice(registration.device.id, "online");
     await localRuntimeRepository.createJob({
-      id: "job-v3-in-flight",
+      id: "job-v4-in-flight",
       user_id: registration.device.user_id,
-      session_id: "session-v3-in-flight",
+      session_id: "session-v4-in-flight",
       job_type: "module_search",
-      idempotency_key: "v3-in-flight",
+      idempotency_key: "v4-in-flight",
       payload: {}
     });
-    const leased = await localRuntimeRepository.claimJob(activeDevice!, 30_000, "3");
+    const leased = await localRuntimeRepository.claimJob(activeDevice!, 30_000, "4");
 
     const response = await heartbeat(new NextRequest("http://localhost/api/executor/heartbeat", {
       method: "POST",
       headers: {
         authorization: `Bearer ${registration.token}`,
         "content-type": "application/json",
-        [EXECUTOR_PROTOCOL_HEADER]: "3"
+        [EXECUTOR_PROTOCOL_HEADER]: "4"
       },
       body: JSON.stringify({
         executor_state: "online",
@@ -156,27 +158,27 @@ describe("executor protocol", () => {
 
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toMatchObject({
-      protocol_version: "3",
+      protocol_version: "4",
       lease_renewed: true
     });
   });
 
-  it("lets a strictly bound v3 Worker resolve its legacy job without a lease token in the payload", async () => {
+  it("lets a strictly bound v4 Worker resolve its legacy job without a lease token in the payload", async () => {
     const registration = await registerExecutorDevice(
-      "user-v3-legacy-result",
+      "user-v4-legacy-result",
       "legacy result worker",
       ["module_search"]
     );
     const activeDevice = await localRuntimeRepository.heartbeatDevice(registration.device.id, "online");
     await localRuntimeRepository.createJob({
-      id: "job-v3-legacy-result",
+      id: "job-v4-legacy-result",
       user_id: registration.device.user_id,
-      session_id: "session-v3-legacy-result",
+      session_id: "session-v4-legacy-result",
       job_type: "module_search",
-      idempotency_key: "v3-legacy-result",
+      idempotency_key: "v4-legacy-result",
       payload: {}
     });
-    const leased = await localRuntimeRepository.claimJob(activeDevice!, 30_000, "3");
+    const leased = await localRuntimeRepository.claimJob(activeDevice!, 30_000, "4");
 
     const response = await resolveJob(new NextRequest(
       `http://localhost/api/executor/jobs/${leased!.id}/resolve`,
@@ -185,7 +187,7 @@ describe("executor protocol", () => {
         headers: {
           authorization: `Bearer ${registration.token}`,
           "content-type": "application/json",
-          [EXECUTOR_PROTOCOL_HEADER]: "3"
+          [EXECUTOR_PROTOCOL_HEADER]: "4"
         },
         body: JSON.stringify({
           status: "failed",
@@ -197,24 +199,24 @@ describe("executor protocol", () => {
 
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toMatchObject({
-      protocol_version: "3",
+      protocol_version: "4",
       job: { id: leased!.id, status: "failed" }
     });
   });
 
-  it("requires the exact v4 lease token for heartbeat renewal", async () => {
+  it("requires the exact v5 lease token for heartbeat renewal", async () => {
     const registration = await registerExecutorDevice(
-      "user-v4-heartbeat-token",
-      "v4 heartbeat worker",
+      "user-v5-heartbeat-token",
+      "v5 heartbeat worker",
       ["module_search"]
     );
     const activeDevice = await localRuntimeRepository.heartbeatDevice(registration.device.id, "online");
     await localRuntimeRepository.createJob({
-      id: "job-v4-heartbeat-token",
+      id: "job-v5-heartbeat-token",
       user_id: registration.device.user_id,
-      session_id: "session-v4-heartbeat-token",
+      session_id: "session-v5-heartbeat-token",
       job_type: "module_search",
-      idempotency_key: "v4-heartbeat-token",
+      idempotency_key: "v5-heartbeat-token",
       payload: {}
     });
     const leased = await localRuntimeRepository.claimJob(
@@ -254,15 +256,15 @@ describe("executor protocol", () => {
     expect((await localRuntimeRepository.getJob(leased!.id))?.status).toBe("running");
   });
 
-  it("closes the v3 drain when its explicit short deadline is absent, expired, or too far away", () => {
+  it("closes the v4 drain when its explicit short deadline is absent, expired, or too far away", () => {
     const request = new Request("http://localhost/api/executor/heartbeat", {
-      headers: { [EXECUTOR_PROTOCOL_HEADER]: "3" }
+      headers: { [EXECUTOR_PROTOCOL_HEADER]: "4" }
     });
-    delete process.env.SCENECART_EXECUTOR_V3_DRAIN_UNTIL;
+    delete process.env.SCENECART_EXECUTOR_V4_DRAIN_UNTIL;
     expect(isPreviousExecutorProtocolDrain(request)).toBe(false);
-    process.env.SCENECART_EXECUTOR_V3_DRAIN_UNTIL = new Date(Date.now() - 1_000).toISOString();
+    process.env.SCENECART_EXECUTOR_V4_DRAIN_UNTIL = new Date(Date.now() - 1_000).toISOString();
     expect(isPreviousExecutorProtocolDrain(request)).toBe(false);
-    process.env.SCENECART_EXECUTOR_V3_DRAIN_UNTIL = new Date(Date.now() + 3 * 60 * 60 * 1000).toISOString();
+    process.env.SCENECART_EXECUTOR_V4_DRAIN_UNTIL = new Date(Date.now() + 3 * 60 * 60 * 1000).toISOString();
     expect(isPreviousExecutorProtocolDrain(request)).toBe(false);
   });
 

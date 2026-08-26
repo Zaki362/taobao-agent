@@ -334,9 +334,9 @@ export function ResultsPage({
               {selectedTaobaoMcpEvidence ? (
                 <p
                   className="rounded-full border border-emerald-200 bg-emerald-50 px-3 py-2 text-[11px] font-medium text-emerald-800"
-                  title={`${selectedTaobaoMcpEvidence.source_app} / ${selectedTaobaoMcpEvidence.tool} / Job ${selectedTaobaoMcpEvidence.job_id} / ${selectedTaobaoMcpEvidence.raw_result_count} 条`}
+                  title={`${selectedTaobaoMcpEvidence.source_app} / ${selectedTaobaoMcpEvidence.transport === "native_cli" ? "官方 CLI" : selectedTaobaoMcpEvidence.tool} / Job ${selectedTaobaoMcpEvidence.job_id} / ${selectedTaobaoMcpEvidence.raw_result_count} 条`}
                 >
-                  本次淘宝 MCP · {formatEvidenceTime(selectedTaobaoMcpEvidence.captured_at)} · 「{selectedTaobaoMcpEvidence.keyword}」
+                  {selectedTaobaoMcpEvidence.transport === "native_cli" ? "本次淘宝官方 CLI" : "本次淘宝 MCP"} · {formatEvidenceTime(selectedTaobaoMcpEvidence.captured_at)} · 「{selectedTaobaoMcpEvidence.keyword}」
                 </p>
               ) : null}
               {gapCount > 0 ? (

@@ -402,7 +402,9 @@ function assertRequiredFiles() {
     "lib/mcp/local-executor.ts",
     "lib/runtime/executor-protocol.json",
     "lib/runtime/executor-protocol.ts",
+    "lib/runtime/startup-standby.ts",
     "lib/runtime/postgres-repository.ts",
+    "app/api/executor/startup/route.ts",
     "scripts/release-audit.mjs",
     "scripts/release-verify.mjs",
     "lib/runtime/readiness.ts",
@@ -411,6 +413,7 @@ function assertRequiredFiles() {
     "lib/security/rate-limit.ts",
     "scripts/local-executor.mjs",
     "scripts/taobao-mcp-client.mjs",
+    "scripts/taobao-native-cli-client.mjs",
     "scripts/dev-server.mjs",
     "scripts/e2e-server.mjs",
     "scripts/configure-executor.mjs",
@@ -521,6 +524,7 @@ function assertArchitectureContracts() {
   const agentPauseRoute = tryReadText("app/api/agent/pause/route.ts");
   const agentRemediateRoute = tryReadText("app/api/agent/remediate/route.ts");
   const agentResumeRoute = tryReadText("app/api/agent/resume/route.ts");
+  const executorStartupRoute = tryReadText("app/api/executor/startup/route.ts");
   const responses = tryReadText("lib/api/responses.ts");
   const hostedWorkerAuth = tryReadText("lib/auth/hosted-worker.ts");
   const cart = tryReadText("lib/agent/cart.ts");
@@ -532,6 +536,7 @@ function assertArchitectureContracts() {
   const hostedWorker = tryReadText("scripts/codex-hosted-worker.mjs");
   const localExecutor = tryReadText("scripts/local-executor.mjs");
   const taobaoMcpClient = tryReadText("scripts/taobao-mcp-client.mjs");
+  const taobaoNativeCliClient = tryReadText("scripts/taobao-native-cli-client.mjs");
   const mcpRunRoute = tryReadText("app/api/mcp/run/route.ts");
   const mcpSchema = tryReadText("lib/mcp/schema.ts");
   const mcpClient = tryReadText("lib/mcp/client.ts");
@@ -601,6 +606,7 @@ function assertArchitectureContracts() {
     !agentPauseRoute ||
     !agentRemediateRoute ||
     !agentResumeRoute ||
+    !executorStartupRoute ||
     !purchaseBundleRoute ||
     !sessionArchiveRoute ||
     !responses ||
@@ -776,6 +782,18 @@ function assertArchitectureContracts() {
         hostedConsole.includes("完成当前模块后暂停") &&
         hostedConsole.includes("从原进度继续"),
       message: "服务端 Agent 必须支持用户显式暂停和原进度继续，不能要求强杀运行中的外部工具"
+    },
+    {
+      ok:
+        workflowRunner.includes("establishExecutorStartupStandby") &&
+        workflowRunner.includes('"executor_startup_standby"') &&
+        executorStartupRoute.includes("establishExecutorStartupStandby") &&
+        executorStartupRoute.includes("assertExecutorProtocol") &&
+        localExecutor.includes('api("/api/executor/startup"') &&
+        localExecutor.includes("startup_standby_established") &&
+        localRuntimeRepository.includes("isPausedCurrentWorkflowJob") &&
+        postgresRuntimeRepository.includes("paused_sessions.state #>> '{agent_runtime,workflow_status}' = 'paused'"),
+      message: "Worker 启动必须先建立历史工作流待命门，暂停 workflow 在本地与 PostgreSQL 都不可领取"
     },
     {
       ok:
@@ -1043,7 +1061,7 @@ function assertArchitectureContracts() {
         localExecutor.includes('taobaoClient.callTool("search_products"') &&
         localExecutor.includes('type: "all"') &&
         localExecutor.includes('taobaoClient.callTool(\n      "add_to_cart"') &&
-        localExecutor.includes('taobaoClient.callTool(\n      "get_current_tab"') &&
+        localExecutor.includes('taobaoClient.callTool(\n        "get_current_tab"') &&
         localExecutor.includes("This probe is deliberately restricted to the authentication-paused state") &&
         localExecutor.includes('if (authenticationPaused) {\n      await recoverTaobaoAuthentication()') &&
         localExecutor.includes("Keep each user-approved search to one stateful shopping tool call") &&
@@ -1057,8 +1075,13 @@ function assertArchitectureContracts() {
         taobaoMcpClient.includes("resetSession()") &&
         !localExecutor.includes("qodercli") &&
         !localExecutor.includes("qoderPrintArgs") &&
-        !localExecutor.includes("execFile"),
-      message: "本地执行器必须复用单一官方 HTTP MCP 会话，仅在认证暂停后探测登录恢复，并禁止 Qoder 或 taobao-native CLI"
+        !localExecutor.includes("execFile") &&
+        localExecutor.includes("shouldFallbackToTaobaoNativeCli") &&
+        localExecutor.includes("taobaoCliClient.searchProducts") &&
+        taobaoNativeCliClient.includes('"search_products"') &&
+        taobaoNativeCliClient.includes('"list_available_pages"') &&
+        !taobaoNativeCliClient.includes('"add_to_cart"'),
+      message: "本地执行器必须优先复用官方 HTTP MCP；只读搜索可安全降级官方 CLI，但禁止 Qoder 与加购 CLI 重放"
     },
     {
       ok:
@@ -1224,7 +1247,10 @@ function assertArchitectureContracts() {
         sessionLifecycle.includes('event_type: "session.restored"') &&
         sessionLifecycle.includes("repository.cancelJob") &&
         sessionsRoute.includes('archiveFilter === "archived"') &&
-        localRuntimeRepository.includes("!getSession(item.session_id)?.archived_at") &&
+        (
+          localRuntimeRepository.includes("!getSession(item.session_id)?.archived_at") ||
+          localRuntimeRepository.includes("!session?.archived_at")
+        ) &&
         postgresRuntimeRepository.includes("sessions.state ? 'archived_at'") &&
         dashboardIntake.includes("已归档任务") &&
         dashboard.includes('action: "archive" | "restore"'),

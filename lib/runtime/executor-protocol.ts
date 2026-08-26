@@ -4,11 +4,11 @@ import type { RuntimeJob } from "@/lib/runtime/types";
 
 export const EXECUTOR_PROTOCOL_HEADER = "x-scenecart-executor-protocol";
 export const EXECUTOR_PROTOCOL_VERSION = protocol.version;
-const DRAINABLE_PREVIOUS_PROTOCOL_VERSION = "3";
+const DRAINABLE_PREVIOUS_PROTOCOL_VERSION = "4";
 const MAXIMUM_DRAIN_WINDOW_MS = 2 * 60 * 60 * 1000;
 
 function previousProtocolDrainDeadline() {
-  const raw = process.env.SCENECART_EXECUTOR_V3_DRAIN_UNTIL?.trim();
+  const raw = process.env.SCENECART_EXECUTOR_V4_DRAIN_UNTIL?.trim();
   if (!raw) return null;
   const deadline = Date.parse(raw);
   if (!Number.isFinite(deadline)) return null;
@@ -21,7 +21,7 @@ export function receivedExecutorProtocol(request: Request) {
 }
 
 export function isPreviousExecutorProtocolDrain(request: Request) {
-  return EXECUTOR_PROTOCOL_VERSION === "4" &&
+  return EXECUTOR_PROTOCOL_VERSION === "5" &&
     receivedExecutorProtocol(request) === DRAINABLE_PREVIOUS_PROTOCOL_VERSION &&
     previousProtocolDrainDeadline() !== null;
 }
@@ -36,7 +36,11 @@ export function assertPreviousProtocolInFlightJob(
     : new Set(["leased", "running"]);
   if (
     job &&
-    (job.job_type === "module_search" || job.job_type === "add_to_cart") &&
+    (
+      job.job_type === "module_search" ||
+      job.job_type === "product_detail" ||
+      job.job_type === "add_to_cart"
+    ) &&
     job.lease_protocol === DRAINABLE_PREVIOUS_PROTOCOL_VERSION &&
     job.lease_owner_id === deviceId &&
     allowedStatuses.has(job.status)
@@ -44,7 +48,7 @@ export function assertPreviousProtocolInFlightJob(
     return;
   }
   throw new ApiRouteError(
-    "旧版执行器只允许排空升级前已领取的搜索或加购任务，请更新项目代码后重启 worker。",
+    "旧版执行器只允许排空升级前已领取的搜索、详情或加购任务，请更新项目代码后重启 worker。",
     426,
     "executor_protocol_mismatch"
   );

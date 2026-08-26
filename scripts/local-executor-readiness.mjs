@@ -1,4 +1,5 @@
 const MCP_READINESS_ERROR = /(?:mcp_unavailable|fetch failed|ECONNREFUSED|ECONNRESET|EPIPE|ENOTFOUND|socket hang up|Tool 执行层未就绪|应用已加载完成|连接失败|cli-rpc\.sock|MCP.*请求失败|会话\s*ID|session expired|HTTP 404|timed out|timeout)/i;
+const TAOBAO_LIMITED_BETA_ERROR = /(?:taobao_limited_beta|内测期间仅开放部分用户使用)/i;
 
 // EX_TEMPFAIL makes the one-shot Doctor useful to supervisors without
 // weakening its normal non-zero failure contract. Only a Taobao MCP readiness
@@ -44,6 +45,21 @@ export function isMcpReadinessError(error) {
     .filter((value) => typeof value === "string" && value.trim())
     .join("\n");
   return MCP_READINESS_ERROR.test(output);
+}
+
+export function isTaobaoLimitedBetaError(error) {
+  const candidate = error && typeof error === "object" ? error : {};
+  const output = [candidate.name, candidate.code, candidate.message, String(error ?? "")]
+    .filter((value) => typeof value === "string" && value.trim())
+    .join("\n");
+  return TAOBAO_LIMITED_BETA_ERROR.test(output);
+}
+
+export function shouldFallbackToTaobaoNativeCli(error) {
+  // Search is read-only, so repeating it through the official CLI is safe even
+  // when the Streamable HTTP response was lost. Mutating tools never use this
+  // fallback and retain their strict non-replay boundary.
+  return isMcpReadinessError(error) || isTaobaoLimitedBetaError(error);
 }
 
 export function mcpReadinessBackoffMs(attempt, options = {}) {

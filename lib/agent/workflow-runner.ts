@@ -20,6 +20,9 @@ import {
   isExecutorAuthenticationError,
   releaseAuthenticationFailureHoldForUser
 } from "@/lib/runtime/jobs";
+import { isExecutorDeviceOnline } from "@/lib/runtime/executor-status";
+import { EXECUTOR_STARTUP_STANDBY_MESSAGE } from "@/lib/runtime/startup-standby";
+import type { ExecutorDevice } from "@/lib/runtime/types";
 import type { AgentDecision, SessionState } from "@/lib/session/types";
 
 export type AgentWorkflowTrigger =
@@ -29,6 +32,7 @@ export type AgentWorkflowTrigger =
   | "user_accept_partial_results"
   | "user_recover_gaps"
   | "user_improve_quality"
+  | "executor_startup_standby"
   | "job_completed"
   | "job_failed"
   | "legacy_task_resolved"
@@ -397,6 +401,82 @@ export async function pauseAgentWorkflow(sessionId: string, userId: string | und
     await emitWorkflowEvent(state, "user_pause", "paused");
     return { state, outcome: "paused" as const };
   });
+}
+
+export async function establishExecutorStartupStandby(device: ExecutorDevice) {
+  const repository = getRuntimeRepository();
+  const anotherExecutorIsOnline = (await repository.listDevices(device.user_id)).some(
+    (candidate) =>
+      candidate.id !== device.id &&
+      candidate.capabilities.includes("module_search") &&
+      isExecutorDeviceOnline(candidate)
+  );
+  if (anotherExecutorIsOnline) {
+    return {
+      paused_workflows: 0,
+      paused_session_ids: [] as string[],
+      skipped_reason: "another_executor_online" as const
+    };
+  }
+
+  const pausedSessionIds: string[] = [];
+  const sessions = await repository.listSessions(device.user_id);
+  const recoveryCandidateIds = new Set(
+    (await repository.listWorkflowRecoveryCandidates(device.user_id, 100))
+      .map((state) => state.session_id)
+  );
+  for (const snapshot of sessions) {
+    if (
+      snapshot.archived_at ||
+      !snapshot.agent_runtime.auto_continue ||
+      (
+        snapshot.agent_runtime.workflow_status !== "running" &&
+        snapshot.agent_runtime.workflow_status !== "waiting_for_tools"
+      )
+    ) {
+      continue;
+    }
+    const workflowRunId = snapshot.agent_runtime.workflow_run_id;
+    const hasCurrentRuntimeJob = Boolean(workflowRunId) &&
+      (await repository.listJobs(snapshot.session_id, device.user_id)).some((job) =>
+        (job.job_type === "module_search" || job.job_type === "product_detail") &&
+        job.payload.workflow_run_id === workflowRunId &&
+        (job.status === "pending" || job.status === "leased" || job.status === "running")
+      );
+    if (!hasCurrentRuntimeJob && !recoveryCandidateIds.has(snapshot.session_id)) continue;
+
+    const paused = await withWorkflowSessionTransaction(snapshot.session_id, async () => {
+      const state = await loadSession(snapshot.session_id, device.user_id);
+      if (
+        !state ||
+        state.archived_at ||
+        !state.agent_runtime.auto_continue ||
+        (
+          state.agent_runtime.workflow_status !== "running" &&
+          state.agent_runtime.workflow_status !== "waiting_for_tools"
+        )
+      ) {
+        return false;
+      }
+
+      const activeTask = activeModuleTask(state);
+      transition(state, {
+        status: "paused",
+        moduleId: activeTask?.module_id ?? state.agent_runtime.current_module_id,
+        message: EXECUTOR_STARTUP_STANDBY_MESSAGE,
+        autoContinue: false
+      });
+      await persistSession(state);
+      await emitWorkflowEvent(state, "executor_startup_standby", "paused");
+      return true;
+    });
+    if (paused) pausedSessionIds.push(snapshot.session_id);
+  }
+
+  return {
+    paused_workflows: pausedSessionIds.length,
+    paused_session_ids: pausedSessionIds
+  };
 }
 
 export async function resumeAgentWorkflow(

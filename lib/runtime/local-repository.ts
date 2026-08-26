@@ -4,6 +4,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { getSession, listSessions, saveSession } from "@/lib/session/store";
 import type { SessionState } from "@/lib/session/types";
 import { allowUnownedRuntimeJobs } from "@/lib/runtime/product-mode";
+import { isExecutorStartupStandby } from "@/lib/runtime/startup-standby";
 import { executorCapabilityForJobType } from "@/lib/runtime/types";
 import type {
   AuthenticationFailureHold,
@@ -229,6 +230,16 @@ function isActiveWorkflow(session: SessionState) {
   return session.agent_runtime.auto_continue &&
     (session.agent_runtime.workflow_status === "running" ||
       session.agent_runtime.workflow_status === "waiting_for_tools");
+}
+
+function isPausedCurrentWorkflowJob(session: SessionState | null, job: RuntimeJob) {
+  if (!session || (job.job_type !== "module_search" && job.job_type !== "product_detail")) {
+    return false;
+  }
+  const workflowRunId = session.agent_runtime.workflow_run_id;
+  return Boolean(workflowRunId) &&
+    isExecutorStartupStandby(session) &&
+    job.payload.workflow_run_id === workflowRunId;
 }
 
 function workflowTransitionTime(session: SessionState) {
@@ -485,7 +496,7 @@ export const localRuntimeRepository: RuntimeRepository = {
       .map(copy);
   },
 
-  async claimJob(device, leaseMs, protocolVersion = "4") {
+  async claimJob(device, leaseMs, protocolVersion = "5") {
     if (device.status !== "online") return null;
     await this.recoverExpiredJobs();
     const state = runtimeState();
@@ -495,6 +506,7 @@ export const localRuntimeRepository: RuntimeRepository = {
     const job = [...state.jobs.values()]
       .filter(
         (item) => {
+          const session = getSession(item.session_id);
           const authenticationBlocked = Boolean(activeAuthenticationHoldForJob(state, item)) || Boolean(item.lease_token && state.events.some((event) => {
             if (
               event.job_id !== item.id ||
@@ -507,7 +519,8 @@ export const localRuntimeRepository: RuntimeRepository = {
           }));
           return item.status === "pending" &&
             !authenticationBlocked &&
-            !getSession(item.session_id)?.archived_at &&
+            !session?.archived_at &&
+            !isPausedCurrentWorkflowJob(session ?? null, item) &&
             new Date(item.available_at).getTime() <= now &&
             (item.user_id === storedDevice.user_id || (!item.user_id && allowUnownedRuntimeJobs())) &&
             storedDevice.capabilities.includes(executorCapabilityForJobType(item.job_type));

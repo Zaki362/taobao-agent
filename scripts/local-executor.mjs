@@ -6,12 +6,15 @@ import protocol from "../lib/runtime/executor-protocol.json" with { type: "json"
 import { ExecutorLeaseGuard } from "./executor-lease-guard.mjs";
 import {
   isMcpReadinessError,
+  isTaobaoLimitedBetaError,
   mcpReadinessBackoffMs,
   missingTaobaoCartTools,
   missingTaobaoDetailTools,
-  missingTaobaoTools
+  missingTaobaoTools,
+  shouldFallbackToTaobaoNativeCli
 } from "./local-executor-readiness.mjs";
 import { TaobaoMcpClient } from "./taobao-mcp-client.mjs";
+import { TaobaoNativeCliClient } from "./taobao-native-cli-client.mjs";
 import {
   buildTaobaoMcpSearchEvidence,
   buildUnavailableTaobaoMcpProductDetailEvidence,
@@ -78,6 +81,7 @@ let mcpUnavailable = true;
 let mcpReadinessAttempt = 0;
 let executorCapabilities = [];
 let availableTaobaoToolNames = new Set();
+let taobaoSearchTransport = "http_mcp";
 let fatalApiError = null;
 let lastAuthenticationProbeAt = 0;
 let lastTaobaoSearchFinishedAt = 0;
@@ -198,6 +202,22 @@ async function verifyStartup() {
   if (heartbeatPayload.protocol_version !== executorProtocolVersion) {
     throw new Error("服务端未确认当前执行器协议，请更新项目代码后重启。");
   }
+  const startupStandby = await api("/api/executor/startup", {
+    method: "POST",
+    body: "{}"
+  });
+  if (
+    startupStandby.startup_standby_established !== true ||
+    startupStandby.protocol_version !== executorProtocolVersion
+  ) {
+    throw new Error("服务端未建立执行器启动待命状态；为避免自动执行历史任务，Worker 已停止。");
+  }
+  const pausedWorkflowCount = Number(startupStandby.paused_workflows ?? 0);
+  process.stdout.write(
+    pausedWorkflowCount > 0
+      ? `[local-executor] startup standby established; paused ${pausedWorkflowCount} historical workflow(s). Open the SceneCart page and click 继续搜索 to resume\n`
+      : "[local-executor] startup standby established; no historical workflow requires confirmation\n"
+  );
   process.stdout.write(
     `[local-executor] API and durability checks passed; runtime=${payload.runtime_store}; backend=${payload.effective_executor_backend}; capabilities=${capabilities.join(",")}\n`
   );
@@ -228,6 +248,22 @@ function createTaobaoMcpClient(timeoutMs) {
 // Streamable HTTP sessions are stateful. Reuse one transport for the complete
 // worker lifetime so Taobao Desktop keeps one consistent WebView/MCP context.
 const taobaoClient = createTaobaoMcpClient(Math.max(taobaoSearchTimeoutMs, taobaoCartTimeoutMs));
+const taobaoCliClient = new TaobaoNativeCliClient({
+  sourceApp: taobaoSourceApp,
+  timeoutMs: taobaoSearchTimeoutMs
+});
+
+function activateTaobaoCliSearchFallback(reason) {
+  const changed = taobaoSearchTransport !== "native_cli";
+  taobaoSearchTransport = "native_cli";
+  availableTaobaoToolNames = new Set(["search_products", "list_available_pages"]);
+  taobaoClient.resetSession();
+  if (changed) {
+    process.stderr.write(
+      `[local-executor] HTTP MCP search unavailable; using the official Taobao CLI for read-only searches: ${reason instanceof Error ? reason.message : String(reason)}\n`
+    );
+  }
+}
 
 function enterMcpUnavailable(error) {
   const wasUnavailable = mcpUnavailable;
@@ -267,6 +303,7 @@ async function waitForMcpReadiness() {
         );
       }
       availableTaobaoToolNames = new Set(tools.map((tool) => tool?.name).filter(Boolean));
+      taobaoSearchTransport = "http_mcp";
       const missingDetailTools = missingTaobaoDetailTools(tools);
       if (missingDetailTools.length > 0) {
         process.stderr.write(
@@ -291,16 +328,43 @@ async function waitForMcpReadiness() {
         `[local-executor] Taobao MCP ready; tools=${tools.map((tool) => tool?.name).filter(Boolean).join(",")}\n`
       );
       return true;
-    } catch (error) {
-      if (error instanceof FatalExecutorApiError || fatalApiError || stopped) return false;
-      enterMcpUnavailable(error);
+    } catch (httpError) {
+      if (httpError instanceof FatalExecutorApiError || fatalApiError || stopped) return false;
+      try {
+        await taobaoCliClient.probeSearchReadiness(
+          operationSignal(undefined, taobaoReadinessProbeTimeoutMs)
+        );
+        activateTaobaoCliSearchFallback(httpError);
+        const onlineHeartbeat = await heartbeat({ executorState: "online", force: true });
+        if (fatalApiError) return false;
+        if (onlineHeartbeat?.executor_state === "authentication_required") {
+          authenticationPaused = true;
+          lastAuthenticationProbeAt = 0;
+          return false;
+        }
+        if (onlineHeartbeat?.executor_state !== "online") {
+          throw new Error("服务端尚未确认本地执行器的 CLI 搜索兜底上线");
+        }
+        mcpUnavailable = false;
+        mcpReadinessAttempt = 0;
+        process.stdout.write(
+          "[local-executor] Taobao official CLI ready; read-only search fallback is active; product detail and cart remain fail-closed without HTTP MCP\n"
+        );
+        return true;
+      } catch (cliError) {
+        if (cliError instanceof FatalExecutorApiError || fatalApiError || stopped) return false;
+        const combinedError = new Error(
+          `HTTP MCP: ${httpError instanceof Error ? httpError.message : String(httpError)}; 官方 CLI: ${cliError instanceof Error ? cliError.message : String(cliError)}`
+        );
+        enterMcpUnavailable(combinedError);
+      }
       const delayMs = mcpReadinessBackoffMs(mcpReadinessAttempt, {
         baseMs: taobaoReadinessBackoffBaseMs,
         maxMs: taobaoReadinessBackoffMaxMs
       });
       mcpReadinessAttempt += 1;
       process.stderr.write(
-        `[local-executor] Taobao MCP unavailable; retrying readiness in ${delayMs}ms: ${error instanceof Error ? error.message : String(error)}\n`
+        `[local-executor] Taobao search transports unavailable; retrying readiness in ${delayMs}ms\n`
       );
       await sleep(delayMs);
     }
@@ -453,6 +517,13 @@ function taobaoJobError(error, operation = "操作") {
       "auth_required"
     );
   }
+  if (isTaobaoLimitedBetaError(output)) {
+    return new ExecutorJobError(
+      "淘宝 HTTP MCP 返回了内测限制，官方 CLI 兜底也未能完成搜索。",
+      false,
+      "taobao_limited_beta"
+    );
+  }
   if (/Tool 执行层未就绪|应用已加载完成|连接失败|cli-rpc\.sock|ECONNREFUSED/i.test(output)) {
     return new ExecutorJobError(
       "淘宝桌面版工具执行层暂未就绪，请保持客户端主界面打开后重试。",
@@ -478,11 +549,15 @@ async function probeTaobaoAuthentication() {
     // This probe is deliberately restricted to the authentication-paused state.
     // In that state Taobao has already opened its login page, so reading the
     // current tab cannot consume or duplicate a user-approved shopping action.
-    const raw = await taobaoClient.callTool(
-      "get_current_tab",
-      {},
-      operationSignal(undefined, taobaoAuthProbeTimeoutMs)
-    );
+    const raw = taobaoSearchTransport === "native_cli"
+      ? await taobaoCliClient.getCurrentTab(
+        operationSignal(undefined, taobaoAuthProbeTimeoutMs)
+      )
+      : await taobaoClient.callTool(
+        "get_current_tab",
+        {},
+        operationSignal(undefined, taobaoAuthProbeTimeoutMs)
+      );
     return classifyTaobaoAuthentication(raw);
   } catch (error) {
     if (isTaobaoLoginError(errorOutput(error))) return "authentication_required";
@@ -585,15 +660,35 @@ async function executeJob(job, signal) {
     }
     let raw;
     try {
-      // get_current_tab is not a passive health check in Taobao Desktop: when its
-      // internal login state is stale it navigates the app to the login page.
-      // Keep each user-approved search to one stateful shopping tool call.
-      raw = await taobaoClient.callTool("search_products", {
-        keyword,
-        // Match the official skill's default route. The dedicated PC route can
-        // redirect an otherwise logged-in desktop WebView to login.taobao.com.
-        type: "all"
-      }, operationSignal(signal, taobaoSearchTimeoutMs));
+      if (taobaoSearchTransport === "native_cli") {
+        raw = await taobaoCliClient.searchProducts(
+          { keyword, type: "all" },
+          operationSignal(signal, taobaoSearchTimeoutMs)
+        );
+      } else {
+        try {
+          // get_current_tab is not a passive health check in Taobao Desktop: when its
+          // internal login state is stale it navigates the app to the login page.
+          // Keep each user-approved search to one stateful shopping tool call.
+          raw = await taobaoClient.callTool("search_products", {
+            keyword,
+            // Match the official skill's default route. The dedicated PC route can
+            // redirect an otherwise logged-in desktop WebView to login.taobao.com.
+            type: "all"
+          }, operationSignal(signal, taobaoSearchTimeoutMs));
+        } catch (httpError) {
+          if (!shouldFallbackToTaobaoNativeCli(httpError)) throw httpError;
+          try {
+            raw = await taobaoCliClient.searchProducts(
+              { keyword, type: "all" },
+              operationSignal(signal, taobaoSearchTimeoutMs)
+            );
+            activateTaobaoCliSearchFallback(httpError);
+          } catch (cliError) {
+            throw taobaoJobError(cliError, "搜索");
+          }
+        }
+      }
     } catch (error) {
       if (error instanceof ExecutorJobError) throw error;
       throw taobaoJobError(error, "搜索");
@@ -612,10 +707,11 @@ async function executeJob(job, signal) {
         workflowRunId,
         keyword,
         capturedAt: new Date().toISOString(),
-        rawResultCount: result.evidence.raw_result_count
+        rawResultCount: result.evidence.raw_result_count,
+        transport: taobaoSearchTransport
       });
       process.stdout.write(
-        `[local-executor] verified ${result.candidates.length} Taobao candidates from MCP for ${job.id}\n`
+        `[local-executor] verified ${result.candidates.length} Taobao candidates via ${taobaoSearchTransport === "native_cli" ? "official CLI" : "HTTP MCP"} for ${job.id}\n`
       );
       return result;
     } catch (error) {
@@ -731,18 +827,25 @@ async function recoverTaobaoAuthentication() {
   }
 
   try {
-    const tools = await taobaoClient.listTools(
-      operationSignal(undefined, taobaoReadinessProbeTimeoutMs)
-    );
-    const missingTools = missingTaobaoTools(tools, executorCapabilities);
-    if (missingTools.length > 0) {
-      throw new Error(`淘宝桌面版 MCP 缺少必需工具：${missingTools.join("、")}`);
+    if (taobaoSearchTransport === "native_cli") {
+      await taobaoCliClient.probeSearchReadiness(
+        operationSignal(undefined, taobaoReadinessProbeTimeoutMs)
+      );
+      availableTaobaoToolNames = new Set(["search_products", "list_available_pages"]);
+    } else {
+      const tools = await taobaoClient.listTools(
+        operationSignal(undefined, taobaoReadinessProbeTimeoutMs)
+      );
+      const missingTools = missingTaobaoTools(tools, executorCapabilities);
+      if (missingTools.length > 0) {
+        throw new Error(`淘宝桌面版 MCP 缺少必需工具：${missingTools.join("、")}`);
+      }
+      availableTaobaoToolNames = new Set(tools.map((tool) => tool?.name).filter(Boolean));
     }
-    availableTaobaoToolNames = new Set(tools.map((tool) => tool?.name).filter(Boolean));
   } catch (error) {
     enterMcpUnavailable(error);
     process.stderr.write(
-      `[local-executor] login is available but Taobao MCP tools are not ready yet: ${error instanceof Error ? error.message : String(error)}\n`
+      `[local-executor] login is available but Taobao search tools are not ready yet: ${error instanceof Error ? error.message : String(error)}\n`
     );
     await heartbeat({ executorState: "authentication_required", force: true });
     return false;

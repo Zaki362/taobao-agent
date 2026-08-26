@@ -191,8 +191,19 @@ describe("local executor evidence boundary", () => {
       keyword: "车载手机支架",
       captured_at: "2026-08-11T12:34:56.000Z",
       cache_hit: false,
-      raw_result_count: 48
+      raw_result_count: 48,
+      transport: "http_mcp"
     });
+    expect(buildTaobaoMcpSearchEvidence({
+      sourceApp: "SceneCartAI",
+      jobId: "job-cli-12345678",
+      moduleId: "practical-interior",
+      workflowRunId: "workflow-cli",
+      keyword: "车载手机支架",
+      capturedAt: "2026-08-11T12:35:56.000Z",
+      rawResultCount: 48,
+      transport: "native_cli"
+    })).toMatchObject({ transport: "native_cli", tool: "search_products" });
   });
 
   it("normalizes only products contained in a Taobao evidence artifact", () => {

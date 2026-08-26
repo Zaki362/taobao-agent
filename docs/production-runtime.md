@@ -7,7 +7,7 @@
 1. Next.js 服务负责认证、Session、Agent 决策、任务入队和 SSE。
 2. PostgreSQL 保存用户、购物会话、执行设备、任务、租约和事件。
 3. 用户本机 `local-executor` 使用设备令牌领取属于该用户的任务。
-4. 本地执行器通过淘宝桌面版官方 Streamable HTTP MCP 调用搜索与加购工具，并只把结构化商品、淘宝链接和执行结果回填服务端；不经过 Qoder 或 CLI 子进程。
+4. 本地执行器优先通过淘宝桌面版官方 Streamable HTTP MCP 调用搜索与加购工具，并只把结构化商品、淘宝链接和执行结果回填服务端；不经过 Qoder。HTTP MCP 对只读搜索误报内测限制或传输中断时，可降级到桌面版自带的官方 CLI；加购不使用该兜底。
 5. 用户确认规划后，浏览器只调用一次 `/api/agent/run`；服务端工作流在每个任务回填后自动决定并排队下一模块。
 6. 浏览器通过 SSE 获得任务状态与推荐结果，短轮询只作为断线恢复兜底，不承担工作流编排。
 
@@ -76,7 +76,7 @@ npm run start
 
 `db/migrations/002_security_rate_limits.sql` 创建不保存邮箱或 IP 明文的认证限流表；`003_workflow_recovery_index.sql` 增加工作流恢复扫描索引；`004_runtime_service_heartbeats.sql` 保存恢复 Worker / Cron 心跳；`005_executor_authentication_state.sql` 增加登录暂停状态；`006_job_lease_token.sql` 增加租约代次保护；`007_executor_mcp_availability_state.sql` 增加 `mcp_unavailable` 设备状态；`008_job_lease_protocol.sql` 记录每次 Job 领取时使用的执行器协议。migration runner 会保存每个 SQL 文件的 SHA-256 checksum；已执行 migration 被修改时会拒绝继续，必须新增 migration。`db:check` 除了校验所有 migration checksum，还会直接检查包括 `runtime_service_heartbeats` 在内的运行时实体表，防止表被意外删除但 migration 记录仍存在时产生假健康。
 
-当前执行器协议为 **v4**。发布顺序必须是：停止旧 Worker；由 Vercel Production 构建自动执行（或在其他平台手工执行）包含 migration 008 的 `npm run db:migrate && npm run db:check`；如需保护升级前在途搜索/加购，把 `SCENECART_EXECUTOR_V3_DRAIN_UNTIL` 临时设为未来不超过 2 小时的 ISO 时间；部署 v4 服务端；更新本机项目并重启 Worker；确认排空后删除该变量。v3 新任务领取始终返回 `426`，旧回填还必须同时匹配领取协议 `3`、原设备和原租约 token，且超过截止时间后自动关闭。兼容窗口不接收 `product_detail`。
+当前执行器协议为 **v5**。发布顺序必须是：停止旧 Worker；由 Vercel Production 构建自动执行（或在其他平台手工执行）包含 migration 008 的 `npm run db:migrate && npm run db:check`；如需保护升级前在途搜索、详情或加购，把 `SCENECART_EXECUTOR_V4_DRAIN_UNTIL` 临时设为未来不超过 2 小时的 ISO 时间；部署 v5 服务端；更新本机项目并重启 Worker；确认排空后删除该变量。v4 新任务领取始终返回 `426`，旧回填还必须同时匹配领取协议 `4`、原设备和原租约 token，且超过截止时间后自动关闭。v5 不需要新增数据库 migration。
 
 任务领取使用 PostgreSQL 事务和 `FOR UPDATE SKIP LOCKED`，支持多个执行器并发但不会重复领取同一任务。
 
@@ -136,13 +136,15 @@ Doctor 会初始化官方本地 MCP 并检查工具列表、服务端和设备�
 npm run worker:local
 ```
 
-Worker 先检查服务端健康、设备令牌、持久失败回执和 `module_search` 能力，然后以 `mcp_unavailable` 心跳进入淘宝就绪检查。它会按指数退避重复执行无副作用的 MCP `tools/list`；在工具未就绪期间保持进程存活、停止领取 Job，网页和执行台明确显示“等待淘宝桌面版工具恢复”。搜索设备必须检测到 `search_products` 与 `get_current_tab`；启用真实加购的设备还必须检测到 `get_product_skus` 和 `add_to_cart`。全部通过后设备才切换为 `online` 并领取任务。因此“Worker 进程存在”“MCP 重连中”和“真实搜索可用”是三个可区分的状态。
+Worker 先检查服务端健康、设备令牌、持久失败回执和 `module_search` 能力，然后以 `mcp_unavailable` 心跳进入淘宝就绪检查。它先执行无副作用的 MCP `tools/list`；若 HTTP MCP 不可用，再用官方 CLI 的 `list_available_pages` 验证真实工具执行层，而不是只检查二进制或帮助文本。任一只读搜索传输可用后设备切换为 `online`；只有两者都失败时才按指数退避停止领取 Job。HTTP MCP 可用时仍要求 `search_products` 与 `get_current_tab`，真实加购继续要求 `get_product_skus` 与 `add_to_cart`。
 
-真实任务采用最小调用面：搜索使用淘宝桌面版官方 MCP 的综合搜索路径 `all`，每个搜索 Job 只调用一次 `search_products`；搜索候选完成重排后，只为当前首选调用一次 `navigate_to_url` 和一次 `read_page_content`，并且不持久化页面原始正文；加购先读取 `get_product_skus`，只有淘宝明确返回无规格或用户已完整选择有效规格时，才调用一次 `add_to_cart`。执行器不在搜索或加购前后调用 `get_current_tab`，因为淘宝桌面端在内部登录状态不同步时会让该工具主动跳转登录页；该工具只会在真实调用已经报告登录失败、Worker 进入鉴权暂停后用于低频检测登录是否恢复。Worker 在完整生命周期内复用同一个 Streamable HTTP `mcp-session-id`，仅在协议明确报告会话失效时重新初始化。退出时只清理本地会话引用，不向淘宝发送远端 `DELETE`；淘宝桌面端会按 TTL 回收旧会话，避免远端终止连带破坏购物 WebView 登录态。
+每次 Worker 进程启动时都会先调用受设备令牌和 v5 协议保护的启动待命接口。服务端把该账号仍处于 `running` / `waiting_for_tools` 的历史工作流原子切换为 `paused`，而本地与 PostgreSQL 领取器都会跳过属于当前 workflow run 的暂停搜索及详情 Job。网页点击“继续搜索”后才恢复 `auto_continue` 并放行原 Job；Worker 在线后由用户新开始的工作流不会被暂停。若启动待命登记失败，Worker fail-closed 退出，不会领取历史任务。
 
-MCP 传输不可达、工具层未加载或必需工具缺失会打开就绪熔断：Worker 切换为 `mcp_unavailable`，不再领取任务，并在每次新探测前重建 MCP 会话。未领取搜索保持 `pending`、尝试次数不增加；连接恢复并通过工具检查后自动继续队列。若真实工具返回登录错误，则进入更严格的 `authentication_required`：用户完成淘宝登录后无需重启 Worker，但登录恢复不会自动重试失败动作；网页保留已回填候选，并要求用户明确选择继续失败搜索或使用部分结果。真实加购在 MCP、Worker 或登录恢复后都不会自动重放，用户必须先确认淘宝购物车实际状态，再重新发起一次显式确认。
+真实任务采用最小调用面：搜索使用综合路径 `all`，每个搜索 Job 先调用一次 HTTP MCP `search_products`；只有该只读调用返回内测误报或传输/工具层错误时，才在同一 attempt 内调用一次官方 CLI `search_products`，并把实际 transport 写入证据。搜索候选完成重排后，只为当前首选尝试 HTTP MCP 的 `navigate_to_url` 与 `read_page_content`；CLI 降级时详情证据会明确 unavailable。加购始终保留 HTTP MCP 的严格边界，先读取 `get_product_skus`，再按用户确认调用一次 `add_to_cart`，绝不因 CLI 或连接恢复自动重放。
 
-Worker、Doctor 和服务端使用统一的执行器协议版本。每次心跳、任务领取和结果回填都会携带协议版本；缺失或不兼容时服务端返回 `426 executor_protocol_mismatch`。只有显式、短时、带领取协议与租约代次校验的 v3 排空窗口例外；平时不设置 `SCENECART_EXECUTOR_V3_DRAIN_UNTIL`。升级网页服务后应同步更新本地项目并重启 Worker，旧进程不会继续领取新任务。
+MCP 传输不可达、工具层未加载或必需工具缺失会打开就绪熔断：Worker 切换为 `mcp_unavailable`，不再领取任务，并在每次新探测前重建 MCP 会话。未领取搜索保持 `pending`、尝试次数不增加；同一 Worker 内连接恢复并通过工具检查后继续已经网页确认的队列。Worker 进程重新启动时则重新建立启动待命，历史搜索必须再次由网页确认。若真实工具返回登录错误，则进入更严格的 `authentication_required`：用户完成淘宝登录后无需重启 Worker，但登录恢复不会自动重试失败动作；网页保留已回填候选，并要求用户明确选择继续失败搜索或使用部分结果。真实加购在 MCP、Worker 或登录恢复后都不会自动重放，用户必须先确认淘宝购物车实际状态，再重新发起一次显式确认。
+
+Worker、Doctor 和服务端使用统一的执行器协议版本。每次启动待命登记、心跳、任务领取和结果回填都会携带协议版本；缺失或不兼容时服务端返回 `426 executor_protocol_mismatch`。只有显式、短时、带领取协议与租约代次校验的 v4 排空窗口例外；平时不设置 `SCENECART_EXECUTOR_V4_DRAIN_UNTIL`。升级网页服务后应同步更新本地项目并重启 Worker，旧进程不会继续领取新任务。
 
 可选配置：
 
@@ -243,7 +245,7 @@ pending -> leased -> running -> completed
 npm run demo:cloud -- --url https://你的正式域名
 ```
 
-启动器会先检查云端 production/PostgreSQL 契约和本机淘宝能力，再监督 `worker:local` 与 `worker:recovery`。仅淘宝 MCP 未就绪时，它会按 2 秒起、最多 30 秒的指数退避持续探测，提示打开、解锁和登录淘宝桌面版，恢复后自动继续；云端 API、设备令牌、执行器协议和恢复密钥错误不重试。`--check` 是一次快速探测，不会无限等待 MCP。启动器只用于面试预热到结束的短时窗口；不是生产守护进程，也不替代数据库 migration。若外部恢复调度已就绪，可显式加 `--skip-recovery`，避免重复的恢复心跳。
+启动器会先检查云端 production/PostgreSQL 契约和本机淘宝能力，再监督 `worker:local` 与 `worker:recovery`。仅淘宝 MCP 未就绪时，它会按 2 秒起、最多 30 秒的指数退避持续探测，提示打开、解锁和登录淘宝桌面版，恢复后自动继续启动；Worker 随后只建立启动待命，历史搜索需回网页点击“继续搜索”。云端 API、设备令牌、执行器协议和恢复密钥错误不重试。`--check` 是一次快速探测，不会无限等待 MCP。启动器只用于面试预热到结束的短时窗口；不是生产守护进程，也不替代数据库 migration。若外部恢复调度已就绪，可显式加 `--skip-recovery`，避免重复的恢复心跳。
 
 仓库 `.github/workflows/quality.yml` 已提供 PostgreSQL 16 集成验证、migration 检查、advisory lock 竞争测试、单元测试、生产构建和端到端测试。正式发布应将该 workflow 设为主分支必需检查。
 

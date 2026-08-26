@@ -8,7 +8,7 @@
 
 1. 从自然语言需求生成 Scene Brief 和预算守恒的购物规划。
 2. 用户在网页确认 Scene Brief 和规划后，只点击一次开始搜索；服务端创建持久 Agent workflow 并逐模块排队。
-3. `local_executor` 直连淘宝桌面版官方 HTTP MCP，至少回填一个当前可用的真实商品候选。
+3. `local_executor` 优先直连淘宝桌面版官方 HTTP MCP；若 HTTP 搜索层失效则安全降级官方 CLI，至少回填一个当前可用的真实商品候选。
 4. 展示候选复盘、搜索轨迹、完成报告和预算安全购买组合。
 5. 展示组合采纳、逐件显式加购入口和购买确认页。
 6. 说明系统止于淘宝购物车，不会自动下单、提交订单或支付。
@@ -101,7 +101,7 @@ npm run demo:cloud:configure
 npm run demo:cloud -- --url https://你的正式域名
 ```
 
-如果淘宝桌面版尚未启动、未解锁或 MCP 工具未加载，保持命令运行并按终端提示处理；它会以最多 30 秒的退避持续探测，恢复后自动继续启动。看到 `READY cloud_demo` 后再打开打印的云端地址操作。该命令会保持真实淘宝 Worker 和 Hobby 环境需要的恢复 Worker 在线，并在异常退出后指数退避重启；演示结束按 `Ctrl+C`。它不是部署命令，不能代替 Vercel/Neon 配置和数据库迁移，也不适合 24 小时常驻。前一天只验证配置可运行 `npm run demo:cloud -- --check --url https://你的正式域名`；check 模式只探测一次，未就绪时快速失败，退出时不会留下在线 Worker。
+如果淘宝桌面版尚未启动、未解锁或 MCP 工具未加载，保持命令运行并按终端提示处理；它会以最多 30 秒的退避持续探测，恢复后自动继续启动。Worker 启动时会把云端遗留的运行中搜索切到安全暂停，因此看到 `READY cloud_demo` 后必须打开打印的云端地址；如果页面显示“等待你确认继续”，点击“继续搜索”才会真正操作淘宝。该命令会保持真实淘宝 Worker 和 Hobby 环境需要的恢复 Worker 在线，并在异常退出后指数退避重启；演示结束按 `Ctrl+C`。它不是部署命令，不能代替 Vercel/Neon 配置和数据库迁移，也不适合 24 小时常驻。前一天只验证配置可运行 `npm run demo:cloud -- --check --url https://你的正式域名`；check 模式只探测一次，未就绪时快速失败，退出时不会留下在线 Worker。
 
 下方 4.1–4.3 是纯本地网页演示路径。云端演示仍需执行 Doctor，但不需要再运行 `npm run dev`。
 
@@ -136,7 +136,7 @@ SCENECART_LOCAL_RUNTIME_PERSIST=true
 3. 复制只展示一次的设备令牌。
 4. 在另一个交互式终端运行设置页给出的 `SCENECART_API_URL=实际页面地址 npm run executor:configure`，按提示粘贴令牌。
 
-默认 `npm run dev` 会热发现新令牌并启动 `worker:local`，同时监督唯一的 Worker；异常退出后会按最多 30 秒的指数退避自动重启，无需另开终端。若淘宝 MCP 尚未加载，Worker 会保持 `mcp_unavailable` 状态、停止领取任务并自动探测；网页会显示等待恢复，而不是把队列误报成正在真实搜索。
+默认 `npm run dev` 会热发现新令牌并启动 `worker:local`，同时监督唯一的 Worker；异常退出后会按最多 30 秒的指数退避自动重启，无需另开终端。每次 Worker 进程启动都会暂停启动前遗留的 Agent 搜索，必须回网页确认继续；若淘宝 MCP 尚未加载，Worker 会保持 `mcp_unavailable` 状态、停止领取任务并自动探测。网页会区分“等待启动确认”和“等待淘宝工具恢复”，不会把队列误报成正在真实搜索。
 
 ### 4.3 Doctor 验证
 
@@ -233,7 +233,7 @@ Doctor 不执行搜索，也不证明淘宝账号仍处于登录态；第一条�
 - `scenecart_api` 失败：使用 `npm run dev` 打印的实际页面地址重新运行 `executor:configure`。
 - `device_token` 失败：在 `/settings/executor` 重新注册或撤销后签发新令牌。
 
-当 Worker 心跳仍正常但淘宝工具不可达时，购物进度页和 `/settings/executor` 会把设备显示为 `mcp_unavailable` / 等待淘宝桌面版工具恢复。此时 Worker 不领取 Job；尚未领取的搜索保持 `pending` 且不消耗尝试次数。保持 `npm run dev`、淘宝桌面版主界面与当前 Session 打开即可，Worker 会指数退避探测；工具列表恢复后切回在线，原搜索队列自动继续，无需再次点击“开始搜索”。这与 `authentication_required` 不同：真实调用已经报告掉登录后，系统仍必须等待用户登录并明确点击“重新登录后继续搜索”，也允许直接使用已有部分结果。
+当已通过启动确认的 Worker 心跳仍正常、但淘宝工具临时不可达时，购物进度页和 `/settings/executor` 会把设备显示为 `mcp_unavailable` / 等待淘宝桌面版工具恢复。此时 Worker 不领取 Job；尚未领取的搜索保持 `pending` 且不消耗尝试次数。同一 Worker 内工具列表恢复后会切回在线并继续这轮已确认队列。若 Worker 进程重新启动，则历史工作流会重新进入启动待命，必须回网页点击“继续搜索”。这与 `authentication_required` 不同：真实调用已经报告掉登录后，系统仍必须等待用户登录并明确点击“重新登录后继续搜索”，也允许直接使用已有部分结果。
 
 若 MCP 在一次真实加购期间断开，不要把恢复连接理解为自动重试：加购动作不会自动重放，失败状态保留，必须由用户确认实际购物车状态后再显式决定是否重新加购。
 
@@ -279,7 +279,8 @@ Doctor 不执行搜索，也不证明淘宝账号仍处于登录态；第一条�
 - [ ] `TAOBAO_EXECUTION_BACKEND=local_executor`，未启用 Qoder / hosted / experimental provider。
 - [ ] `npm run executor:doctor` 三项全绿。
 - [ ] `/hosted` 显示设备在线且具备 `module_search`。
-- [ ] 已验证 MCP 暂不可达时网页显示等待恢复、Worker 不领取任务，恢复后原搜索队列自动继续。
+- [ ] 已验证只启动 `demo:cloud` 不会领取历史搜索，网页点击“继续搜索”后才执行。
+- [ ] 已验证同一 Worker 内 MCP 暂不可达时网页显示等待恢复、Worker 不领取任务，工具恢复后继续已确认队列。
 - [ ] 固定输入至少成功获得一个真实候选。
 - [ ] 真实结果 Session 可从首页恢复，且没有被归档。
 - [ ] 已彩排掉登录后的安全暂停；网页能展示“重新登录后继续搜索”和“用已有部分结果进入选购”两个分支。

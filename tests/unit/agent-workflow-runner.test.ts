@@ -8,6 +8,7 @@ import { searchModule } from "@/lib/agent/orchestrator";
 import {
   acceptPartialAgentResults,
   advanceAgentWorkflow,
+  establishExecutorStartupStandby,
   improveAgentCompletionQuality,
   pauseAgentWorkflow,
   resumeAgentWorkflow,
@@ -727,6 +728,51 @@ describe("server-managed Agent workflow", () => {
     const events = await localRuntimeRepository.listEvents(sessionId, 0, device.user_id, 100);
     expect(events.some((event) =>
       event.event_type === "agent.workflow.updated" && event.payload.trigger === "user_pause"
+    )).toBe(true);
+  });
+
+  it("keeps historical work in startup standby until the user resumes it from the page", async () => {
+    const sessionId = `session-workflow-startup-standby-${Date.now()}`;
+    sessionFiles.add(sessionId);
+    const state = createSessionFixture({ session_id: sessionId });
+    await localRuntimeRepository.saveSession(state);
+
+    const started = await advanceAgentWorkflow(sessionId, device.user_id, {
+      start: true,
+      trigger: "user_start"
+    });
+    expect(started.outcome).toBe("queued");
+    const queuedJobId = started.state.hosted_tasks.find(
+      (task) => task.task_type === "module_search" && task.status === "pending"
+    )?.runtime_job_id;
+    expect(queuedJobId).toBeTruthy();
+
+    const standby = await establishExecutorStartupStandby(device);
+    expect(standby).toMatchObject({
+      paused_workflows: 1,
+      paused_session_ids: [sessionId]
+    });
+    const pausedState = await localRuntimeRepository.getSession(sessionId, device.user_id);
+    expect(pausedState?.agent_runtime).toMatchObject({
+      workflow_status: "paused",
+      auto_continue: false
+    });
+    expect(pausedState?.agent_runtime.workflow_message).toContain("点击“继续搜索”");
+    expect(await localRuntimeRepository.claimJob(device, 30_000)).toBeNull();
+    expect((await localRuntimeRepository.getJob(queuedJobId!))?.status).toBe("pending");
+
+    const resumed = await resumeAgentWorkflow(sessionId, device.user_id);
+    expect(resumed.outcome).toBe("waiting");
+    expect(resumed.state.agent_runtime.auto_continue).toBe(true);
+    await expect(localRuntimeRepository.claimJob(device, 30_000)).resolves.toMatchObject({
+      id: queuedJobId,
+      status: "leased"
+    });
+
+    const events = await localRuntimeRepository.listEvents(sessionId, 0, device.user_id, 100);
+    expect(events.some((event) =>
+      event.event_type === "agent.workflow.updated" &&
+      event.payload.trigger === "executor_startup_standby"
     )).toBe(true);
   });
 

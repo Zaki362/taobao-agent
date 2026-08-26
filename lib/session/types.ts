@@ -187,6 +187,7 @@ export interface TaobaoMcpSearchEvidence {
   captured_at: string;
   cache_hit: false;
   raw_result_count: number;
+  transport?: "http_mcp" | "native_cli";
 }
 
 export interface CandidateFitExplanation {

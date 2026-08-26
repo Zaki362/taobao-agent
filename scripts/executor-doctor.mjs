@@ -7,6 +7,7 @@ import {
   MCP_READINESS_EXIT_CODE
 } from "./local-executor-readiness.mjs";
 import { TaobaoMcpClient } from "./taobao-mcp-client.mjs";
+import { TaobaoNativeCliClient } from "./taobao-native-cli-client.mjs";
 
 nextEnv.loadEnvConfig(process.cwd());
 
@@ -19,7 +20,8 @@ const checks = [];
 const compactOutput = process.argv.includes("--compact");
 const executorProtocolVersion = protocol.version;
 let taobaoToolNames = new Set();
-let taobaoMcpReady = false;
+let taobaoSearchReady = false;
+let taobaoSearchDriver = "http_mcp";
 let heartbeatAccepted = false;
 
 async function check(name, task) {
@@ -38,16 +40,35 @@ await check("taobao_mcp", async () => {
     timeoutMs: 10_000
   });
   try {
-    const tools = await client.listTools();
-    taobaoToolNames = new Set(tools.map((tool) => tool?.name));
-    const missingSearchTools = ["search_products", "get_current_tab"].filter(
-      (name) => !taobaoToolNames.has(name)
-    );
-    if (missingSearchTools.length > 0) {
-      throw new Error(`淘宝桌面版 MCP 缺少搜索/登录恢复工具：${missingSearchTools.join("、")}`);
+    try {
+      const tools = await client.listTools();
+      taobaoToolNames = new Set(tools.map((tool) => tool?.name));
+      const missingSearchTools = ["search_products", "get_current_tab"].filter(
+        (name) => !taobaoToolNames.has(name)
+      );
+      if (missingSearchTools.length > 0) {
+        throw new Error(`淘宝桌面版 MCP 缺少搜索/登录恢复工具：${missingSearchTools.join("、")}`);
+      }
+      taobaoSearchReady = true;
+      taobaoSearchDriver = "http_mcp";
+      return `${taobaoMcpUrl} · search_products 已就绪 · source=${taobaoSourceApp}`;
+    } catch (httpError) {
+      const cliClient = new TaobaoNativeCliClient({
+        sourceApp: taobaoSourceApp,
+        timeoutMs: 10_000
+      });
+      try {
+        await cliClient.probeSearchReadiness();
+      } catch (cliError) {
+        throw new Error(
+          `HTTP MCP: ${httpError instanceof Error ? httpError.message : String(httpError)}；官方 CLI: ${cliError instanceof Error ? cliError.message : String(cliError)}`
+        );
+      }
+      taobaoSearchReady = true;
+      taobaoSearchDriver = "native_cli";
+      taobaoToolNames = new Set(["search_products", "list_available_pages"]);
+      return `官方 CLI 搜索执行层已就绪 · HTTP MCP 暂不可用 · source=${taobaoSourceApp}`;
     }
-    taobaoMcpReady = true;
-    return `${taobaoMcpUrl} · search_products 已就绪 · source=${taobaoSourceApp}`;
   } finally {
     await client.close().catch(() => undefined);
   }
@@ -79,7 +100,7 @@ await check("device_token", async () => {
       "X-SceneCart-Executor-Protocol": executorProtocolVersion
     },
     body: JSON.stringify({
-      executor_state: taobaoMcpReady ? "online" : "mcp_unavailable"
+      executor_state: taobaoSearchReady ? "online" : "mcp_unavailable"
     }),
     signal: AbortSignal.timeout(8_000)
   });
@@ -96,7 +117,7 @@ await check("device_token", async () => {
   const labels = capabilities.map((capability) =>
     capability === "module_search" ? "商品搜索" : capability === "add_to_cart" ? "真实加购" : capability
   );
-  if (taobaoMcpReady && capabilities.includes("add_to_cart")) {
+  if (taobaoSearchReady && capabilities.includes("add_to_cart")) {
     const missingCartTools = ["get_product_skus", "add_to_cart"].filter(
       (name) => !taobaoToolNames.has(name)
     );
@@ -107,7 +128,7 @@ await check("device_token", async () => {
   const authenticationState = payload.executor_state === "authentication_required"
     ? "；设备仍保持登录暂停，Worker 会在淘宝登录恢复后自动解除"
     : "";
-  const mcpState = !taobaoMcpReady && payload.executor_state !== "authentication_required"
+  const mcpState = !taobaoSearchReady && payload.executor_state !== "authentication_required"
     ? "；淘宝 MCP 尚未就绪，设备已安全标记为重连中"
     : "";
   return `设备令牌有效，服务端已收到心跳${authenticationState}${mcpState}；授权能力：${labels.join("、")}`;
@@ -118,7 +139,11 @@ for (const item of checks) {
   process.stdout.write(`${item.status === "pass" ? "PASS" : "FAIL"}  ${item.name}: ${item.detail}\n`);
 }
 if (!compactOutput) {
-  process.stdout.write("INFO  taobao_driver: 商品搜索与真实加购均直连淘宝桌面版官方 HTTP MCP，不再消耗 Qoder Credits\n");
+  process.stdout.write(
+    taobaoSearchDriver === "native_cli"
+      ? "INFO  taobao_driver: 商品搜索将使用淘宝桌面版官方 CLI 安全兜底；不会经过 Qoder；详情读取与真实加购仍等待 HTTP MCP\n"
+      : "INFO  taobao_driver: 商品搜索与真实加购均直连淘宝桌面版官方 HTTP MCP，不再消耗 Qoder Credits\n"
+  );
   process.stdout.write("INFO  taobao_skill: Doctor 不主动搜索或打开详情页；第一条已确认任务会验证真实登录态\n");
 }
 

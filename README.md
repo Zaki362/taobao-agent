@@ -14,7 +14,7 @@ SceneCart AI 是一个正在按正式产品架构推进的“场景化购物 Age
 - Agent 方案自检：规划生成后会产出 `plan_review`，在用户确认前检查预算分配、模块覆盖、关键词差异化和风险点
 - AI 执行档位：用户可在规划确认页选择保守 / 平衡 / 探索，服务端会写回 `agent_directives`，影响后续搜索深度、补搜策略和恢复边界
 - AI 搜索策略 + 增量候选排序：搜索结果会经过 Candidate Ranker，根据 AI 生成的主搜索词、备用搜索词、包含词、排除词、排序关注点、验收信号、拒绝信号、预算、偏好、已有/排除项和店铺信号选出稳妥 / 性价比 / 升级三档；Agent 补搜时会按商品 ID 合并新旧证据并重新分档，不会用第二轮结果覆盖首轮有效候选。规划词、候选复盘建议、运行时改写和用户手动编辑统一经过模块语义与指令安全校验，旧会话异常词安全回退，新提交异常词返回明确 400
-- 首选商品真实详情证据：每个模块完成候选重排与 AI 复盘后，只为最终第一名创建只读 `product_detail` Job；v4 Worker 打开其可信淘宝/天猫链接并读取可见详情，服务端校验 search Job、workflow、模块、商品 ID、URL 和采集时间后生成简短依据。页面原始正文不落盘，只保存正文哈希和在服务端白名单中实际命中的少量事实；读取失败会明确降级为搜索摘要判断，绝不伪造“详情已验证”，也不会触发加购
+- 首选商品真实详情证据：每个模块完成候选重排与 AI 复盘后，只为最终第一名创建只读 `product_detail` Job；当前 Worker 打开其可信淘宝/天猫链接并读取可见详情，服务端校验 search Job、workflow、模块、商品 ID、URL 和采集时间后生成简短依据。页面原始正文不落盘，只保存正文哈希和在服务端白名单中实际命中的少量事实；读取失败会明确降级为搜索摘要判断，绝不伪造“详情已验证”，也不会触发加购
 - 搜索后 Agent 复盘：每个模块搜索后会生成 `module_reviews`，并在同一次短超时 DeepSeek 调用中批量生成最多三条、与候选商品一一对应的适配理由；商品 ID 和理由长度经过严格校验，无 key、超时或结构异常时完整保留启发式评估与规则理由，不增加逐商品模型请求
 - Agent 搜索决策轨迹：每个模块搜索会写入 `module_search_traces`，记录首轮词、备用词、补搜原因、每次返回数、候选池复盘和下一步建议，让 AI 的执行判断可解释、可恢复
 - Agent 完成报告：自动搜索结束时基于必需模块覆盖、候选质量、真实价格压力、容错跳过和最终停止决策生成方案级验收结论；推荐页与执行台都能查看为什么停止、当前缺口和下一步，用户还可显式授权补齐空白模块或增量优化候选偏薄模块
@@ -31,8 +31,9 @@ SceneCart AI 是一个正在按正式产品架构推进的“场景化购物 Age
 - Agent 建议补搜：当候选偏少或质量不足时，推荐页会展示建议搜索词，用户可以一键按 Agent 建议补搜当前模块
 - 快捷调整影响说明：用户点击快捷调整后，系统会生成 `last_refinement`，说明哪些模块需要重搜、哪些候选可复用、哪些模块被移除以及原因
 - 生产运行时：支持 PostgreSQL 持久化、邮箱登录、HttpOnly 会话、按用户隔离的购物 Session、持久 Job Queue 和执行事件
-- 本地执行器：商品搜索与显式确认后的真实加购由独立 Worker 直连淘宝桌面版官方 HTTP MCP，不再经过 Qoder、CLI 子进程或 Next.js 长请求；设备通过一次性令牌注册，使用心跳、任务租约、自动恢复、结果账本和幂等回填完成本机真实执行
-- 本地链路自愈：`npm run dev` 会监督唯一的正式 Worker，异常退出时按上限 30 秒的指数退避自动重启；淘宝 MCP 暂不可达或工具层未加载时，Worker 保持 `mcp_unavailable` 心跳、停止领取任务并持续探测，网页会显示“正在等待淘宝桌面版工具恢复”。连接恢复后，未领取的搜索 Job 从持久队列自动继续，不需要重复点击开始搜索
+- 本地执行器：商品搜索与显式确认后的真实加购由独立 Worker 优先直连淘宝桌面版官方 HTTP MCP，不再经过 Qoder 或 Next.js 长请求；若 HTTP MCP 对只读搜索误报内测限制或传输中断，搜索可安全降级到同一桌面客户端自带的官方 CLI。加购不会走 CLI 自动兜底，也不会因传输恢复而重放
+- 启动待命：Worker 每次启动都会先让云端仍在自动推进的历史搜索进入安全暂停，待处理 Job 保留但不可领取；必须回到网页点击“继续搜索”才会从断点执行。Worker 在线后由用户新开始的搜索正常直接运行
+- 本地链路自愈：`npm run dev` 会监督唯一的正式 Worker，异常退出时按上限 30 秒的指数退避自动重启；淘宝 MCP 暂不可达或工具层未加载时，Worker 保持 `mcp_unavailable` 心跳、停止领取任务并持续探测，网页会显示“正在等待淘宝桌面版工具恢复”。同一 Worker 内工具恢复后会继续已经网页确认的队列；若 Worker 进程重新启动，历史搜索会进入待命并等待网页再次确认
 - 实时回填：搜索、重试、Agent 状态转换和加购事件通过 SSE 推送到当前会话，并以短轮询作为断线恢复兜底；页面不占用淘宝执行长请求
 - 可恢复事件流：SSE 使用事件游标与 `Last-Event-ID` 续传，浏览器短暂断线后不会重复丢失执行进度
 - 运行时可观测性：执行台展示队列积压、在线设备、失败/取消任务、最久等待时间与模型 guardrail fallback；发布就绪页会进一步区分 DeepSeek“已配置”与“本进程最近真实调用成功”。每个购物 Session 还会持久化隐私安全的 `llm_calls`，只记录任务、模型、真实/降级模式、耗时、原因和时间，不保存 Prompt、用户原文或模型原始输出；结构化模型提案若在后续业务 Guardrail 被拒绝，对应凭证也会被精确改写为 fallback，避免把“模型有返回”误报成“模型结果已采用”
@@ -44,7 +45,7 @@ SceneCart AI 是一个正在按正式产品架构推进的“场景化购物 Age
 - 发布就绪检查：`/api/runtime/readiness` 将开发态与正式可发布状态分开，逐项检查 PostgreSQL、认证、HTTPS Origin、安全 Cookie、DeepSeek、本地执行器和旧 Mock 配置
 - Agent 质量门槛：`npm run eval:agent` 离线检查多组新车需求的预算守恒、模块覆盖、优先级层次、搜索词差异化和安全边界；`npm run eval:agent:live` 通过专用启动器读取本地 Key 并显式调用 DeepSeek，缺少 Key 或全部降级时会直接失败，避免产生“在线评测实际未调用模型”的假阳性
 - 生产安全基线：异步 scrypt 密码哈希、认证限流、同源写请求校验、HttpOnly Cookie 和安全响应头
-- 淘宝桌面版 MCP 工具层：正式路径为 `local_executor -> 淘宝桌面版官方 HTTP MCP`；原有 Qoder 直连、Codex hosted 和 experimental bridge 仅保留为开发兼容路径，不属于正式演示链路
+- 淘宝桌面版工具层：正式路径为 `local_executor -> 淘宝桌面版官方 HTTP MCP`，只读搜索保留 `taobao-native` 官方 CLI 安全兜底；原有 Qoder 直连、Codex hosted 和 experimental bridge 仅保留为开发兼容路径，不属于正式演示链路
 - 商品搜索链路：当前主流程可串行搜索规划中的各个模块，并生成推荐商品卡片
 - 加购结果分级：高风险动作必须显式确认，服务端和 MCP executor 会双重校验；demo cart 只覆盖 development 中同步兼容 provider 的失败，正式 `local_executor` 任务失败会明确保留为可重试失败
 - 预算组合采纳：用户可把 Agent 的预算安全购买组合采纳为产品内待处理清单，再逐件显式确认真实加购；采纳不等于淘宝加购，也不会触发批量交易
@@ -77,9 +78,9 @@ npm run dev:web
 
 ## 面试演示：从网页触发真实淘宝全流程
 
-面试主路径是在 SceneCart 网页上逐步输入需求、确认 Scene Brief、确认规划并开始搜索。网页把任务写入持久 Job Queue，本机 `local_executor` 领取任务后直连淘宝桌面版官方 HTTP MCP，再把真实候选回填到同一个 Session：`Browser -> Agent workflow -> durable Job Queue -> local executor -> 淘宝桌面版官方 HTTP MCP`。面试前先运行 `npm run executor:doctor`，再用 `npm run dev` 启动网页和正式 Worker；不要切换到 Qoder、Codex hosted、experimental bridge 或 mock provider。
+面试主路径是在 SceneCart 网页上逐步输入需求、确认 Scene Brief、确认规划并开始搜索。网页把任务写入持久 Job Queue，本机 `local_executor` 领取任务后优先直连淘宝桌面版官方 HTTP MCP，再把真实候选回填到同一个 Session；若桌面版 HTTP MCP 端口失效但官方 CLI 执行层仍可用，只读搜索会在同一次 Job 内安全降级，不消耗额外业务重试。面试前先运行 `npm run executor:doctor`，再用 `npm run dev` 启动网页和正式 Worker；不要切换到 Qoder、Codex hosted、experimental bridge 或 mock provider。
 
-淘宝 MCP 暂不可达和淘宝掉登录是两种不同状态。前者会显示工具恢复提示，Worker 不领取新任务并自动退避探测；连接恢复后，尚未执行的搜索队列会自动继续。真实调用明确发现淘宝掉登录时，网站则显示“搜索已暂停，已有结果不会丢失”：此时必须先在淘宝桌面版重新登录，再由用户点击“重新登录后继续搜索”才会重试失败模块，登录恢复本身不会自动重放；也可点击“用已有部分结果进入选购”。已完成模块不会重跑，真实加购也不会因 MCP 或登录恢复而自动重放。
+淘宝 MCP 暂不可达和淘宝掉登录是两种不同状态。前者会显示工具恢复提示，Worker 不领取新任务并自动退避探测；同一 Worker 内连接恢复后，已经网页确认的搜索队列会继续。若 Worker 进程重新启动，历史搜索会等待用户点击“继续搜索”。真实调用明确发现淘宝掉登录时，网站则显示“搜索已暂停，已有结果不会丢失”：此时必须先在淘宝桌面版重新登录，再由用户点击“重新登录后继续搜索”才会重试失败模块，登录恢复本身不会自动重放；也可点击“用已有部分结果进入选购”。已完成模块不会重跑，真实加购也不会因 MCP 或登录恢复而自动重放。
 
 ### 次级可选：隔离演示模式
 
@@ -110,7 +111,7 @@ npm run dev
 
 启动器会同时检查 IPv4 loopback 和 Next.js 的 IPv6 默认监听地址。若 3000 被其他应用占用，会自动选择下一个真正可用的端口，并在终端打印准确的首页与执行器设置地址；不要继续使用旧的固定书签。需要固定端口时设置 `SCENECART_DEV_PORT`，或运行 `npm run dev -- --port 3001`。
 
-`npm run dev` 现在是一命令开发入口：它先启动网页；如果 `.env.local` 已配置 `SCENECART_DEVICE_TOKEN`，会在网页健康后自动启动正式 `worker:local`。首次使用时可以保持该命令运行，完成设备注册和 `executor:configure` 后，启动器会热发现新令牌并自动接入 Worker，不需要重启网页或再开第二个终端。Worker 异常退出时，启动器会按 1 秒起、最多 30 秒的指数退避自动重启；同一时间只保留一个 Worker，令牌更新时会安全切换。淘宝 MCP 尚未就绪不会让搜索被错误领取：Worker 会保持运行并持续探测，网页显示恢复状态，MCP 恢复后自动消费原有搜索队列。开发编译默认写入独立的 `.next-dev`，因此运行中的本地演示不会再与 `npm run build` 的 `.next` 产物互相覆盖。`npm run dev:web` 只启动 Next.js，供 E2E、纯 UI 调试或需要手动管理 Worker 时使用；`dev:auto` 保留为 `dev` 的兼容别名。若 `3000` 已被其他应用占用，启动器会选择下一个可用端口并在终端打印准确地址；配置脚本和 Doctor 会自动识别该 SceneCart 实例。
+`npm run dev` 现在是一命令开发入口：它先启动网页；如果 `.env.local` 已配置 `SCENECART_DEVICE_TOKEN`，会在网页健康后自动启动正式 `worker:local`。首次使用时可以保持该命令运行，完成设备注册和 `executor:configure` 后，启动器会热发现新令牌并自动接入 Worker，不需要重启网页或再开第二个终端。Worker 异常退出时，启动器会按 1 秒起、最多 30 秒的指数退避自动重启；同一时间只保留一个 Worker，令牌更新时会安全切换。每次 Worker 进程启动都会先暂停历史搜索并等待网页点击“继续搜索”；淘宝 MCP 尚未就绪时也不会领取任务。开发编译默认写入独立的 `.next-dev`，因此运行中的本地演示不会再与 `npm run build` 的 `.next` 产物互相覆盖。`npm run dev:web` 只启动 Next.js，供 E2E、纯 UI 调试或需要手动管理 Worker 时使用；`dev:auto` 保留为 `dev` 的兼容别名。若 `3000` 已被其他应用占用，启动器会选择下一个可用端口并在终端打印准确地址；配置脚本和 Doctor 会自动识别该 SceneCart 实例。
 
 网页部署在 Vercel、运行时使用 Neon PostgreSQL，而淘宝仍由面试电脑执行时，使用云端面试启动器：
 
@@ -120,7 +121,7 @@ npm run demo:cloud:configure
 npm run demo:cloud -- --url https://你的正式域名
 ```
 
-`prepare` 只需在首次接入或更换云端地址时运行：它保留本地 `SCENECART_API_URL` 和本地设备令牌，只新增云端地址，并把恢复密钥保存到 Git 忽略、权限 0600 的本机文件。云端 `/settings/executor` 注册设备后运行 `demo:cloud:configure`，隐藏保存独立的 `SCENECART_CLOUD_DEVICE_TOKEN`；它不会覆盖本地令牌。`demo:cloud` 用于面试开始前约 10–15 分钟到面试结束这段时间：先校验 HTTPS、production、PostgreSQL、执行器协议、淘宝 MCP、云端设备令牌和恢复密钥，再持续监督本机真实淘宝 Worker；在没有外部分钟级调度的 Hobby 环境中，还会同时维持恢复心跳。淘宝客户端暂未启动、未解锁或工具尚未加载时，启动器不会退出，而会按 2 秒起、最多 30 秒退避探测，恢复后自动继续；云端契约、设备令牌、协议或恢复密钥错误仍会立即失败。它不会部署网页，也不会启动本地 Next.js。演示结束按 `Ctrl+C`，不要为了常驻而持续消耗免费额度。只做无常驻进程的单次快速预检可加 `--check`，它遇到 MCP 未就绪会立即退出；只有已经配置外部分钟级恢复调度时才加 `--skip-recovery`。
+`prepare` 只需在首次接入或更换云端地址时运行：它保留本地 `SCENECART_API_URL` 和本地设备令牌，只新增云端地址，并把恢复密钥保存到 Git 忽略、权限 0600 的本机文件。云端 `/settings/executor` 注册设备后运行 `demo:cloud:configure`，隐藏保存独立的 `SCENECART_CLOUD_DEVICE_TOKEN`；它不会覆盖本地令牌。`demo:cloud` 用于面试开始前约 10–15 分钟到面试结束这段时间：先校验 HTTPS、production、PostgreSQL、执行器协议、淘宝 MCP、云端设备令牌和恢复密钥，再持续监督本机真实淘宝 Worker；在没有外部分钟级调度的 Hobby 环境中，还会同时维持恢复心跳。淘宝客户端暂未启动、未解锁或工具尚未加载时，启动器不会退出，而会按 2 秒起、最多 30 秒退避探测，恢复后自动继续启动；启动前遗留的搜索工作流会保持暂停，必须在云端页面点击“继续搜索”才会执行。云端契约、设备令牌、协议或恢复密钥错误仍会立即失败。它不会部署网页，也不会启动本地 Next.js。演示结束按 `Ctrl+C`，不要为了常驻而持续消耗免费额度。只做无常驻进程的单次快速预检可加 `--check`，它遇到 MCP 未就绪会立即退出；只有已经配置外部分钟级恢复调度时才加 `--skip-recovery`。
 
 首次连接本地执行器时，在 `/settings/executor` 注册设备并复制一次性令牌。设备始终需要绑定 SceneCart 账号；即使主购物流程处于本地匿名开发模式，设置页也会先引导登录/注册，并在成功后自动返回。然后在项目目录运行：
 
@@ -216,6 +217,7 @@ SCENECART_CRON_SECRET=
 - `worker:local` 在执行淘宝工具期间每 15 秒续租；服务端拒绝续租或连续心跳失败达到 `EXECUTOR_LEASE_FAILURE_LIMIT`（默认 3）时，会终止本地子进程且不使用失效租约回填。
 - 执行器 API 请求默认 20 秒超时，可通过 `EXECUTOR_API_TIMEOUT_MS` 调整；进程收到退出信号时会中止当前外部工具调用，任务随后由服务端租约恢复。
 - `TAOBAO_NATIVE_MCP_URL`：淘宝桌面版官方 Streamable HTTP MCP 地址，默认 `http://127.0.0.1:3654/mcp`。
+- `TAOBAO_NATIVE_CLI_PATH`：可选的淘宝桌面版官方 CLI 路径。macOS 默认自动发现应用内置 CLI；仅用于只读搜索安全兜底，不用于加购。
 - `TAOBAO_SOURCE_APP`：写入 MCP 工具参数的真实调用来源标识，默认 `SceneCartAI`。
 - `EXECUTOR_TAOBAO_SEARCH_TIMEOUT_MS`：单次本地淘宝搜索上限，默认 60000ms，最低 15000ms。
 - `EXECUTOR_TAOBAO_CART_TIMEOUT_MS`：单次真实加购上限，默认 60000ms。执行器不会在搜索或加购前后用页面导航工具预探测登录态，避免探针本身改变淘宝页面。
@@ -346,7 +348,7 @@ npm run start
 
 Vercel Production 构建会通过 `scripts/build.mjs` 自动执行 `db:migrate` 与 `db:check`，只有两步都成功才继续 Next.js 构建；Preview 和本地构建不会连接生产数据库。手工部署或其他平台仍需显式执行上述命令。
 
-当前执行器协议为 **v4**。v4 增加搜索完成后的只读 `product_detail` 证据任务。发布前先停止旧 Worker；Vercel Production 构建会自动执行包含 migration 008 的迁移与校验，其他发布方式需手工执行；若确有升级前已领取的搜索/加购需要回填，可临时把 `SCENECART_EXECUTOR_V3_DRAIN_UNTIL` 设为未来不超过 2 小时的 ISO 时间，再部署 v4 服务端并立即更新本机 Worker。旧 v3 Worker始终不能领取新任务；排空接口还会核对 Job 领取时记录的协议版本、设备和租约代次。截止时间到达或变量留空后，所有 v3 请求都会收到 `426 executor_protocol_mismatch`，也绝不会领取或误解释 `product_detail`。migration 007 增加 `mcp_unavailable` 设备状态，migration 008 增加领取协议标记。
+当前执行器协议为 **v5**。v5 增加启动待命登记与暂停工作流领取门，v4 增加搜索完成后的只读 `product_detail` 证据任务。发布前先停止旧 Worker；Vercel Production 构建会自动执行包含 migration 008 的迁移与校验，其他发布方式需手工执行；若确有升级前已领取的搜索、详情或加购需要回填，可临时把 `SCENECART_EXECUTOR_V4_DRAIN_UNTIL` 设为未来不超过 2 小时的 ISO 时间，再部署 v5 服务端并立即更新本机 Worker。旧 v4 Worker 始终不能领取新任务；排空接口还会核对 Job 领取时记录的协议版本、设备和租约代次。截止时间到达或变量留空后，所有 v4 请求都会收到 `426 executor_protocol_mismatch`。migration 007 增加 `mcp_unavailable` 设备状态，migration 008 增加领取协议标记；v5 不增加数据库表结构。
 
 实例启动并收到恢复 Worker 心跳后，用一条命令完成静态配置、数据库、health 与只读 readiness 验证：
 

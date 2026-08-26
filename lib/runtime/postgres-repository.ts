@@ -17,6 +17,7 @@ import type {
   RuntimeServiceHeartbeat,
   RuntimeUser
 } from "@/lib/runtime/types";
+import { EXECUTOR_STARTUP_STANDBY_MESSAGE } from "@/lib/runtime/startup-standby";
 import type { SessionState } from "@/lib/session/types";
 import { normalizeSessionState } from "@/lib/session/store";
 
@@ -510,7 +511,7 @@ export const postgresRuntimeRepository: RuntimeRepository = {
     return result.rows.map(normalizeJob);
   },
 
-  async claimJob(device, leaseMs, protocolVersion = "4") {
+  async claimJob(device, leaseMs, protocolVersion = "5") {
     if (device.status !== "online") return null;
     return withTransaction(async (client) => {
       const deviceResult = await client.query(
@@ -576,10 +577,25 @@ export const postgresRuntimeRepository: RuntimeRepository = {
              WHERE sessions.id = agent_jobs.session_id
                AND sessions.state ? 'archived_at'
            )
+           AND NOT EXISTS (
+             SELECT 1 FROM shopping_sessions AS paused_sessions
+             WHERE paused_sessions.id = agent_jobs.session_id
+               AND agent_jobs.job_type IN ('module_search', 'product_detail')
+               AND paused_sessions.state #>> '{agent_runtime,workflow_status}' = 'paused'
+               AND COALESCE(paused_sessions.state #>> '{agent_runtime,auto_continue}', 'false') <> 'true'
+               AND paused_sessions.state #>> '{agent_runtime,workflow_message}' = $3
+               AND COALESCE(paused_sessions.state #>> '{agent_runtime,workflow_run_id}', '') <> ''
+               AND paused_sessions.state #>> '{agent_runtime,workflow_run_id}' =
+                 agent_jobs.payload->>'workflow_run_id'
+           )
          ORDER BY priority DESC, created_at ASC
          FOR UPDATE SKIP LOCKED
          LIMIT 1`,
-        [storedDevice.user_id, claimableJobTypes(storedDevice.capabilities)]
+        [
+          storedDevice.user_id,
+          claimableJobTypes(storedDevice.capabilities),
+          EXECUTOR_STARTUP_STANDBY_MESSAGE
+        ]
       );
       if (!selected.rowCount) return null;
       const claimed = await client.query(

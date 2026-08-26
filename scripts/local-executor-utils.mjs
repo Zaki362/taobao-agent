@@ -277,6 +277,7 @@ export function buildTaobaoMcpSearchEvidence(context) {
   const keyword = asText(context?.keyword);
   const capturedAt = asText(context?.capturedAt) || new Date().toISOString();
   const rawResultCount = Number(context?.rawResultCount);
+  const transport = context?.transport === "native_cli" ? "native_cli" : "http_mcp";
   if (!sourceApp || !jobId || !moduleId || !workflowRunId || !keyword) {
     throw new Error("淘宝 MCP 搜索证据缺少任务上下文。");
   }
@@ -297,7 +298,8 @@ export function buildTaobaoMcpSearchEvidence(context) {
     keyword,
     captured_at: capturedAt,
     cache_hit: false,
-    raw_result_count: rawResultCount
+    raw_result_count: rawResultCount,
+    transport
   };
 }
 
