@@ -182,11 +182,10 @@ test("Taobao login loss pauses the page and resumes the same durable job atomica
   });
   expect(Object.values(pausedState.module_candidates).flat().length).toBeGreaterThan(0);
 
-  await page.goto("/");
   const authResponse = await page.request.get("/api/auth/me");
   const authState = await authResponse.json() as { user?: { id?: string } };
   expect(authState.user?.id).toBeTruthy();
-  await page.evaluate(({ rawInput, sessionId, pausedState, userId }) => {
+  await page.addInitScript(({ rawInput, sessionId, pausedState, userId }) => {
     const owner = `user:${userId}`;
     window.localStorage.setItem(`scenecart-dashboard-state:v2:${encodeURIComponent(owner)}`, JSON.stringify({
       version: 2,
