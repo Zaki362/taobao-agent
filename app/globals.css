@@ -1515,6 +1515,391 @@ body {
   }
 }
 
+@layer components {
+  .product-guide-route {
+    @apply min-h-screen overflow-hidden bg-background;
+    background:
+      radial-gradient(circle at 20% 10%, rgba(255, 139, 72, 0.14), transparent 28%),
+      radial-gradient(circle at 88% 14%, rgba(36, 163, 145, 0.08), transparent 26%),
+      #fbfaf8;
+  }
+
+  .product-guide-route-header {
+    @apply mx-auto flex h-16 w-[calc(100%-48px)] max-w-[1440px] items-center border-b border-border/60;
+  }
+
+  .product-guide-route-header strong,
+  .product-guide-route-header small {
+    @apply block;
+  }
+
+  .product-guide-route-header strong {
+    @apply text-[15px] font-semibold tracking-tight;
+  }
+
+  .product-guide-route-header small {
+    @apply mt-0.5 text-[11px] text-muted-foreground;
+  }
+
+  .product-guide-route-placeholder {
+    @apply mx-auto mt-20 grid w-[min(920px,calc(100%-48px))] gap-5 opacity-30;
+  }
+
+  .product-guide-route-placeholder span {
+    @apply block h-24 rounded-[24px] border border-border bg-white;
+  }
+
+  .product-guide-modal {
+    position: fixed;
+    inset: 0;
+    z-index: 140;
+    width: min(1240px, calc(100vw - 32px));
+    height: min(880px, calc(100dvh - 24px));
+    max-width: none;
+    max-height: none;
+    margin: auto;
+    padding: 0;
+    overflow: visible;
+    border: 0;
+    color: inherit;
+    background: transparent;
+  }
+
+  .product-guide-modal:not([open]) {
+    display: none;
+  }
+
+  .product-guide-modal::backdrop {
+    background: rgba(23, 37, 43, 0.52);
+    backdrop-filter: blur(6px);
+  }
+
+  .product-guide-modal-surface {
+    @apply grid h-full min-h-0 overflow-hidden border border-white/70 bg-white;
+    min-width: 0;
+    width: 100%;
+    grid-template-rows: 112px minmax(0, 1fr);
+    border-radius: 28px;
+    box-shadow: 0 34px 90px rgba(35, 29, 24, 0.24), 0 2px 12px rgba(35, 29, 24, 0.08);
+    animation: product-guide-dialog-in 200ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  }
+
+  .product-guide-modal-header {
+    @apply flex min-w-0 items-center justify-between gap-5 border-b border-border/65 px-8;
+    background: linear-gradient(110deg, #ffffff 45%, #fff9f4 100%);
+  }
+
+  .product-guide-modal-brand {
+    @apply flex min-w-0 items-center gap-4;
+  }
+
+  .product-guide-modal-brand > div {
+    @apply min-w-0;
+  }
+
+  .product-guide-modal-brand p {
+    @apply text-[10px] font-bold tracking-[0.22em] text-primary;
+  }
+
+  .product-guide-modal-brand h1 {
+    @apply mt-1.5 truncate text-[22px] font-semibold leading-tight tracking-[-0.025em] text-foreground;
+  }
+
+  .product-guide-modal-brand span {
+    @apply mt-1 block truncate text-xs text-muted-foreground;
+  }
+
+  .product-guide-close {
+    @apply inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-[14px] border border-border/75 bg-white text-muted-foreground shadow-sm transition hover:border-primary/25 hover:bg-primary/[0.05] hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/35 focus-visible:ring-offset-2;
+  }
+
+  .product-guide-modal-body {
+    @apply grid min-h-0;
+    min-width: 0;
+    grid-template-columns: 248px minmax(0, 1fr);
+  }
+
+  .product-guide-sidebar {
+    @apply static flex min-h-0 flex-col overflow-y-auto rounded-none border-0 border-r border-border/65 bg-[#faf9f7] p-5 shadow-none;
+    backdrop-filter: none;
+  }
+
+  .product-guide-toc {
+    @apply m-0 flex flex-col gap-4;
+  }
+
+  .product-guide-nav-group {
+    @apply flex flex-col gap-1;
+  }
+
+  .product-guide-nav-group > p {
+    @apply px-3 pb-1.5 text-[10px] font-semibold tracking-[0.16em] text-muted-foreground/75;
+  }
+
+  .product-guide-nav-group button {
+    @apply min-h-10 rounded-[12px] border border-transparent px-3 py-2 text-left text-[13px] font-medium text-muted-foreground transition-colors hover:bg-white hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30;
+  }
+
+  .product-guide-nav-group button.product-guide-nav-active {
+    @apply border-primary/20 bg-primary/[0.07] font-semibold text-primary shadow-sm;
+  }
+
+  .product-guide-mode-cards {
+    @apply mt-auto grid gap-2 border-t border-border/60 pt-4;
+  }
+
+  .product-guide-mode-cards > div {
+    @apply rounded-[12px] border border-border/65 bg-white/80 px-3 py-2.5;
+  }
+
+  .product-guide-mode-cards strong,
+  .product-guide-mode-cards span {
+    @apply block;
+  }
+
+  .product-guide-mode-cards strong {
+    @apply text-xs font-semibold text-foreground;
+  }
+
+  .product-guide-mode-cards span {
+    @apply mt-0.5 text-[10px] text-muted-foreground;
+  }
+
+  .product-guide-mode-cards > div.product-guide-mode-active {
+    @apply border-primary/25 bg-primary/[0.07];
+  }
+
+  .product-guide-mode-cards > div.product-guide-mode-active strong {
+    @apply text-primary;
+  }
+
+  .product-guide-panel {
+    @apply min-h-0 overflow-y-auto bg-white;
+    min-width: 0;
+    scroll-behavior: smooth;
+    animation: product-guide-panel-in 170ms ease-out both;
+  }
+
+  .product-guide-panel .product-guide-section {
+    @apply mx-auto max-w-[940px] border-0 px-12 py-10 xl:px-14 xl:py-12;
+  }
+
+  .product-guide-section-heading {
+    @apply max-w-[860px];
+  }
+
+  .product-guide-section-heading .product-guide-section-kicker {
+    @apply m-0 text-[11px] font-bold tracking-[0.14em] text-primary;
+  }
+
+  .product-guide-section-heading h2 {
+    @apply mt-3 text-balance text-[30px] font-semibold leading-[1.22] tracking-[-0.035em] text-foreground;
+  }
+
+  .product-guide-section-heading > p:last-child:not(.product-guide-section-kicker) {
+    @apply mt-3 max-w-[760px] text-[14px] leading-7 text-muted-foreground;
+  }
+
+  .product-guide-lead {
+    @apply mt-7 max-w-[820px] text-[15px] leading-8 text-foreground/85;
+  }
+
+  .product-guide-panel blockquote {
+    @apply mt-5 max-w-[820px] border-l-[3px] border-primary bg-primary/[0.045] px-5 py-4 text-[14px] font-semibold leading-7 text-foreground;
+  }
+
+  .product-guide-panel .product-guide-definition-grid,
+  .product-guide-panel .product-guide-commerce-grid,
+  .product-guide-panel .product-guide-scenario-grid,
+  .product-guide-panel .product-guide-processes,
+  .product-guide-panel .product-guide-capability-list,
+  .product-guide-panel .product-guide-architecture,
+  .product-guide-panel .product-guide-comparison-table,
+  .product-guide-panel .product-guide-boundary-list {
+    @apply mt-7;
+  }
+
+  .product-guide-context {
+    @apply mt-5;
+  }
+}
+
+@keyframes product-guide-dialog-in {
+  from { opacity: 0; transform: translateY(8px) scale(0.985); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@keyframes product-guide-panel-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@media (max-width: 1023px) and (min-width: 768px) {
+  .product-guide-modal-body {
+    grid-template-columns: 210px minmax(0, 1fr);
+  }
+
+  .product-guide-panel .product-guide-section {
+    @apply px-8 py-9;
+  }
+
+  .product-guide-section-heading h2 {
+    @apply text-[27px];
+  }
+
+  .product-guide-mode-cards span {
+    @apply hidden;
+  }
+}
+
+@media (max-width: 767px) {
+  .product-guide-modal {
+    width: 100vw;
+    height: 100dvh;
+  }
+
+  .product-guide-modal-surface {
+    grid-template-rows: calc(72px + env(safe-area-inset-top)) minmax(0, 1fr);
+    border-radius: 0;
+    border: 0;
+  }
+
+  .product-guide-modal-header {
+    @apply gap-3 px-5;
+    padding-top: env(safe-area-inset-top);
+  }
+
+  .product-guide-modal-brand {
+    @apply gap-3;
+  }
+
+  .product-guide-modal-brand .brand-mark {
+    @apply h-9 w-9 rounded-[12px];
+  }
+
+  .product-guide-modal-brand p,
+  .product-guide-modal-brand span {
+    @apply hidden;
+  }
+
+  .product-guide-modal-brand h1 {
+    @apply m-0 text-[17px];
+  }
+
+  .product-guide-close {
+    @apply h-10 w-10;
+  }
+
+  .product-guide-modal-body {
+    @apply grid min-h-0;
+    min-width: 0;
+    overflow: hidden;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+
+  .product-guide-sidebar {
+    @apply block min-h-0 overflow-visible border-b border-r-0 p-0;
+    min-width: 0;
+    width: 100%;
+    overflow: hidden;
+  }
+
+  .product-guide-toc {
+    @apply flex-row gap-1 overflow-x-auto px-4 py-3;
+    min-width: 0;
+    width: 100%;
+    max-width: 100%;
+    scrollbar-width: none;
+    scroll-snap-type: x proximity;
+  }
+
+  .product-guide-toc::-webkit-scrollbar {
+    display: none;
+  }
+
+  .product-guide-nav-group {
+    @apply contents;
+  }
+
+  .product-guide-nav-group > p,
+  .product-guide-mode-cards {
+    @apply hidden;
+  }
+
+  .product-guide-nav-group button {
+    @apply min-h-9 shrink-0 whitespace-nowrap rounded-full bg-white px-3 py-1.5 text-[12px];
+    scroll-snap-align: center;
+  }
+
+  .product-guide-panel {
+    width: 100%;
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+
+  .product-guide-panel .product-guide-section {
+    @apply px-5 py-7;
+  }
+
+  .product-guide-section-heading h2 {
+    @apply mt-2.5 text-[25px] leading-[1.24];
+  }
+
+  .product-guide-section-heading > p:last-child:not(.product-guide-section-kicker) {
+    @apply mt-2 text-[13px] leading-6;
+  }
+
+  .product-guide-lead {
+    @apply mt-5 text-[14px] leading-7;
+  }
+
+  .product-guide-panel blockquote {
+    @apply mt-4 px-4 py-3 text-[13px] leading-6;
+  }
+
+  .product-guide-panel .product-guide-definition-grid,
+  .product-guide-panel .product-guide-commerce-grid,
+  .product-guide-panel .product-guide-scenario-grid,
+  .product-guide-panel .product-guide-capability-list {
+    @apply grid-cols-1;
+  }
+
+  .product-guide-process ol {
+    @apply grid items-stretch;
+  }
+
+  .product-guide-process li {
+    @apply grid justify-items-start;
+  }
+
+  .product-guide-process li span {
+    @apply w-full;
+  }
+
+  .product-guide-process li svg {
+    @apply my-1.5 ml-4 rotate-90;
+  }
+
+  .product-guide-comparison-table {
+    @apply hidden;
+  }
+
+  .product-guide-comparison-mobile {
+    @apply mt-7 grid gap-4;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .product-guide-modal-surface,
+  .product-guide-panel {
+    animation: none;
+  }
+
+  .product-guide-panel {
+    scroll-behavior: auto;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .public-demo-controls > button.public-demo-launch-button {
     animation: none;

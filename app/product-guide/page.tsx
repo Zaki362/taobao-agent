@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { ProductGuide } from "@/components/product-guide";
+import { ProductGuideRoute } from "@/components/product-guide";
 
 export const metadata: Metadata = {
   title: "产品说明 | SceneCart AI",
@@ -7,5 +7,5 @@ export const metadata: Metadata = {
 };
 
 export default function ProductGuidePage() {
-  return <ProductGuide mode="formal" />;
+  return <ProductGuideRoute mode="formal" />;
 }

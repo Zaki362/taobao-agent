@@ -935,7 +935,13 @@ export function PublicDemo() {
       </div>
 
       <div className="public-demo-controls" data-demo-tour-control>
-        <ProductGuideLink className="public-demo-product-guide-link" />
+        <ProductGuideLink
+          className="public-demo-product-guide-link"
+          mode="demo"
+          onBeforeOpen={() => {
+            if (tourMode === "playing") pauseTour();
+          }}
+        />
         {tourMode === "playing" ? (
           <Button type="button" variant="outline" size="sm" onClick={pauseTour}>
             <Pause className="h-4 w-4" />暂停演示

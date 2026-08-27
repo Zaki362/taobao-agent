@@ -161,7 +161,16 @@ test("frozen navigation and refresh actions stay inside the demo", async ({ cont
   });
 
   await page.goto("/demo?demoSpeed=fast");
-  await expect(page.getByRole("link", { name: "产品说明" })).toHaveAttribute("href", "/product-guide");
+  const guideButton = page.getByRole("button", { name: "产品说明" });
+  await expect(guideButton).toBeVisible();
+  await guideButton.click();
+  await expect(page.getByRole("dialog", { name: "SceneCart AI 产品说明" })).toBeVisible();
+  await expect(page).toHaveURL(/\/demo/);
+  await page.getByRole("button", { name: "技术方案" }).click();
+  await expect(page.getByRole("heading", { name: "云端组织决策，本地执行器连接真实淘宝环境" })).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("dialog", { name: "SceneCart AI 产品说明" })).toBeHidden();
+  await expect(guideButton).toBeFocused();
   const landingLinks = await page.locator('[data-public-demo] a[href]').evaluateAll((links) =>
     links.map((link) => (link as HTMLAnchorElement).getAttribute("href"))
   );
@@ -196,7 +205,7 @@ test("frozen navigation and refresh actions stay inside the demo", async ({ cont
   expect(externalRequests).toEqual([]);
 });
 
-test("product guide is a static document and returns to the public demo", async ({ page }) => {
+test("product guide direct route opens the same document window and returns to the public demo", async ({ page }) => {
   const apiRequests: string[] = [];
   page.on("request", (request) => {
     const pathname = new URL(request.url()).pathname;
@@ -205,16 +214,12 @@ test("product guide is a static document and returns to the public demo", async 
 
   const response = await page.goto("/product-guide");
   expect(response?.status()).toBe(200);
-  await expect(page.getByText("SceneCart AI 产品说明", { exact: true })).toBeVisible();
+  await expect(page.getByRole("dialog", { name: "SceneCart AI 产品说明" })).toBeVisible();
   await expect(page.getByRole("heading", {
     name: "把模糊的购物目标，变成可执行的购物方案"
   })).toBeVisible();
   await expect(page.getByRole("navigation", { name: "产品说明目录" }).first()).toContainText("正式产品与 Demo");
-
-  const backLink = page.locator(".product-guide-back-link");
-  await expect(backLink).toHaveAttribute("href", "/demo/");
-  await expect(backLink).toContainText("返回公开 Demo");
-  await backLink.click();
+  await page.getByRole("button", { name: "关闭产品说明" }).click();
   await expect(page).toHaveURL(/\/demo\/?$/);
   expect(apiRequests).toEqual([]);
 });
