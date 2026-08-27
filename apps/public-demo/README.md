@@ -2,7 +2,7 @@
 
 This package is the independently deployable, static public experience for SceneCart.
 It reuses the repository's shared `PublicDemo` UI and frozen fixture data, while its
-exported route contract is limited to `/`, `/demo`, and the 404 page.
+exported route contract is limited to `/`, `/demo`, `/product-guide`, and the 404 page.
 
 ## Local verification
 

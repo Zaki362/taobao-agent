@@ -41,7 +41,7 @@ await access(outputRoot).catch(() => {
 
 const outputFiles = await listFiles(outputRoot);
 const publicRoutes = [...new Set(outputFiles.map(exportedHtmlRoute).filter(Boolean))].sort();
-const allowedRoutes = new Set(["/", "/404", "/demo"]);
+const allowedRoutes = new Set(["/", "/404", "/demo", "/product-guide"]);
 const unexpectedRoutes = publicRoutes.filter((route) => !allowedRoutes.has(route));
 const missingRoutes = [...allowedRoutes].filter((route) => !publicRoutes.includes(route));
 
@@ -77,7 +77,7 @@ if (JSON.stringify(sourceAssets) !== JSON.stringify(exportedAssets)) {
 const appPathsManifestPath = path.join(appRoot, ".next", "server", "app-paths-manifest.json");
 const appPathsManifest = JSON.parse(await readFile(appPathsManifestPath, "utf8"));
 const manifestRoutes = Object.keys(appPathsManifest).sort();
-const allowedManifestRoutes = new Set(["/_not-found/page", "/demo/page", "/page"]);
+const allowedManifestRoutes = new Set(["/_not-found/page", "/demo/page", "/page", "/product-guide/page"]);
 const unexpectedManifestRoutes = manifestRoutes.filter((route) => !allowedManifestRoutes.has(route));
 if (unexpectedManifestRoutes.length > 0) {
   throw new Error(`Unexpected App Router entries:\n${unexpectedManifestRoutes.join("\n")}`);

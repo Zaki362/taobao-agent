@@ -23,6 +23,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { ProductGuideLink } from "@/components/product-guide-link";
 import { API_INPUT_LIMITS } from "@/lib/api/input-limits";
 import { Textarea } from "@/components/ui/textarea";
 import {
@@ -88,11 +89,13 @@ export type DashboardNavigationDestination = "home" | "history" | "settings" | "
 export function TopHeader({
   currentStage,
   authMode = "live",
-  onNavigationRequest
+  onNavigationRequest,
+  showProductGuideLink = true
 }: {
   currentStage: WorkflowStage;
   authMode?: "live" | "frozen-demo";
   onNavigationRequest?: (destination: DashboardNavigationDestination) => void;
+  showProductGuideLink?: boolean;
 }) {
   const [authenticated, setAuthenticated] = useState(false);
   const [authenticationRequired, setAuthenticationRequired] = useState(false);
@@ -130,7 +133,7 @@ export function TopHeader({
         <BrandMark />
         <span>
           <span className="block text-[15px] font-semibold leading-none tracking-tight">SceneCart</span>
-          <span className="mt-1 block text-[11px] text-muted-foreground">场景化购物助手</span>
+          <span className="mt-1 hidden text-[11px] text-muted-foreground sm:block">场景化购物助手</span>
         </span>
       </button>
       <div className="workflow-rail" aria-label={`当前步骤：${stageLabels[currentStage]}`}>
@@ -146,6 +149,7 @@ export function TopHeader({
       </div>
       <span className="workflow-stage-pill lg:hidden">{stageLabels[currentStage]}</span>
       <nav className="ml-auto flex items-center gap-1.5">
+        {showProductGuideLink ? <ProductGuideLink compactOnMobile /> : null}
         <a
           href={onNavigationRequest ? "/demo" : "/hosted"}
           className="header-icon-link"
@@ -210,7 +214,8 @@ export function LandingPage({
   onArchiveSession,
   onRestoreSession,
   authMode = "live",
-  onNavigationRequest
+  onNavigationRequest,
+  showProductGuideLink = true
 }: {
   selectedScenario: ScenarioId;
   onScenarioChange: (scenarioId: ScenarioId) => void;
@@ -230,6 +235,7 @@ export function LandingPage({
   onRestoreSession: (session: ShoppingSessionSummary) => void;
   authMode?: "live" | "frozen-demo";
   onNavigationRequest?: (destination: DashboardNavigationDestination) => void;
+  showProductGuideLink?: boolean;
 }) {
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const [authenticated, setAuthenticated] = useState(false);
@@ -277,6 +283,7 @@ export function LandingPage({
           <span className="hidden text-xs text-muted-foreground sm:inline">场景化购物助手</span>
         </a>
         <nav className="flex items-center gap-1.5">
+          {showProductGuideLink ? <ProductGuideLink compactOnMobile /> : null}
           <a
             href={onNavigationRequest ? "/demo" : "#recent-tasks"}
             className="header-icon-link"

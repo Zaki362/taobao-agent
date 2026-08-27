@@ -13,6 +13,7 @@ import { ResultsPage } from "@/components/dashboard-results-simple";
 import { CartReviewPage } from "@/components/dashboard-execution";
 import type { DashboardShoppingListItem, MpcStatus } from "@/components/dashboard-types";
 import { Button } from "@/components/ui/button";
+import { ProductGuideLink } from "@/components/product-guide-link";
 import { applyAgentDirectiveProfile, type AgentDirectiveProfile } from "@/lib/agent/directives";
 import {
   DEMO_CAPTURED_AT,
@@ -795,6 +796,7 @@ export function PublicDemo() {
             currentStage={stage}
             authMode="frozen-demo"
             onNavigationRequest={handleFrozenNavigation}
+            showProductGuideLink={false}
           />
         ) : null}
 
@@ -822,6 +824,7 @@ export function PublicDemo() {
             onRestoreSession={() => undefined}
             authMode="frozen-demo"
             onNavigationRequest={handleFrozenNavigation}
+            showProductGuideLink={false}
           />
         ) : null}
 
@@ -932,6 +935,7 @@ export function PublicDemo() {
       </div>
 
       <div className="public-demo-controls" data-demo-tour-control>
+        <ProductGuideLink className="public-demo-product-guide-link" />
         {tourMode === "playing" ? (
           <Button type="button" variant="outline" size="sm" onClick={pauseTour}>
             <Pause className="h-4 w-4" />暂停演示

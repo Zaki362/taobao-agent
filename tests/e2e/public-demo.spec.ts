@@ -2,6 +2,10 @@ import { expect, test, type Page } from "@playwright/test";
 import { getScenarioConfig } from "../../lib/scenarios";
 import type { ScenarioId } from "../../lib/session/types";
 
+function isPublicDemoInternalHref(href: string | null): boolean {
+  return Boolean(href?.startsWith("/demo") || href?.startsWith("/product-guide"));
+}
+
 async function enterResultsManually(page: Page) {
   await page.locator('[data-demo-target="scene:example:new-car:0"]').click();
   await expect(page.getByRole("textbox", { name: "描述你的购物场景" })).toHaveValue(
@@ -157,10 +161,11 @@ test("frozen navigation and refresh actions stay inside the demo", async ({ cont
   });
 
   await page.goto("/demo?demoSpeed=fast");
+  await expect(page.getByRole("link", { name: "产品说明" })).toHaveAttribute("href", "/product-guide");
   const landingLinks = await page.locator('[data-public-demo] a[href]').evaluateAll((links) =>
     links.map((link) => (link as HTMLAnchorElement).getAttribute("href"))
   );
-  expect(landingLinks.every((href) => href?.startsWith("/demo"))).toBe(true);
+  expect(landingLinks.every(isPublicDemoInternalHref)).toBe(true);
 
   await page.getByRole("link", { name: "设置" }).click();
   await expect(page.getByText(/不会离开冻结体验/)).toBeVisible();
@@ -181,7 +186,7 @@ test("frozen navigation and refresh actions stay inside the demo", async ({ cont
   const workflowLinks = await page.locator('[data-public-demo] a[href]').evaluateAll((links) =>
     links.map((link) => (link as HTMLAnchorElement).getAttribute("href"))
   );
-  expect(workflowLinks.every((href) => href?.startsWith("/demo"))).toBe(true);
+  expect(workflowLinks.every(isPublicDemoInternalHref)).toBe(true);
   await page.getByRole("link", { name: "执行器设置" }).click();
   await expect(page.getByText(/“执行器设置”入口/)).toBeVisible();
 
@@ -189,6 +194,29 @@ test("frozen navigation and refresh actions stay inside the demo", async ({ cont
   expect(popupUrls).toEqual([]);
   expect(apiRequests).toEqual([]);
   expect(externalRequests).toEqual([]);
+});
+
+test("product guide is a static document and returns to the public demo", async ({ page }) => {
+  const apiRequests: string[] = [];
+  page.on("request", (request) => {
+    const pathname = new URL(request.url()).pathname;
+    if (pathname.startsWith("/api/")) apiRequests.push(pathname);
+  });
+
+  const response = await page.goto("/product-guide");
+  expect(response?.status()).toBe(200);
+  await expect(page.getByText("SceneCart AI 产品说明", { exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", {
+    name: "把模糊的购物目标，变成可执行的购物方案"
+  })).toBeVisible();
+  await expect(page.getByRole("navigation", { name: "产品说明目录" }).first()).toContainText("正式产品与 Demo");
+
+  const backLink = page.locator(".product-guide-back-link");
+  await expect(backLink).toHaveAttribute("href", "/demo/");
+  await expect(backLink).toContainText("返回公开 Demo");
+  await backLink.click();
+  await expect(page).toHaveURL(/\/demo\/?$/);
+  expect(apiRequests).toEqual([]);
 });
 
 test("a user can open the corresponding Taobao product detail link", async ({ context, page }) => {
