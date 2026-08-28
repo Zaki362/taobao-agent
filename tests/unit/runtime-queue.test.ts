@@ -7,8 +7,8 @@ import {
   applyCompletedRuntimeJob as applyCompletedRuntimeJobRaw,
   applyFailedRuntimeJob as applyFailedRuntimeJobRaw,
   authenticateExecutorToken,
-  enqueueAddToCartJob,
-  enqueueModuleSearchJob,
+  enqueueAddToCartJob as enqueueAddToCartJobRaw,
+  enqueueModuleSearchJob as enqueueModuleSearchJobRaw,
   reconcileAuthenticationFailureHoldsForDevice,
   reconcileCompletedRuntimeJob,
   releaseAuthenticationFailureHoldForUser,
@@ -16,6 +16,7 @@ import {
   shouldContinueWorkflowAfterCompletion
 } from "@/lib/runtime/jobs";
 import { decideNextAgentAction } from "@/lib/agent/decision-engine";
+import { createRuntimeJobFixture } from "@/tests/fixtures/runtime-job";
 import { createSessionFixture } from "@/tests/fixtures/session";
 import type { ExecutorDevice } from "@/lib/runtime/types";
 
@@ -29,6 +30,22 @@ const device: ExecutorDevice = {
   created_at: new Date().toISOString(),
   updated_at: new Date().toISOString()
 };
+
+async function enqueueModuleSearchJob(
+  state: Parameters<typeof enqueueModuleSearchJobRaw>[0],
+  input: Parameters<typeof enqueueModuleSearchJobRaw>[1]
+) {
+  await localRuntimeRepository.saveSession(state);
+  return enqueueModuleSearchJobRaw(state, input);
+}
+
+async function enqueueAddToCartJob(
+  state: Parameters<typeof enqueueAddToCartJobRaw>[0],
+  input: Parameters<typeof enqueueAddToCartJobRaw>[1]
+) {
+  await localRuntimeRepository.saveSession(state);
+  return enqueueAddToCartJobRaw(state, input);
+}
 
 async function applyCompletedRuntimeJob(
   jobId: string,
@@ -190,8 +207,8 @@ describe("durable job queue contract", () => {
       idempotency_key: "search:session:module:keyword",
       payload: { keyword: "新能源车 行车记录仪" }
     };
-    const first = await localRuntimeRepository.createJob(input);
-    const duplicate = await localRuntimeRepository.createJob({ ...input, id: "job-duplicate" });
+    const first = await createRuntimeJobFixture(input);
+    const duplicate = await createRuntimeJobFixture({ ...input, id: "job-duplicate" });
     expect(duplicate.id).toBe(first.id);
 
     const claimed = await localRuntimeRepository.claimJob(device, 30_000);
@@ -206,7 +223,7 @@ describe("durable job queue contract", () => {
 
     const completed = await localRuntimeRepository.completeJob(first.id, device.id, { results: [] }, running!.lease_token!);
     const replay = await localRuntimeRepository.completeJob(first.id, device.id, { results: [] }, running!.lease_token!);
-    const duplicateAfterCompletion = await localRuntimeRepository.createJob({ ...input, id: "job-after-completion" });
+    const duplicateAfterCompletion = await createRuntimeJobFixture({ ...input, id: "job-after-completion" });
     expect(completed.alreadyCompleted).toBe(false);
     expect(replay.alreadyCompleted).toBe(true);
     expect(duplicateAfterCompletion.id).toBe(first.id);
@@ -217,7 +234,7 @@ describe("durable job queue contract", () => {
     const otherDevice = { ...device, id: "device-result-intruder", token_hash: "digest-intruder" };
     await localRuntimeRepository.createDevice(device);
     await localRuntimeRepository.createDevice(otherDevice);
-    const created = await localRuntimeRepository.createJob({
+    const created = await createRuntimeJobFixture({
       id: "job-private-completed-result",
       user_id: device.user_id,
       session_id: "session-private-completed-result",
@@ -288,7 +305,7 @@ describe("durable job queue contract", () => {
         }
       });
       await localRuntimeRepository.saveSession(blocked);
-      await localRuntimeRepository.createJob({
+      await createRuntimeJobFixture({
         id: blockedDetailJobId,
         user_id: device.user_id,
         session_id: blocked.session_id,
@@ -360,7 +377,7 @@ describe("durable job queue contract", () => {
         }
       });
       await localRuntimeRepository.saveSession(state);
-      await localRuntimeRepository.createJob({
+      await createRuntimeJobFixture({
         id: staleDetailJobId,
         user_id: device.user_id,
         session_id: state.session_id,
@@ -384,7 +401,7 @@ describe("durable job queue contract", () => {
 
   it("keeps queued jobs untouched while the responsive worker is waiting for Taobao MCP", async () => {
     await localRuntimeRepository.createDevice(device);
-    const pending = await localRuntimeRepository.createJob({
+    const pending = await createRuntimeJobFixture({
       id: "job-waiting-for-mcp",
       user_id: device.user_id,
       session_id: "session-waiting-for-mcp",
@@ -963,7 +980,7 @@ describe("durable job queue contract", () => {
       "[auth_required] Taobao desktop session expired",
       { retryable: false }
     );
-    await localRuntimeRepository.createJob({
+    await createRuntimeJobFixture({
       id: "job-waiting-during-auth-drop",
       user_id: device.user_id,
       session_id: state.session_id,
@@ -1142,7 +1159,7 @@ describe("durable job queue contract", () => {
       });
       expect((await localRuntimeRepository.getJob(job.id))?.attempts).toBe(1);
 
-      await expect(localRuntimeRepository.createJob({
+      await expect(createRuntimeJobFixture({
         id: job.id,
         user_id: job.user_id,
         session_id: job.session_id,
@@ -1157,7 +1174,7 @@ describe("durable job queue contract", () => {
         device.user_id,
         "user_retry"
       )).toBe(true);
-      const revived = await localRuntimeRepository.createJob({
+      const revived = await createRuntimeJobFixture({
         id: job.id,
         user_id: job.user_id,
         session_id: job.session_id,
@@ -1190,7 +1207,7 @@ describe("durable job queue contract", () => {
     };
     await localRuntimeRepository.createDevice(device);
     await localRuntimeRepository.createDevice(secondDevice);
-    const job = await localRuntimeRepository.createJob({
+    const job = await createRuntimeJobFixture({
       id: "job-auth-replay-block",
       user_id: device.user_id,
       session_id: "session-auth-replay-block",
@@ -1305,7 +1322,7 @@ describe("durable job queue contract", () => {
 
   it("rejects forged auth callbacks without an auth-paused matching executor", async () => {
     await localRuntimeRepository.createDevice(device);
-    const job = await localRuntimeRepository.createJob({
+    const job = await createRuntimeJobFixture({
       id: "job-forged-auth-callback",
       user_id: device.user_id,
       session_id: "session-forged-auth-callback",
@@ -1345,7 +1362,7 @@ describe("durable job queue contract", () => {
 
   it("terminalizes an expired add-to-cart auth failure without replaying the mutation", async () => {
     await localRuntimeRepository.createDevice(device);
-    const job = await localRuntimeRepository.createJob({
+    const job = await createRuntimeJobFixture({
       id: "job-auth-cart-no-replay",
       user_id: device.user_id,
       session_id: "session-auth-cart-no-replay",
@@ -1396,7 +1413,7 @@ describe("durable job queue contract", () => {
 
   it("releases a callback-less cart hold only after verified login and never replays add_to_cart", async () => {
     await localRuntimeRepository.createDevice(device);
-    const job = await localRuntimeRepository.createJob({
+    const job = await createRuntimeJobFixture({
       id: "job-cart-hold-recovery",
       user_id: device.user_id,
       session_id: "session-cart-hold-recovery",
@@ -1467,7 +1484,7 @@ describe("durable job queue contract", () => {
       idempotency_key: "auth-generation",
       payload: { product_id: "item-auth-generation" }
     };
-    const job = await localRuntimeRepository.createJob(input);
+    const job = await createRuntimeJobFixture(input);
     const firstClaim = await localRuntimeRepository.claimJob(device, 30_000);
     const pausedFirstDevice = await localRuntimeRepository.heartbeatDevice(
       device.id,
@@ -1484,7 +1501,7 @@ describe("durable job queue contract", () => {
       }
     );
 
-    const revived = await localRuntimeRepository.createJob(input);
+    const revived = await createRuntimeJobFixture(input);
     expect(revived).toMatchObject({ status: "pending", attempts: 0 });
     expect(revived.lease_token).toBeUndefined();
     await expect(applyFailedRuntimeJob(
@@ -1546,7 +1563,7 @@ describe("durable job queue contract", () => {
       idempotency_key: "auth-history",
       payload: { product_id: "item-auth-history" }
     };
-    const job = await localRuntimeRepository.createJob(input);
+    const job = await createRuntimeJobFixture(input);
     const firstClaim = await localRuntimeRepository.claimJob(firstDevice, 30_000);
     await localRuntimeRepository.holdAuthenticationJob(
       job.id,
@@ -1560,7 +1577,7 @@ describe("durable job queue contract", () => {
       "user_retry"
     )).toBe(true);
 
-    await localRuntimeRepository.createJob(input);
+    await createRuntimeJobFixture(input);
     const secondOnline = await localRuntimeRepository.heartbeatDevice(secondDevice.id, "online");
     const secondClaim = await localRuntimeRepository.claimJob(secondOnline!, 30_000);
     await localRuntimeRepository.holdAuthenticationJob(
@@ -1615,7 +1632,7 @@ describe("durable job queue contract", () => {
     try {
       resetLocalRuntimeForTests();
       const registered = await registerExecutorDevice("durable-user", "durable device");
-      await localRuntimeRepository.createJob({
+      await createRuntimeJobFixture({
         id: "durable-job",
         user_id: "durable-user",
         session_id: "durable-session",
@@ -1649,7 +1666,7 @@ describe("durable job queue contract", () => {
 
   it("returns an expired lease to the pending queue", async () => {
     await localRuntimeRepository.createDevice(device);
-    await localRuntimeRepository.createJob({
+    await createRuntimeJobFixture({
       id: "job-expiring",
       user_id: device.user_id,
       session_id: "session-test",
@@ -1672,7 +1689,7 @@ describe("durable job queue contract", () => {
     };
     await localRuntimeRepository.createDevice(device);
     await localRuntimeRepository.createDevice(replacementDevice);
-    await localRuntimeRepository.createJob({
+    await createRuntimeJobFixture({
       id: "job-reassigned",
       user_id: device.user_id,
       session_id: "session-test",
@@ -1711,7 +1728,7 @@ describe("durable job queue contract", () => {
 
   it("rejects a stale callback from an earlier lease generation on the same device", async () => {
     await localRuntimeRepository.createDevice(device);
-    await localRuntimeRepository.createJob({
+    await createRuntimeJobFixture({
       id: "job-same-device-new-lease",
       user_id: device.user_id,
       session_id: "session-same-device-new-lease",
@@ -1760,7 +1777,7 @@ describe("durable job queue contract", () => {
 
   it("only cancels work before an executor has claimed it", async () => {
     await localRuntimeRepository.createDevice(device);
-    const pending = await localRuntimeRepository.createJob({
+    const pending = await createRuntimeJobFixture({
       id: "job-cancellable",
       user_id: device.user_id,
       session_id: "session-test",
@@ -1770,7 +1787,7 @@ describe("durable job queue contract", () => {
     });
     expect((await localRuntimeRepository.cancelJob(pending.id, device.user_id))?.status).toBe("cancelled");
 
-    await localRuntimeRepository.createJob({
+    await createRuntimeJobFixture({
       id: "job-already-claimed",
       user_id: device.user_id,
       session_id: "session-test",
@@ -1788,7 +1805,7 @@ describe("durable job queue contract", () => {
       ...searchOnlyDevice,
       capabilities: [...searchOnlyDevice.capabilities]
     });
-    await localRuntimeRepository.createJob({
+    await createRuntimeJobFixture({
       id: "cart-higher-priority",
       user_id: device.user_id,
       session_id: "session-capability",
@@ -1797,7 +1814,7 @@ describe("durable job queue contract", () => {
       payload: {},
       priority: 200
     });
-    await localRuntimeRepository.createJob({
+    await createRuntimeJobFixture({
       id: "search-lower-priority",
       user_id: device.user_id,
       session_id: "session-capability",

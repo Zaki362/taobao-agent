@@ -4,6 +4,8 @@ SceneCart AI 是一个正在按正式产品架构推进的“场景化购物 Age
 
 这个项目不是普通商品搜索页，也不是纯聊天机器人。它的重点是把用户原本需要自己完成的“买什么、先买什么、预算怎么分、每类商品怎么选”这套决策过程产品化。
 
+当前发布架构是“单仓库、双应用、双固定域名”：正式产品为服务端固定 owner 的 `single_user` 运行时，公开 Demo 为无 API 的冻结静态运行时。完整安全边界、路由和发布门禁见 [双应用运行时合同](./docs/dual-app-runtime-matrix.md)。
+
 ## 当前能力
 
 - 阶段式 Agent workflow：需求输入 -> 场景理解 -> 用户确认 -> 购物规划 -> 用户确认 -> 串行搜索 -> 推荐结果 -> 快捷调整 -> 购物清单确认
@@ -30,7 +32,7 @@ SceneCart AI 是一个正在按正式产品架构推进的“场景化购物 Age
 - Agent Runtime 2.0：平衡/探索档位可由 DeepSeek `decide_next_action` 提议下一步动作；常规模块调度使用低延迟 chat，只有补搜、失败恢复或市场预算压力出现时才升级 reasoner。模型可以自主改写品牌、功能和价格带搜索词；若模型只遗漏品类词但所有筛选词均能由当前模块策略解释，后端会补齐品类锚点后继续执行，跨品类词、URL、工具名、命令参数和提示词控制语句仍会被拒绝。动作白名单、模块合法性、首搜前置条件、置信度、工具预算和重复调用继续由 guardrail 校验
 - Agent 建议补搜：当候选偏少或质量不足时，推荐页会展示建议搜索词，用户可以一键按 Agent 建议补搜当前模块
 - 快捷调整影响说明：用户点击快捷调整后，系统会生成 `last_refinement`，说明哪些模块需要重搜、哪些候选可复用、哪些模块被移除以及原因
-- 生产运行时：支持 PostgreSQL 持久化、邮箱登录、HttpOnly 会话、按用户隔离的购物 Session、持久 Job Queue 和执行事件
+- 生产运行时：使用 PostgreSQL 持久化与服务端固定 owner 的 `single_user` 模式；不显示 SceneCart 邮箱登录或注册页，购物 Session、设备、Job Queue 和执行事件全部绑定同一个既有 owner
 - 本地执行器：商品搜索与显式确认后的真实加购由独立 Worker 优先直连淘宝桌面版官方 HTTP MCP，不再经过 Qoder 或 Next.js 长请求；若 HTTP MCP 对只读搜索误报内测限制或传输中断，搜索可安全降级到同一桌面客户端自带的官方 CLI。加购不会走 CLI 自动兜底，也不会因传输恢复而重放
 - 启动待命：Worker 每次启动都会先让云端仍在自动推进的历史搜索进入安全暂停，待处理 Job 保留但不可领取；必须回到网页点击“继续搜索”才会从断点执行。Worker 在线后由用户新开始的搜索正常直接运行
 - 本地链路自愈：`npm run dev` 会监督唯一的正式 Worker，异常退出时按上限 30 秒的指数退避自动重启；淘宝 MCP 暂不可达或工具层未加载时，Worker 保持 `mcp_unavailable` 心跳、停止领取任务并持续探测，网页会显示“正在等待淘宝桌面版工具恢复”。同一 Worker 内工具恢复后会继续已经网页确认的队列；若 Worker 进程重新启动，历史搜索会进入待命并等待网页再次确认
@@ -66,9 +68,11 @@ SceneCart AI 是一个正在按正式产品架构推进的“场景化购物 Age
 
 ## 公开体验：自动演示 + 手动探索
 
-仓库采用“同一共享实现、两个独立应用”的结构：正式产品仍从仓库根目录构建；公开体验由 `apps/public-demo` 独立静态构建，只导出 `/`、`/demo`、`/product-guide` 和 404。Demo 直接复用正式产品的需求确认、购物规划、搜索进度、推荐、加购、购物清单与产品说明组件，不维护第二套产品交互；正式产品本身不再暴露 `/demo` 路由。
+仓库采用“同一共享实现、两个独立应用”的结构：正式产品从仓库根目录构建；公开体验由 `apps/public-demo` 独立静态构建。Demo 直接复用正式产品的需求确认、购物规划、搜索进度、推荐、加购、购物清单与产品说明浮层，不维护第二套产品交互；但两者的 runtime adapter、环境变量和持久状态严格隔离。
 
-线上长期保留两个职责明确的固定域名：正式产品使用 `https://scenecart-ai.vercel.app/`，公开体验使用 `https://scenecart-public-demo.vercel.app/`。正式产品的登录页和已登录顶部导航都提供“观看 Demo”入口，并在新标签页打开 `https://scenecart-public-demo.vercel.app/demo?autoplay=1`；这样不会中断正在填写的需求或购物任务。公开 Demo 仍是完全独立的冻结应用，不会继承正式站登录态，也不会连接正式数据库、DeepSeek、淘宝账户或本地执行器。
+线上长期保留两个职责明确的固定域名：正式产品使用 `https://scenecart-ai.vercel.app/`，公开体验使用 `https://scenecart-public-demo.vercel.app/`。正式站 `/demo` 重定向到公开 Demo 根路径；公开 Demo 的 `/` 是唯一正式入口，旧 `/demo` 只做兼容重定向，自动演示使用 `/?autoplay=1`。公开 Demo 不继承正式站身份，也不连接正式数据库、DeepSeek、正式 `/api/*`、淘宝账户或本地执行器。
+
+正式产品通过 Vercel 外层保护后直接进入，不再显示 SceneCart 登录、注册或创建账号入口。当前 Vercel Hobby 的 Standard Protection 只能保护 Preview，不能保护固定 Production 域名，因此固定 owner 的正式 Production 当前必须停止；只有升级到支持 All Deployments Protection 的方案并完成实际验证后才允许发布。
 
 区别只在数据与执行层：新车主场景使用 2026-08-08 的脱敏历史快照，其余已开放场景使用明确标注的本地冻结样本；这些样本不代表实时淘宝商品。Demo 不要求登录，也不会调用模型、数据库、淘宝 MCP、真实购物车、订单或支付能力。访问者可以按正式产品流程手动修改预算、查看规划、展开备选、加入演示清单和移除商品；右上角“启动自动演示”会用可见鼠标逐步点击同一批真实控件，播放中点击页面任意位置会暂停，点击“继续演示”会从中断步骤恢复。
 
@@ -78,7 +82,9 @@ SceneCart AI 是一个正在按正式产品架构推进的“场景化购物 Age
 npm run demo:dev
 ```
 
-然后打开终端打印地址；根路径和 `/demo` 都进入同一冻结体验。访问 `/demo?autoplay=1` 会在首次加载后自动启动现有演示，普通 `/demo` 仍保持手动探索；用户重置后不会因为查询参数再次自动启动。每个分类默认只展示一个主推荐及推荐理由，点击后才展开传统商品列表样式的备选。公开 Demo 中真实产品按钮“加入购物车”的结果会明确标记为“演示清单”，只改变当前浏览器内存状态，不代表真实淘宝加购。设置、执行详情和淘宝购物车入口在冻结模式中只给出本地说明；商品详情保留正式产品的链接行为，可由体验者主动打开对应淘宝商品页，自动演示不会代为打开。
+然后打开终端打印地址。根路径进入冻结体验；旧 `/demo` 会保留查询参数和 hash 后回到根路径。访问 `/?autoplay=1` 会在首次加载后自动启动现有演示，普通 `/` 保持手动探索；用户重置后不会因为查询参数再次自动启动。每个分类默认只展示一个主推荐及推荐理由，点击后才展开传统商品列表样式的备选。公开 Demo 中“加入购物车”只改变当前浏览器内存中的演示清单，刷新即恢复初始冻结状态，不代表真实淘宝加购。商品详情保留主动打开链接的交互，自动演示不会代为打开。
+
+正式产品和 Demo 右上角都从当前页面打开同一套“产品说明”浮层，支持左侧章节导航、关闭按钮、Esc、遮罩关闭、焦点锁定、键盘和移动端；关闭后不丢失原页面或自动演示状态。`?guide=1` 可直接打开浮层，旧 `/product-guide` 只重定向到该入口，不再维护独立说明页面。
 
 独立 Demo 构建使用 `npm run demo:build`；它会同步冻结素材、执行静态导出并验证没有登录、设置或 API 路由泄漏。Vercel 项目 `scenecart-public-demo` 的 Root Directory 固定为 `apps/public-demo`、不配置任何正式环境变量，并从完整仓库提交构建，以便继续复用共享组件。
 
@@ -117,23 +123,27 @@ npm run dev
 
 启动器会同时检查 IPv4 loopback 和 Next.js 的 IPv6 默认监听地址。若 3000 被其他应用占用，会自动选择下一个真正可用的端口，并在终端打印准确的首页与执行器设置地址；不要继续使用旧的固定书签。需要固定端口时设置 `SCENECART_DEV_PORT`，或运行 `npm run dev -- --port 3001`。
 
-`npm run dev` 现在是一命令开发入口：它先启动网页；如果 `.env.local` 已配置 `SCENECART_DEVICE_TOKEN`，会在网页健康后自动启动正式 `worker:local`。首次使用时可以保持该命令运行，完成设备注册和 `executor:configure` 后，启动器会热发现新令牌并自动接入 Worker，不需要重启网页或再开第二个终端。Worker 异常退出时，启动器会按 1 秒起、最多 30 秒的指数退避自动重启；同一时间只保留一个 Worker，令牌更新时会安全切换。每次 Worker 进程启动都会先暂停历史搜索并等待网页点击“继续搜索”；淘宝 MCP 尚未就绪时也不会领取任务。开发编译默认写入独立的 `.next-dev`，因此运行中的本地演示不会再与 `npm run build` 的 `.next` 产物互相覆盖。`npm run dev:web` 只启动 Next.js，供 E2E、纯 UI 调试或需要手动管理 Worker 时使用；`dev:auto` 保留为 `dev` 的兼容别名。若 `3000` 已被其他应用占用，启动器会选择下一个可用端口并在终端打印准确地址；配置脚本和 Doctor 会自动识别该 SceneCart 实例。
+`npm run dev` 现在是一命令开发入口：它先启动网页；如果 `.env.local` 已配置由服务端预置的 `SCENECART_DEVICE_TOKEN`，会在网页健康后自动启动正式 `worker:local`。正式 `single_user` 模式不允许浏览器注册设备或签发 Token；新增、轮换或撤销设备凭据必须走受控的服务端运维流程。Worker 异常退出时，启动器会按 1 秒起、最多 30 秒的指数退避自动重启；同一时间只保留一个 Worker。每次 Worker 进程启动都会先暂停历史搜索并等待网页点击“继续搜索”；淘宝 MCP 尚未就绪时也不会领取任务。开发编译默认写入独立的 `.next-dev`，因此运行中的本地演示不会再与 `npm run build` 的 `.next` 产物互相覆盖。`npm run dev:web` 只启动 Next.js，供 E2E、纯 UI 调试或需要手动管理 Worker 时使用；`dev:auto` 保留为 `dev` 的兼容别名。
 
 网页部署在 Vercel、运行时使用 Neon PostgreSQL，而淘宝仍由面试电脑执行时，使用云端面试启动器：
 
 ```bash
-npm run demo:cloud:prepare -- --url https://你的正式域名
+npm run demo:cloud:prepare -- --url https://受保护的内部验收地址
+SCENECART_API_URL=https://受保护的内部验收地址 npm run executor:configure
 npm run demo:cloud:configure
-npm run demo:cloud -- --url https://你的正式域名
+npm run demo:cloud -- --url https://受保护的内部验收地址
 ```
 
-`prepare` 只需在首次接入或更换云端地址时运行：它保留本地 `SCENECART_API_URL` 和本地设备令牌，只新增云端地址，并把恢复密钥保存到 Git 忽略、权限 0600 的本机文件。云端 `/settings/executor` 注册设备后运行 `demo:cloud:configure`，隐藏保存独立的 `SCENECART_CLOUD_DEVICE_TOKEN`；它不会覆盖本地令牌。`demo:cloud` 用于面试开始前约 10–15 分钟到面试结束这段时间：先校验 HTTPS、production、PostgreSQL、执行器协议、淘宝 MCP、云端设备令牌和恢复密钥，再持续监督本机真实淘宝 Worker；在没有外部分钟级调度的 Hobby 环境中，还会同时维持恢复心跳。淘宝客户端暂未启动、未解锁或工具尚未加载时，启动器不会退出，而会按 2 秒起、最多 30 秒退避探测，恢复后自动继续启动；启动前遗留的搜索工作流会保持暂停，必须在云端页面点击“继续搜索”才会执行。云端契约、设备令牌、协议或恢复密钥错误仍会立即失败。它不会部署网页，也不会启动本地 Next.js。演示结束按 `Ctrl+C`，不要为了常驻而持续消耗免费额度。只做无常驻进程的单次快速预检可加 `--check`，它遇到 MCP 未就绪会立即退出；只有已经配置外部分钟级恢复调度时才加 `--skip-recovery`。
+`prepare` 只需在首次接入或更换云端地址时运行。必须把同一个受保护 HTTPS 地址显式传给 `executor:configure`，不能直接接受残留的本地 `http://127…` 默认值；该命令才会交互式写入精确的 `SCENECART_VERCEL_PROTECTED_ORIGIN` 与隐藏的 `SCENECART_VERCEL_PROTECTION_BYPASS_SECRET`。它们只穿过 Vercel Protection，不能替代 `SCENECART_CLOUD_DEVICE_TOKEN`。所有值仅保存在 Git 忽略、权限 `0600` 的本机环境文件。`demo:cloud` 会验证 HTTPS、PostgreSQL、执行器协议、双重凭据、淘宝 MCP 和恢复密钥，再监督本机 Worker；任何凭据错误都会 fail closed，完整值不会输出到日志。
 
-首次连接本地执行器时，在 `/settings/executor` 注册设备并复制一次性令牌。设备始终需要绑定 SceneCart 账号；即使主购物流程处于本地匿名开发模式，设置页也会先引导登录/注册，并在成功后自动返回。然后在项目目录运行：
+连接正式本地执行器前，先停止 Worker，并在受控运维终端加载正式 PostgreSQL、固定 owner、TLS 与 `single_user` 配置，然后签发设备；命令只把明文 Token 原子写入本机权限为 `0600` 的 `.env.local`，数据库只保存 SHA-256 摘要，终端不会显示 Token 或 owner：
 
 ```bash
+npm run executor:provision -- --capabilities module_search,add_to_cart
 npm run executor:configure
 ```
+
+轮换现有设备使用 `npm run executor:provision -- --rotate <设备UUID>`；目标不存在或不属于固定 owner 时整笔事务回滚。正式网页不会提供注册或 Token 签发入口。
 
 设置页复制的命令会显式携带当前 SceneCart 页面地址，即使 `3000` 被其他项目占用，也不会误用 `.env.local` 中的旧端口。配置脚本会隐藏令牌输入、保留其他配置、强制使用 `local_executor`，并将文件权限设为仅当前用户可读写。令牌不会进入 shell history。配置完成后可运行 `npm run executor:doctor` 做无副作用诊断；正在运行的默认 `npm run dev` 会自动启动 Worker。
 
@@ -188,14 +198,16 @@ RUNTIME_STORE=postgres
 DATABASE_URL=postgresql://...
 DATABASE_SSL=true
 DATABASE_SSL_REJECT_UNAUTHORIZED=true
-AUTH_REQUIRED=true
-SCENECART_ACCESS_MODE=account
-SCENECART_SINGLE_USER_ID=
-APP_ORIGIN=https://your-scenecart.example.com
+AUTH_REQUIRED=false
+SCENECART_ACCESS_MODE=single_user
+SCENECART_SINGLE_USER_ID=server-only-existing-owner-id
+APP_ORIGIN=https://scenecart-ai.vercel.app
 NEXT_PUBLIC_SCENECART_PUBLIC_DEMO_URL=https://scenecart-public-demo.vercel.app
 SCENECART_API_URL=http://127.0.0.1:3000
 SCENECART_DEMO_CLOUD_URL=https://your-scenecart.example.com
 SCENECART_CLOUD_DEVICE_TOKEN=
+SCENECART_VERCEL_PROTECTED_ORIGIN=
+SCENECART_VERCEL_PROTECTION_BYPASS_SECRET=
 SCENECART_DEVICE_TOKEN=
 SCENECART_CRON_SECRET=
 ```
@@ -214,14 +226,14 @@ SCENECART_CRON_SECRET=
 - `RUNTIME_STORE=postgres`：启用 PostgreSQL 用户、Session、任务与事件持久化；`local` 只适合开发和自动化测试。
 - `SCENECART_LOCAL_RUNTIME_PERSIST`：本地开发默认为 `true`，把设备令牌摘要、登录会话和任务队列原子写入被 Git 忽略的 `.data/runtime/local-runtime.json`，完整重启后无需重新注册设备；自动化测试会显式关闭。正式环境仍必须使用 PostgreSQL。
 - `DATABASE_URL`：PostgreSQL 连接串。配置后先运行 `npm run db:migrate`。
-- `AUTH_REQUIRED=true`：正式部署必须开启，确保 Session、设备与任务按用户隔离。
-- `SCENECART_ACCESS_MODE=single_user`：仅用于本地或受 Vercel Deployment Protection 保护的 Preview。配合既有 `app_users` 的 `SCENECART_SINGLE_USER_ID` 后不再显示应用登录页，但 Session、设备和任务仍固定绑定该 owner；Vercel Production 会直接拒绝该模式。
+- `SCENECART_ACCESS_MODE=single_user`：正式产品固定使用；配合既有 `app_users` 的服务端 `SCENECART_SINGLE_USER_ID`，不显示应用登录页，Session、设备和任务全部绑定该 owner。Production 只有在固定域名已启用并人工验证 All Deployments Protection 时才可发布；当前 Hobby 不满足，必须停止。
 - `APP_ORIGIN`：正式产品允许发起写请求的网页 Origin；多个地址使用逗号分隔。
-- `NEXT_PUBLIC_SCENECART_PUBLIC_DEMO_URL`：正式站顶部“观看 Demo”入口使用的独立公开 Demo HTTPS origin。留空时安全回退到 `https://scenecart-public-demo.vercel.app`；正式站会固定打开 `/demo?autoplay=1`，不会把正式账户或运行环境参数传给 Demo。
+- `NEXT_PUBLIC_SCENECART_PUBLIC_DEMO_URL`：正式站“观看 Demo”入口使用的独立公开 Demo HTTPS origin。留空时安全回退到 `https://scenecart-public-demo.vercel.app`；正式站 `/demo` 会重定向到 Demo 根路径，可用 `?autoplay=1` 自动播放。
 - `SCENECART_RELEASE_VERIFY_URL`：可选的正式发布探测地址；`npm run release:verify` 未显式传 `--url` 时优先使用它，否则使用 `APP_ORIGIN` 的第一个地址。
 - `SCENECART_DEMO_CLOUD_URL`：可选的云端面试网页根地址；`npm run demo:cloud` 未传 `--url` 时优先读取它。该命令只接受非本地 HTTPS 地址。
 - `SCENECART_CLOUD_DEVICE_TOKEN`：只保存在面试电脑 `.env.local` 的云端设备令牌；与纯本地 `SCENECART_DEVICE_TOKEN` 分离，不能上传 Vercel。
-- `SCENECART_DEVICE_TOKEN`：在 `/settings/executor` 注册设备后一次性获得，配置在运行淘宝桌面版与本地执行器的机器，不应写入仓库。
+- `SCENECART_VERCEL_PROTECTED_ORIGIN` 与 `SCENECART_VERCEL_PROTECTION_BYPASS_SECRET`：只保存在 Worker 机器，用于穿过 Vercel Protection；不能替代设备鉴权，不能进入 Demo、浏览器、日志或仓库。
+- `SCENECART_DEVICE_TOKEN`：通过受控服务端运维流程为固定 owner 预置或轮换，配置在运行淘宝桌面版与本地执行器的机器；正式网页不签发 Token。
 - `SCENECART_CRON_SECRET`：至少 32 字符的独立高熵密钥，只用于保护服务端恢复扫描端点；不能复用设备 Token、DeepSeek Key 或用户密码。
 - `SCENECART_RECOVERY_STALE_MS`：恢复调度失联阈值，默认 180000ms；readiness 会校验持久心跳，而不是只检查 Secret 是否存在。
 - `executor:doctor` 和 `worker:local` 会直接读取 `.env.local`；也可以使用临时环境变量覆盖本地配置。Token 生成后无需把它写入命令历史。
@@ -325,8 +337,8 @@ lib/scenarios/
 - `GET /api/mcp/status`：读取当前工具执行模式状态
 - `POST /api/mcp/run`：仅开发调试使用；需要显式设置 `SCENECART_ENABLE_MCP_DEBUG=true`，production 始终隐藏。高风险工具仍必须同时传 `confirm_high_risk=true` 与 `input.confirmed=true`
 - `GET /api/sessions`：执行台读取会话列表
-- `POST /api/auth/register|login|logout`：用户认证与 HttpOnly 会话
-- `POST /api/executor/devices`：注册本地执行设备并签发一次性令牌
+- `POST /api/auth/register|login`：`single_user` 正式运行时返回 404/410，不提供普通用户认证或注册
+- `POST /api/executor/devices`：`single_user` 浏览器调用返回 410；设备 Token 通过受控服务端运维流程管理
 - `POST /api/executor/jobs/claim`：本地执行器领取带租约的任务
 - `POST /api/executor/jobs/:jobId/resolve`：幂等回填完成/失败结果
 - `GET /api/runtime/events/stream`：按 Session 推送执行事件的 SSE
@@ -364,16 +376,18 @@ npm run start
 实例启动并收到恢复 Worker 心跳后，用一条命令完成静态配置、数据库、health 与只读 readiness 验证：
 
 ```bash
-SCENECART_RELEASE_VERIFY_URL=https://你的正式域名 npm run release:verify
+SCENECART_RELEASE_VERIFY_URL=https://受保护的内部验收地址 npm run release:verify
 ```
 
-用户登录后打开 `/settings/executor` 注册本机设备，再在运行淘宝桌面版且已开启官方 HTTP MCP 的机器启动：
+先通过受控服务端运维流程为固定 owner 预置设备 Token，再在运行淘宝桌面版且已开启官方 HTTP MCP 的机器启动：
 
-先将设置页只展示一次的配置写入被 Git 忽略的 `.env.local`：
+在当前 Hobby 仅能保护 Preview 的阶段，先由 `executor:provision` 安全签发设备，再把**受保护的内部 Preview**及双凭据写入被 Git 忽略的 `.env.local`；不得把这里的地址替换为尚未受到 All Deployments Protection 的固定 Production 域名：
 
 ```dotenv
-SCENECART_API_URL=http://127.0.0.1:3000
-SCENECART_DEVICE_TOKEN=一次性设备令牌
+SCENECART_API_URL=https://受保护的内部验收地址
+SCENECART_VERCEL_PROTECTED_ORIGIN=https://受保护的内部验收地址
+SCENECART_VERCEL_PROTECTION_BYPASS_SECRET=本机保护旁路凭据
+SCENECART_DEVICE_TOKEN=本机设备令牌
 TAOBAO_NATIVE_MCP_URL=http://127.0.0.1:3654/mcp
 TAOBAO_SOURCE_APP=SceneCartAI
 ```
@@ -386,7 +400,7 @@ npm run executor:doctor
 npm run worker:local
 ```
 
-推荐先用 `executor:configure` 在交互式终端中粘贴设置页签发的令牌；它不会回显令牌或覆盖 DeepSeek 等无关环境变量。`worker:local` 会先校验服务端健康、设备令牌及其能力，再以 `mcp_unavailable` 状态等待淘宝桌面版官方 MCP 通过无副作用的工具检查；只有就绪后才切换在线并领取任务。Doctor 会显示令牌当前拥有的商品搜索 / 真实加购能力，避免“进程在线但任务无法匹配”的误导状态。
+推荐用 `SCENECART_API_URL=https://受保护的内部验收地址 npm run executor:configure` 在交互式终端中隐藏写入精确受保护 origin、Vercel Bypass 和预置设备 Token；它不会回显凭据或覆盖 DeepSeek 等无关环境变量。`worker:local` 会先校验外层保护、SceneCart 设备鉴权及其能力，再以 `mcp_unavailable` 状态等待淘宝桌面版官方 MCP 通过无副作用的工具检查；只有两层鉴权和工具就绪后才领取任务。升级套餐、实际验证 All Deployments Protection 并单独获批正式 Production 后，才可把两个地址改为固定域名。
 
 ## 当前实现边界
 

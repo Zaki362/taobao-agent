@@ -1,5 +1,7 @@
 # SceneCart AI 面试演示 Runbook
 
+> 当前是单仓库双应用：正式产品使用服务端固定 owner 的 `single_user` 运行时，公开 Demo 使用完全冻结、无 API 的静态运行时。发布与凭据边界见 [双应用运行时合同](./dual-app-runtime-matrix.md)。
+
 这份 runbook 的主目标是在 SceneCart 网页中一步步操作，并真实触发淘宝桌面版官方 HTTP MCP：从需求输入、规划确认、持久任务、真实搜索，一路展示到部分结果或完整推荐与购买确认。固定演示场景是“新车选购”；首页另外开放露营准备、房间装饰、宿舍入学和搬家置办，但不要在一次面试里分散主线。历史快照、mock 和演示购物车不属于这条主路径。
 
 ## 1. 成功标准与安全边界
@@ -93,15 +95,17 @@ npm run test:integration
 
 ## 4. 面试前一小时：本机运行预检
 
-如果本次展示采用“Vercel 网页 + Neon PostgreSQL + 本机淘宝 Worker”，不要运行本地网页。先确保生产环境已经完成 migration，在云端 `/settings/executor` 注册当前电脑的设备令牌，并保持淘宝 MCP 可用。首次配置依次运行：
+如果本次展示采用“受保护 Vercel Preview + Neon PostgreSQL + 本机淘宝 Worker”，不要运行本地网页。当前 Hobby 无法保护固定 Production 域名，所以不得用固定 Production owner 做这条演示。先确保 Preview 完成 migration、固定 owner 和 Vercel 外层保护验证；再在受控终端加载正式 PostgreSQL/TLS/固定 owner 配置，为当前电脑签发设备 Token。首次配置依次运行：
 
 ```bash
-npm run demo:cloud:prepare -- --url https://你的正式域名
+npm run executor:provision -- --capabilities module_search,add_to_cart
+npm run demo:cloud:prepare -- --url https://受保护的内部验收地址
+SCENECART_API_URL=https://受保护的内部验收地址 npm run executor:configure
 npm run demo:cloud:configure
-npm run demo:cloud -- --url https://你的正式域名
+npm run demo:cloud -- --url https://受保护的内部验收地址
 ```
 
-如果淘宝桌面版尚未启动、未解锁或 MCP 工具未加载，保持命令运行并按终端提示处理；它会以最多 30 秒的退避持续探测，恢复后自动继续启动。Worker 启动时会把云端遗留的运行中搜索切到安全暂停，因此看到 `READY cloud_demo` 后必须打开打印的云端地址；如果页面显示“等待你确认继续”，点击“继续搜索”才会真正操作淘宝。该命令会保持真实淘宝 Worker 和 Hobby 环境需要的恢复 Worker 在线，并在异常退出后指数退避重启；演示结束按 `Ctrl+C`。它不是部署命令，不能代替 Vercel/Neon 配置和数据库迁移，也不适合 24 小时常驻。前一天只验证配置可运行 `npm run demo:cloud -- --check --url https://你的正式域名`；check 模式只探测一次，未就绪时快速失败，退出时不会留下在线 Worker。
+`executor:provision` 先把 SceneCart 设备 Token 安全写入本机；`executor:configure` 再隐藏保存精确的 `SCENECART_VERCEL_PROTECTED_ORIGIN` 和 `SCENECART_VERCEL_PROTECTION_BYPASS_SECRET`，`demo:cloud:configure` 将已签发设备 Token 复制到云端演示配置。Bypass 只穿过 Vercel Protection，不能替代设备鉴权；缺任一凭据都必须失败。它们只保存在本机 `0600` 环境文件，不进入日志、仓库、浏览器或公开 Demo。淘宝桌面版尚未就绪时启动器会退避探测，恢复后再继续；它不是部署命令，也不能代替 migration 和保护验证。
 
 下方 4.1–4.3 是纯本地网页演示路径。云端演示仍需执行 Doctor，但不需要再运行 `npm run dev`。
 
@@ -131,10 +135,9 @@ SCENECART_LOCAL_RUNTIME_PERSIST=true
 
 首次配置设备时：
 
-1. 打开实际地址下的 `/settings/executor`，登录或注册 SceneCart 账号。
-2. 注册设备，至少保留默认的“商品搜索”能力；只有确认淘宝 MCP 暴露 `add_to_cart` 时才开启“真实加购”。
-3. 复制只展示一次的设备令牌。
-4. 在另一个交互式终端运行设置页给出的 `SCENECART_API_URL=实际页面地址 npm run executor:configure`，按提示粘贴令牌。
+1. 使用服务端测试夹具或受控运维流程，为固定 owner 预置设备；至少保留“商品搜索”能力，只有确认淘宝 MCP 暴露 `add_to_cart` 时才开启真实加购。
+2. 将原始设备 Token 直接交付到本机安全配置流程；正式网页不签发 Token，也不要求 SceneCart 登录。
+3. 在交互式终端运行 `npm run executor:configure`，按提示写入实际地址和隐藏凭据。
 
 默认 `npm run dev` 会热发现新令牌并启动 `worker:local`，同时监督唯一的 Worker；异常退出后会按最多 30 秒的指数退避自动重启，无需另开终端。每次 Worker 进程启动都会暂停启动前遗留的 Agent 搜索，必须回网页确认继续；若淘宝 MCP 尚未加载，Worker 会保持 `mcp_unavailable` 状态、停止领取任务并自动探测。网页会区分“等待启动确认”和“等待淘宝工具恢复”，不会把队列误报成正在真实搜索。
 
@@ -231,7 +234,7 @@ Doctor 不执行搜索，也不证明淘宝账号仍处于登录态；第一条�
 
 - `taobao_mcp` 失败：检查淘宝桌面版是否启动、AI 应用授权 / MCP 是否开启，以及 `TAOBAO_NATIVE_MCP_URL`。
 - `scenecart_api` 失败：使用 `npm run dev` 打印的实际页面地址重新运行 `executor:configure`。
-- `device_token` 失败：在 `/settings/executor` 重新注册或撤销后签发新令牌。
+- `device_token` 失败：通过受控服务端运维流程撤销并轮换固定 owner 的设备 Token；不要尝试从网页签发。
 
 当已通过启动确认的 Worker 心跳仍正常、但淘宝工具临时不可达时，购物进度页和 `/settings/executor` 会把设备显示为 `mcp_unavailable` / 等待淘宝桌面版工具恢复。此时 Worker 不领取 Job；尚未领取的搜索保持 `pending` 且不消耗尝试次数。同一 Worker 内工具列表恢复后会切回在线并继续这轮已确认队列。若 Worker 进程重新启动，则历史工作流会重新进入启动待命，必须回网页点击“继续搜索”。这与 `authentication_required` 不同：真实调用已经报告掉登录后，系统仍必须等待用户登录并明确点击“重新登录后继续搜索”，也允许直接使用已有部分结果。
 

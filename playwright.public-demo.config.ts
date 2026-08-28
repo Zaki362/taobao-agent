@@ -21,8 +21,17 @@ export default defineConfig({
   projects: [
     {
       name: "public-demo-chrome",
+      grepInvert: /@mobile-device/,
       use: {
         ...devices["Desktop Chrome"],
+        channel: process.env.CI ? undefined : "chrome"
+      }
+    },
+    {
+      name: "public-demo-mobile-chrome",
+      grep: /@mobile-device/,
+      use: {
+        ...devices["Pixel 7"],
         channel: process.env.CI ? undefined : "chrome"
       }
     }

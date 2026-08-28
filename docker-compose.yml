@@ -24,12 +24,16 @@ services:
     ports:
       - "${PORT:-3000}:3000"
     environment:
-      SCENECART_PRODUCT_MODE: production
+      # Local infrastructure harness only. Fixed-domain Production requires TLS
+      # plus independently verified Vercel All Deployments Protection.
+      SCENECART_PRODUCT_MODE: development
       ALLOW_DEMO_CART_FALLBACK: "false"
       RUNTIME_STORE: postgres
       DATABASE_URL: postgresql://scenecart:${POSTGRES_PASSWORD:-scenecart-local-only}@postgres:5432/scenecart
       DATABASE_SSL: "false"
-      AUTH_REQUIRED: "true"
+      AUTH_REQUIRED: "false"
+      SCENECART_ACCESS_MODE: single_user
+      SCENECART_SINGLE_USER_ID: ${SCENECART_SINGLE_USER_ID:?existing local test owner UUID is required}
       AUTH_COOKIE_SECURE: ${AUTH_COOKIE_SECURE:-false}
       APP_ORIGIN: ${APP_ORIGIN:-http://127.0.0.1:3000}
       TAOBAO_EXECUTION_BACKEND: local_executor

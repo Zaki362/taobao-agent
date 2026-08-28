@@ -86,6 +86,33 @@ test("public demo reuses the real product flow and keeps every action local", as
   expect(apiRequests).toEqual([]);
 });
 
+test("refresh clears the in-memory Demo cart and restores the frozen initial state", async ({ page }) => {
+  const forbiddenRequests: string[] = [];
+  page.on("request", (request) => {
+    const url = new URL(request.url());
+    if (
+      url.pathname.startsWith("/api/") ||
+      (url.hostname !== "127.0.0.1" && url.hostname !== "localhost")
+    ) {
+      forbiddenRequests.push(url.toString());
+    }
+  });
+
+  await page.goto("/?demoSpeed=fast");
+  await enterResultsManually(page);
+  await page.locator('[data-demo-target="results:add:749277654435"]').click();
+  await page.locator('[data-demo-target="results:view-cart"]').click();
+  await expect(page.getByRole("heading", { name: "购物清单共 1 件" })).toBeVisible();
+
+  await page.reload();
+
+  await expect(page.getByRole("heading", { name: "把一句需求，变成买得明白的方案" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "启动自动演示" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: /购物清单共/ })).toHaveCount(0);
+  await expect(page.locator(".public-demo-narrator")).toHaveCount(0);
+  expect(forbiddenRequests).toEqual([]);
+});
+
 test("every visible product scenario completes through the same frozen product flow", async ({ page }) => {
   const scenarioIds: Exclude<ScenarioId, "new-car">[] = [
     "camping",
@@ -240,6 +267,25 @@ test("product guide compatibility route opens the shared dialog and keeps the ca
   await page.getByRole("button", { name: "关闭产品说明" }).click();
   await expect(page).toHaveURL(/\?demoSpeed=fast&source=legacy-guide$/);
   expect(apiRequests).toEqual([]);
+});
+
+test("product guide keeps keyboard focus trapped inside the modal", async ({ page }) => {
+  await page.goto("/");
+  const trigger = page.getByRole("button", { name: "产品说明" });
+  await trigger.click();
+  const dialog = page.getByRole("dialog", { name: "SceneCart AI 产品说明" });
+  const close = page.getByRole("button", { name: "关闭产品说明" });
+  const activeNavigation = page.getByRole("button", { name: "产品定位" });
+
+  await close.focus();
+  await page.keyboard.press("Shift+Tab");
+  await expect(activeNavigation).toBeFocused();
+  await page.keyboard.press("Tab");
+  await expect(close).toBeFocused();
+  await expect(dialog).toBeVisible();
+
+  await close.click();
+  await expect(trigger).toBeFocused();
 });
 
 test("opening the guide during autoplay pauses without losing the tour state", async ({ page }) => {
@@ -434,6 +480,29 @@ test("auto tour moves its cursor onto real controls and reaches the real cart re
   expect(popups).toHaveLength(0);
 });
 
+test("default-speed autoplay completes the full frozen flow without formal network calls", async ({ page }) => {
+  test.setTimeout(180_000);
+  const forbiddenRequests: string[] = [];
+  page.on("request", (request) => {
+    const url = new URL(request.url());
+    if (
+      url.pathname.startsWith("/api/") ||
+      (url.hostname !== "127.0.0.1" && url.hostname !== "localhost")
+    ) {
+      forbiddenRequests.push(url.toString());
+    }
+  });
+
+  await page.goto("/?autoplay=1");
+  await expect(page.getByRole("button", { name: "暂停演示" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "购物清单共 4 件" })).toBeVisible({
+    timeout: 165_000
+  });
+  await expect(page.getByRole("button", { name: "重新自动演示" })).toBeVisible();
+  await expect(page.getByText("演示清单", { exact: true })).toHaveCount(4);
+  expect(forbiddenRequests).toEqual([]);
+});
+
 test("auto tour pauses on any page click and resumes without duplicate cart writes", async ({ page }) => {
   await page.goto("/?demoSpeed=fast");
   await page.evaluate(() => {
@@ -558,6 +627,31 @@ test("mobile result and cart layouts have no horizontal overflow", async ({ page
   expect(mobileGeometry.sidebar[2]).toBeGreaterThan(mobileGeometry.resultsBottom);
   expect(mobileGeometry.scrollWidth).toBeLessThanOrEqual(mobileGeometry.innerWidth);
   await page.screenshot({ path: testInfo.outputPath("scenecart-demo-results-mobile.png"), fullPage: true });
+});
+
+test("@mobile-device touch users can operate the guide and complete autoplay", async ({ page }) => {
+  await page.goto("/");
+  const deviceContract = await page.evaluate(() => ({
+    touchPoints: navigator.maxTouchPoints,
+    width: window.innerWidth
+  }));
+  expect(deviceContract.touchPoints).toBeGreaterThan(0);
+  expect(deviceContract.width).toBeLessThanOrEqual(430);
+
+  await page.getByRole("button", { name: "产品说明" }).tap();
+  await expect(page.getByRole("dialog", { name: "SceneCart AI 产品说明" })).toBeVisible();
+  await page.getByRole("button", { name: "技术方案" }).tap();
+  await expect(page.getByRole("heading", { name: "云端组织决策，本地执行器连接真实淘宝环境" })).toBeVisible();
+  await page.getByRole("button", { name: "关闭产品说明" }).tap();
+
+  await page.goto("/?autoplay=1&demoSpeed=fast");
+  await expect(page.getByRole("heading", { name: "购物清单共 4 件" })).toBeVisible({ timeout: 25_000 });
+  await expect(page.getByText("演示清单", { exact: true })).toHaveCount(4);
+  const overflow = await page.evaluate(() => ({
+    viewport: document.documentElement.clientWidth,
+    content: document.documentElement.scrollWidth
+  }));
+  expect(overflow.content).toBeLessThanOrEqual(overflow.viewport);
 });
 
 test("reduced motion still completes the real flow without cursor travel", async ({ page }) => {

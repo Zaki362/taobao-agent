@@ -94,7 +94,7 @@ await check("scenecart_api", async () => {
 
 await check("device_token", async () => {
   if (!deviceToken) {
-    throw new Error("SCENECART_DEVICE_TOKEN 未配置；请先在 /settings/executor 注册设备");
+    throw new Error("SCENECART_DEVICE_TOKEN 未配置；请先在受控运维终端运行 npm run executor:provision");
   }
   const response = await vercelProtectedFetch(`${apiBaseUrl}/api/executor/heartbeat`, {
     method: "POST",
@@ -116,7 +116,7 @@ await check("device_token", async () => {
   heartbeatAccepted = true;
   const capabilities = Array.isArray(payload.device?.capabilities) ? payload.device.capabilities : [];
   if (!capabilities.includes("module_search")) {
-    throw new Error("设备令牌有效，但缺少 module_search 能力；请在设置页重新注册设备");
+    throw new Error("设备令牌有效，但缺少 module_search 能力；请使用 npm run executor:provision -- --rotate <设备UUID> 轮换授权");
   }
   const labels = capabilities.map((capability) =>
     capability === "module_search" ? "商品搜索" : capability === "add_to_cart" ? "真实加购" : capability

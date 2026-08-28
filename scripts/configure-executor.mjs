@@ -135,7 +135,7 @@ async function main() {
   );
   const deviceToken = tokenInput.trim() ? validateExecutorDeviceToken(tokenInput) : currentToken;
   if (!deviceToken) {
-    throw new Error("尚未配置设备令牌；单用户模式请使用正式 owner 已预置的设备令牌");
+    throw new Error("尚未配置设备令牌；请先由受控运维终端运行 npm run executor:provision 安全签发固定 owner 设备");
   }
 
   let bypassSecret = "";

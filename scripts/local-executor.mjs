@@ -76,7 +76,7 @@ const pendingResultAcknowledgementPath = path.join(
 );
 const executorProtocolVersion = protocol.version;
 if (!deviceToken) {
-  throw new Error("SCENECART_DEVICE_TOKEN is required. Register a device at /settings/executor first.");
+  throw new Error("SCENECART_DEVICE_TOKEN is required. Provision the fixed-owner device with npm run executor:provision first.");
 }
 
 let heartbeatInFlight = null;
@@ -200,7 +200,7 @@ async function verifyStartup() {
     ? heartbeatPayload.device.capabilities
     : [];
   if (!capabilities.includes("module_search")) {
-    throw new Error("设备令牌没有 module_search 能力，请在执行器设置页重新注册搜索设备。");
+    throw new Error("设备令牌没有 module_search 能力，请使用运维命令 executor:provision -- --rotate 轮换授权。");
   }
   if (heartbeatPayload.executor_state === "authentication_required") {
     authenticationPaused = true;

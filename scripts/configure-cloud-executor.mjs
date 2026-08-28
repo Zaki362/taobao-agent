@@ -3,7 +3,10 @@ import path from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
 import { updateCloudExecutorToken } from "./cloud-demo-config.mjs";
-import { validateExecutorDeviceToken } from "./executor-config-utils.mjs";
+import {
+  readEnvValue,
+  validateExecutorDeviceToken
+} from "./executor-config-utils.mjs";
 
 const TARGET = path.join(process.cwd(), ".env.local");
 
@@ -77,15 +80,16 @@ async function writeAtomically(content) {
 
 export async function configureCloudExecutor() {
   if (process.argv.includes("--help")) {
-    process.stdout.write("在云端 /settings/executor 注册设备后，运行此命令并粘贴一次性令牌。\n");
+    process.stdout.write("先由受控运维终端运行 npm run executor:provision 安全签发固定 owner 设备；本命令会直接复用本机 0600 配置，不显示或复制令牌。\n");
     return;
   }
-  const token = validateExecutorDeviceToken(
-    await hiddenQuestion("云端设备令牌（输入不会回显）: ")
-  );
   const existing = await readExisting();
+  const provisionedToken = readEnvValue(existing, "SCENECART_DEVICE_TOKEN");
+  const token = validateExecutorDeviceToken(
+    provisionedToken || await hiddenQuestion("兼容旧配置：运维侧已签发的云端设备令牌（输入不会回显）: ")
+  );
   await writeAtomically(updateCloudExecutorToken(existing, token));
-  process.stdout.write("云端设备令牌已安全保存；本地设备令牌和本地 API 地址均未修改。\n");
+  process.stdout.write("云端设备令牌已从本机安全配置复制；令牌未显示，本地设备令牌和本地 API 地址均未修改。\n");
   process.stdout.write("下一步：npm run demo:cloud -- --check\n");
 }
 

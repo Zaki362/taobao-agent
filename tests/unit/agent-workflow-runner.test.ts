@@ -1343,6 +1343,7 @@ describe("server-managed Agent workflow", () => {
     sessionFiles.add(healthySessionId);
     const healthy = createSessionFixture({ session_id: healthySessionId });
     const healthyModule = healthy.shopping_plan.modules[0];
+    await localRuntimeRepository.saveSession(healthy);
     await enqueueModuleSearchJob(healthy, {
       moduleId: healthyModule.module_id,
       moduleName: healthyModule.module_name,

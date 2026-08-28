@@ -15,6 +15,7 @@ import {
 import type { RuntimeJob } from "@/lib/runtime/types";
 import { localRuntimeRepository, resetLocalRuntimeForTests } from "@/lib/runtime/local-repository";
 import { registerExecutorDevice } from "@/lib/runtime/jobs";
+import { createRuntimeJobFixture } from "@/tests/fixtures/runtime-job";
 
 const originalProductMode = process.env.SCENECART_PRODUCT_MODE;
 
@@ -106,7 +107,7 @@ describe("executor protocol", () => {
       { id: "job-native-scope-search", type: "module_search" as const, priority: 100 }
     ];
     for (const candidate of jobs) {
-      await localRuntimeRepository.createJob({
+      await createRuntimeJobFixture({
         id: candidate.id,
         user_id: registration.device.user_id,
         session_id: "session-native-cli-claim-scope",
@@ -153,7 +154,7 @@ describe("executor protocol", () => {
       "HTTP MCP worker without cart tools",
       ["module_search", "add_to_cart"]
     );
-    await localRuntimeRepository.createJob({
+    await createRuntimeJobFixture({
       id: "job-http-scope-cart",
       user_id: registration.device.user_id,
       session_id: "session-http-mcp-claim-scope",
@@ -162,7 +163,7 @@ describe("executor protocol", () => {
       payload: {},
       priority: 300
     });
-    await localRuntimeRepository.createJob({
+    await createRuntimeJobFixture({
       id: "job-http-scope-detail",
       user_id: registration.device.user_id,
       session_id: "session-http-mcp-claim-scope",
@@ -171,7 +172,7 @@ describe("executor protocol", () => {
       payload: {},
       priority: 200
     });
-    await localRuntimeRepository.createJob({
+    await createRuntimeJobFixture({
       id: "job-http-scope-search",
       user_id: registration.device.user_id,
       session_id: "session-http-mcp-claim-scope",
@@ -250,7 +251,7 @@ describe("executor protocol", () => {
       ["module_search"]
     );
     const activeDevice = await localRuntimeRepository.heartbeatDevice(registration.device.id, "online");
-    await localRuntimeRepository.createJob({
+    await createRuntimeJobFixture({
       id: "job-v4-in-flight",
       user_id: registration.device.user_id,
       session_id: "session-v4-in-flight",
@@ -287,7 +288,7 @@ describe("executor protocol", () => {
       ["module_search"]
     );
     const activeDevice = await localRuntimeRepository.heartbeatDevice(registration.device.id, "online");
-    await localRuntimeRepository.createJob({
+    await createRuntimeJobFixture({
       id: "job-v4-legacy-result",
       user_id: registration.device.user_id,
       session_id: "session-v4-legacy-result",
@@ -328,7 +329,7 @@ describe("executor protocol", () => {
       ["module_search"]
     );
     const activeDevice = await localRuntimeRepository.heartbeatDevice(registration.device.id, "online");
-    await localRuntimeRepository.createJob({
+    await createRuntimeJobFixture({
       id: "job-v5-heartbeat-token",
       user_id: registration.device.user_id,
       session_id: "session-v5-heartbeat-token",
@@ -389,7 +390,7 @@ describe("executor protocol", () => {
     const owner = await registerExecutorDevice("user-result-owner", "owner worker", ["module_search"]);
     const intruder = await registerExecutorDevice("user-result-intruder", "intruder worker", ["module_search"]);
     const activeOwner = await localRuntimeRepository.heartbeatDevice(owner.device.id, "online");
-    await localRuntimeRepository.createJob({
+    await createRuntimeJobFixture({
       id: "job-completed-result-route-auth",
       user_id: owner.device.user_id,
       session_id: "session-completed-result-route-auth",
@@ -424,7 +425,7 @@ describe("executor protocol", () => {
   it("lets the claiming device resolve an unowned local-development job", async () => {
     const owner = await registerExecutorDevice("user-local-development", "local worker", ["module_search"]);
     const activeOwner = await localRuntimeRepository.heartbeatDevice(owner.device.id, "online");
-    await localRuntimeRepository.createJob({
+    await createRuntimeJobFixture({
       id: "job-unowned-local-development",
       session_id: "session-unowned-local-development",
       job_type: "module_search",
@@ -462,7 +463,7 @@ describe("executor protocol", () => {
   it("does not claim or resolve an unowned job in production", async () => {
     const owner = await registerExecutorDevice("user-formal-owned-only", "formal worker", ["module_search"]);
     const activeOwner = await localRuntimeRepository.heartbeatDevice(owner.device.id, "online");
-    await localRuntimeRepository.createJob({
+    await createRuntimeJobFixture({
       id: "job-unowned-formal-product",
       session_id: "session-unowned-formal-product",
       job_type: "module_search",
@@ -510,7 +511,7 @@ describe("executor protocol", () => {
   it("rejects a result callback that omits the exact lease token", async () => {
     const owner = await registerExecutorDevice("user-missing-lease-token", "owner worker", ["module_search"]);
     const activeOwner = await localRuntimeRepository.heartbeatDevice(owner.device.id, "online");
-    await localRuntimeRepository.createJob({
+    await createRuntimeJobFixture({
       id: "job-missing-lease-token",
       user_id: owner.device.user_id,
       session_id: "session-missing-lease-token",

@@ -465,6 +465,30 @@ export function ProductGuideDialog({ mode, open, onOpenChange }: { mode: Product
       ?.focus();
   }
 
+  function handleDialogKeyDown(event: KeyboardEvent<HTMLDialogElement>) {
+    if (event.key !== "Tab") return;
+    const dialog = dialogRef.current;
+    if (!dialog) return;
+    const focusable = [...dialog.querySelectorAll<HTMLElement>(
+      'button:not([disabled]):not([tabindex="-1"]), a[href]:not([tabindex="-1"]), input:not([disabled]):not([tabindex="-1"]), select:not([disabled]):not([tabindex="-1"]), textarea:not([disabled]):not([tabindex="-1"]), [tabindex]:not([tabindex="-1"])'
+    )].filter((element) => !element.hidden && element.getClientRects().length > 0);
+    if (focusable.length === 0) {
+      event.preventDefault();
+      dialog.focus();
+      return;
+    }
+    const first = focusable[0];
+    const last = focusable.at(-1)!;
+    const active = document.activeElement;
+    if (event.shiftKey && (active === first || !dialog.contains(active))) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && active === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  }
+
   return (
     <dialog
       id="scenecart-product-guide-dialog"
@@ -476,6 +500,7 @@ export function ProductGuideDialog({ mode, open, onOpenChange }: { mode: Product
       onCancel={(event) => { event.preventDefault(); closeDialog(); }}
       onClose={closeDialog}
       onClick={(event) => { if (event.target === event.currentTarget) closeDialog(); }}
+      onKeyDown={handleDialogKeyDown}
       data-demo-tour-control
     >
       <div className="product-guide-modal-surface">
