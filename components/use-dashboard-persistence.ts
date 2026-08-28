@@ -18,8 +18,25 @@ import type { SessionState, WorkflowStage } from "@/lib/session/types";
 type AuthenticationSnapshot = {
   authenticated?: boolean;
   authentication_required?: boolean;
+  access_mode?: "single_user" | "account" | "anonymous";
+  persistence_scope?: string;
   user?: { id?: string } | null;
 };
+
+function persistenceOwner(payload: AuthenticationSnapshot) {
+  if (
+    payload.authenticated &&
+    payload.access_mode === "single_user" &&
+    payload.persistence_scope === "single_user"
+  ) {
+    // This is an application-local namespace, not the database owner UUID.
+    return "access:single_user";
+  }
+  if (payload.authenticated && typeof payload.user?.id === "string") {
+    return `user:${payload.user.id}`;
+  }
+  return payload.authentication_required === false ? "anonymous" : false;
+}
 
 type DashboardPersistenceInput = {
   stage: WorkflowStage;
@@ -60,10 +77,7 @@ export function useDashboardPersistence(input: DashboardPersistenceInput) {
       .then(async (response) => {
         if (!response.ok) return false as const;
         const payload = await response.json() as AuthenticationSnapshot;
-        if (payload.authenticated && typeof payload.user?.id === "string") {
-          return `user:${payload.user.id}`;
-        }
-        return payload.authentication_required === false ? "anonymous" : false;
+        return persistenceOwner(payload);
       })
       .catch(() => false as const)
       .then((resolvedOwner) => {

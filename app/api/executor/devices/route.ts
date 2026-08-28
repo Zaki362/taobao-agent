@@ -37,6 +37,13 @@ export async function GET() {
 export async function POST(request: NextRequest) {
   try {
     const identity = await requireAuthenticatedIdentity();
+    if (identity.accessMode === "single_user") {
+      throw new ApiRouteError(
+        "固定单用户模式不向浏览器签发执行器密钥；请继续使用本机已配置的设备令牌",
+        410,
+        "browser_device_enrollment_disabled"
+      );
+    }
     const body = await readJsonObject(request);
     const result = await registerExecutorDevice(
       identity.userId,

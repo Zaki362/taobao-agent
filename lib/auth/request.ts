@@ -28,7 +28,9 @@ export function shouldUseSecureAuthCookie() {
 }
 
 export function isAuthenticationRequired() {
-  // Preview-only single-user mode keeps a stable owner without an interactive login.
+  // Fixed-owner mode is authorized by the outer-protection contract instead of
+  // an interactive application session. configuredSingleUserId() validates the
+  // complete server-side contract and fails closed when any proof is missing.
   if (getSceneCartAccessMode() === "single_user") {
     configuredSingleUserId();
     return false;
@@ -46,7 +48,6 @@ export async function getRequestIdentity() {
     }
     return {
       userId: user.id,
-      email: user.email,
       authenticated: true as const,
       accessMode: "single_user" as const
     };

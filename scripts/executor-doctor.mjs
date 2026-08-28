@@ -8,6 +8,10 @@ import {
 } from "./local-executor-readiness.mjs";
 import { TaobaoMcpClient } from "./taobao-mcp-client.mjs";
 import { TaobaoNativeCliClient } from "./taobao-native-cli-client.mjs";
+import {
+  safeMachineErrorMessage,
+  vercelProtectedFetch
+} from "./vercel-protection-bypass.mjs";
 
 nextEnv.loadEnvConfig(process.cwd());
 
@@ -29,7 +33,7 @@ async function check(name, task) {
     const detail = await task();
     checks.push({ name, status: "pass", detail });
   } catch (error) {
-    checks.push({ name, status: "fail", detail: error instanceof Error ? error.message : String(error) });
+    checks.push({ name, status: "fail", detail: safeMachineErrorMessage(error) });
   }
 }
 
@@ -75,7 +79,7 @@ await check("taobao_mcp", async () => {
 });
 
 await check("scenecart_api", async () => {
-  const response = await fetch(`${apiBaseUrl}/api/runtime/health`, {
+  const response = await vercelProtectedFetch(`${apiBaseUrl}/api/runtime/health`, {
     signal: AbortSignal.timeout(8_000)
   });
   const payload = await response.json().catch(() => ({}));
@@ -92,7 +96,7 @@ await check("device_token", async () => {
   if (!deviceToken) {
     throw new Error("SCENECART_DEVICE_TOKEN 未配置；请先在 /settings/executor 注册设备");
   }
-  const response = await fetch(`${apiBaseUrl}/api/executor/heartbeat`, {
+  const response = await vercelProtectedFetch(`${apiBaseUrl}/api/executor/heartbeat`, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${deviceToken}`,
@@ -161,7 +165,7 @@ if (doctorExitCode !== 0) {
 // online heartbeat behind after it exits, otherwise the website could briefly
 // advertise real search while no Worker is running.
 if (heartbeatAccepted && deviceToken) {
-  await fetch(`${apiBaseUrl}/api/executor/heartbeat`, {
+  await vercelProtectedFetch(`${apiBaseUrl}/api/executor/heartbeat`, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${deviceToken}`,

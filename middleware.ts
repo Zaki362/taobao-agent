@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { AUTH_COOKIE_NAME } from "@/lib/auth/constants";
+import { inspectOuterProtectionConfiguration } from "@/lib/auth/outer-protection";
 
 const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
 
@@ -26,6 +27,20 @@ function expectedOrigins(request: NextRequest) {
     : new Set([request.nextUrl.origin]);
 }
 
+function singleUserOuterProtectionFailure() {
+  if (process.env.SCENECART_ACCESS_MODE !== "single_user") return null;
+  if (process.env.VERCEL_ENV !== "preview" && process.env.VERCEL_ENV !== "production") return null;
+  const inspection = inspectOuterProtectionConfiguration();
+  if (inspection.valid) return null;
+  return NextResponse.json(
+    {
+      error: "固定单用户访问的外层保护尚未通过服务端校验",
+      code: "single_user_outer_protection_required"
+    },
+    { status: 503 }
+  );
+}
+
 export function middleware(request: NextRequest) {
   if (SAFE_METHODS.has(request.method)) return NextResponse.next();
   const bearerAuthorization = request.headers.get("authorization")?.match(/^Bearer\s+\S+$/i);
@@ -36,6 +51,9 @@ export function middleware(request: NextRequest) {
   if (bearerAuthorization && !request.cookies.has(AUTH_COOKIE_NAME)) {
     return NextResponse.next();
   }
+
+  const outerProtectionFailure = singleUserOuterProtectionFailure();
+  if (outerProtectionFailure) return outerProtectionFailure;
 
   const enforceOrigin = process.env.NODE_ENV === "production" || process.env.AUTH_REQUIRED === "true";
   if (!enforceOrigin) return NextResponse.next();

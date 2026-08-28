@@ -307,6 +307,10 @@ export const localRuntimeRepository: RuntimeRepository = {
   },
 
   async saveSession(state) {
+    const existing = getSession(state.session_id);
+    if (existing && existing.owner_id !== state.owner_id) {
+      throw new Error("session owner mismatch");
+    }
     saveSession(state);
   },
 
@@ -439,12 +443,22 @@ export const localRuntimeRepository: RuntimeRepository = {
   },
 
   async createJob(input) {
-    if (getSession(input.session_id)?.archived_at) {
+    const session = getSession(input.session_id);
+    if (!session) {
+      throw new Error("session not found");
+    }
+    if (session.owner_id !== input.user_id) {
+      throw new Error("job owner mismatch");
+    }
+    if (session.archived_at) {
       throw new Error("session archived");
     }
     const state = runtimeState();
     const existing = [...state.jobs.values()].find((job) => job.idempotency_key === input.idempotency_key);
     if (existing) {
+      if (existing.user_id !== input.user_id || existing.session_id !== input.session_id) {
+        throw new Error("job owner mismatch");
+      }
       if (existing.status === "failed" || existing.status === "cancelled") {
         if (activeAuthenticationHoldForJob(state, existing)) {
           throw new Error("authentication failure hold requires explicit user release");
@@ -792,7 +806,7 @@ export const localRuntimeRepository: RuntimeRepository = {
     const state = runtimeState();
     const job = state.jobs.get(jobId);
     if (!job || job.status !== "pending") return null;
-    if (userId && job.user_id && job.user_id !== userId) return null;
+    if (userId && job.user_id !== userId) return null;
     const now = new Date().toISOString();
     job.status = "cancelled";
     job.error_message = "用户在执行器领取前取消任务";

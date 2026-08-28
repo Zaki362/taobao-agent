@@ -1,8 +1,12 @@
 import { getConfiguredExecutionBackend, getExecutionBackend } from "@/lib/mcp/client";
 import {
   getSceneCartAccessMode,
-  resolveSingleUserOwner
+  inspectConfiguredSingleUserOwner
 } from "@/lib/auth/access-mode";
+import {
+  inspectOuterProtectionConfiguration,
+  isLocalSingleUserDevelopment
+} from "@/lib/auth/outer-protection";
 import { isAuthenticationRequired, shouldUseSecureAuthCookie } from "@/lib/auth/request";
 import { query } from "@/lib/runtime/database";
 import { getRuntimeRepository, runtimeStoreMode } from "@/lib/runtime";
@@ -49,22 +53,72 @@ function validProductionOrigin(value: string | undefined) {
     .every((origin) => /^https:\/\//i.test(origin) && !/localhost|127\.0\.0\.1/i.test(origin));
 }
 
+type NullOwnerIntegrityRow = {
+  table_name: "shopping_sessions" | "agent_jobs" | "execution_events";
+  null_owner_count: string | number;
+};
+
+export function summarizeNullOwnerIntegrity(rows: NullOwnerIntegrityRow[]) {
+  const counts = new Map(rows.map((row) => [row.table_name, Number(row.null_owner_count) || 0]));
+  const shoppingSessions = counts.get("shopping_sessions") ?? 0;
+  const agentJobs = counts.get("agent_jobs") ?? 0;
+  const executionEvents = counts.get("execution_events") ?? 0;
+  const total = shoppingSessions + agentJobs + executionEvents;
+  return {
+    valid: total === 0,
+    total,
+    counts: { shoppingSessions, agentJobs, executionEvents }
+  };
+}
+
+async function inspectNullOwnerIntegrity() {
+  const result = await query<NullOwnerIntegrityRow>(`
+    SELECT 'shopping_sessions' AS table_name, COUNT(*)::bigint AS null_owner_count
+      FROM shopping_sessions
+     WHERE user_id IS NULL
+       AND COALESCE(NULLIF(state->>'archived_at', ''), '') = ''
+    UNION ALL
+    SELECT 'agent_jobs' AS table_name, COUNT(*)::bigint AS null_owner_count
+      FROM agent_jobs
+     WHERE user_id IS NULL
+       AND status IN ('pending', 'leased', 'running')
+    UNION ALL
+    SELECT 'execution_events' AS table_name, COUNT(*)::bigint AS null_owner_count
+      FROM execution_events
+     WHERE user_id IS NULL
+  `);
+  return summarizeNullOwnerIntegrity(result.rows);
+}
+
 export async function inspectRuntimeReadiness(userId?: string) {
   const checks: RuntimeReadinessCheck[] = [];
   const store = runtimeStoreMode();
   const executor = getExecutionBackend();
   const configuredExecutor = getConfiguredExecutionBackend();
   const authConfigured = process.env.AUTH_REQUIRED === "true";
-  const authRequired = isAuthenticationRequired();
   const accessMode = getSceneCartAccessMode();
+  const localSingleUserDevelopment = accessMode === "single_user" && isLocalSingleUserDevelopment();
+  const outerProtection = localSingleUserDevelopment
+    ? null
+    : inspectOuterProtectionConfiguration();
+  let authRequired = false;
+  let authRequirementError = "";
+  if (accessMode !== "single_user") {
+    try {
+      authRequired = isAuthenticationRequired();
+    } catch (error) {
+      authRequirementError = error instanceof Error ? error.message : "身份策略校验失败";
+    }
+  }
   let singleUserOwnerReady = false;
   let singleUserOwnerDetail = "";
+  let singleUserOwner: Awaited<ReturnType<typeof inspectConfiguredSingleUserOwner>> = null;
   if (accessMode === "single_user") {
     try {
-      const owner = await resolveSingleUserOwner();
-      singleUserOwnerReady = Boolean(owner);
-      singleUserOwnerDetail = owner
-        ? "单用户免登录已绑定固定 owner；会话、设备和任务仍按该 owner 隔离"
+      singleUserOwner = await inspectConfiguredSingleUserOwner();
+      singleUserOwnerReady = Boolean(singleUserOwner);
+      singleUserOwnerDetail = singleUserOwner
+        ? "固定 owner 已存在；会话、设备和任务均由服务端绑定，不向浏览器公开身份标识"
         : "单用户 owner 未配置";
     } catch (error) {
       singleUserOwnerDetail = error instanceof Error ? error.message : "单用户 owner 校验失败";
@@ -137,22 +191,95 @@ export async function inspectRuntimeReadiness(userId?: string) {
     ));
   }
 
+  if (store === "postgres") {
+    try {
+      const integrity = await inspectNullOwnerIntegrity();
+      checks.push(check(
+        "owner_integrity",
+        "Owner 数据完整性",
+        integrity.valid ? "pass" : "fail",
+        true,
+        integrity.valid
+          ? "活动购物会话、活动任务和执行事件均已绑定 owner"
+          : `发现 ${integrity.total} 条缺少 owner 的活动或审计数据（会话 ${integrity.counts.shoppingSessions}、任务 ${integrity.counts.agentJobs}、事件 ${integrity.counts.executionEvents}）`,
+        "先迁移或隔离所有 null-owner 数据，再开放固定单用户正式访问"
+      ));
+    } catch {
+      checks.push(check(
+        "owner_integrity",
+        "Owner 数据完整性",
+        "fail",
+        true,
+        "无法完成 null-owner 数据完整性检查",
+        "确认三张运行时表已迁移且数据库账号具备只读检查权限"
+      ));
+    }
+  } else {
+    checks.push(check(
+      "owner_integrity",
+      "Owner 数据完整性",
+      "fail",
+      true,
+      "未启用 PostgreSQL，无法检查 null-owner 运行时数据",
+      "启用 PostgreSQL 后检查 shopping_sessions、agent_jobs 和 execution_events"
+    ));
+  }
+
+  const singleUserPolicyReady = accessMode === "single_user" && (
+    localSingleUserDevelopment || outerProtection?.valid === true
+  );
+
+  checks.push(check(
+    "access_mode",
+    "固定单用户访问模式",
+    accessMode === "single_user" ? "pass" : "fail",
+    true,
+    accessMode === "single_user"
+      ? "正式界面使用固定单用户访问，应用登录与注册入口关闭"
+      : "当前仍是账号或匿名访问模式",
+    "设置 SCENECART_ACCESS_MODE=single_user；该变量本身不足以开放访问"
+  ));
+
+  checks.push(check(
+    "fixed_owner",
+    "固定 Owner",
+    singleUserOwnerReady ? "pass" : "fail",
+    true,
+    singleUserOwnerDetail || "固定 owner 尚未通过服务端校验",
+    "配置已存在的 SCENECART_SINGLE_USER_ID，并确认 PostgreSQL 中 owner 存在"
+  ));
+
+  checks.push(check(
+    "outer_protection",
+    "人工核验的外层访问保护",
+    singleUserPolicyReady ? "pass" : "fail",
+    true,
+    localSingleUserDevelopment
+      ? "仅限本地开发；远程 Preview/Production 仍必须提供人工核验声明"
+      : outerProtection?.valid
+        ? "服务端保护声明、范围、时间、项目 ID 与正式 origin 相符；发布前仍须提交独立 live 核验回执"
+        : `外层保护证明不完整：${outerProtection?.issues.join("；") || "未检测到 Vercel 保护环境"}`,
+    "在 Vercel 现场验证外层保护后配置 server-only 证明，并在 release audit 提供独立 live 回执"
+  ));
+
   checks.push(check(
     "authentication",
     "访问身份",
     accessMode === "single_user"
-      ? (singleUserOwnerReady ? "pass" : "fail")
+      ? (singleUserOwnerReady && singleUserPolicyReady ? "pass" : "fail")
       : (authConfigured && authRequired ? "pass" : "fail"),
     true,
     accessMode === "single_user"
       ? singleUserOwnerDetail
       : authConfigured
         ? "AUTH_REQUIRED 已开启"
+        : authRequirementError
+          ? authRequirementError
         : authRequired
           ? "正式模式已强制账号隔离，但 AUTH_REQUIRED 尚未显式配置"
           : "当前允许匿名使用",
     accessMode === "single_user"
-      ? "仅在受 Vercel Protection 保护的 Preview 配置既有 owner UUID；Production 使用 account 模式"
+      ? "补齐固定 owner 与经人工验证的 Vercel 外层保护证明"
       : "正式环境设置 AUTH_REQUIRED=true"
   ));
   const workflowRecoveryStatus: ReadinessStatus = !workflowRecoveryConfigured
@@ -184,9 +311,13 @@ export async function inspectRuntimeReadiness(userId?: string) {
   checks.push(check(
     "secure_cookie",
     "安全会话 Cookie",
-    secureCookieConfigured && secureCookie ? "pass" : "fail",
+    accessMode === "single_user"
+      ? "pass"
+      : secureCookieConfigured && secureCookie ? "pass" : "fail",
     true,
-    secureCookieConfigured
+    accessMode === "single_user"
+      ? "应用登录已关闭，固定单用户访问不创建浏览器会话 Cookie"
+      : secureCookieConfigured
       ? "会话 Cookie 仅通过安全连接发送"
       : secureCookie
         ? "HTTPS Origin 已强制使用 Secure Cookie，但 AUTH_COOKIE_SECURE 尚未显式配置"
@@ -278,11 +409,12 @@ export async function inspectRuntimeReadiness(userId?: string) {
   ));
 
   let executorCapabilities = summarizeExecutorDevices([]);
+  const readinessUserId = accessMode === "single_user" ? singleUserOwner?.id : userId;
   const canInspectUserRuntime = Boolean(
-    userId && (productMode !== "production" || store === "postgres")
+    readinessUserId && (productMode !== "production" || store === "postgres")
   );
-  if (userId && canInspectUserRuntime) {
-    const devices = await getRuntimeRepository().listDevices(userId);
+  if (readinessUserId && canInspectUserRuntime) {
+    const devices = await getRuntimeRepository().listDevices(readinessUserId);
     executorCapabilities = summarizeExecutorDevices(devices);
     checks.push(check(
       "executor_online",
@@ -319,10 +451,10 @@ export async function inspectRuntimeReadiness(userId?: string) {
       "确认淘宝账号与 Skill 支持加购，再注册包含 add_to_cart 能力的设备"
     ));
   } else {
-    const unavailableDetail = userId
+    const unavailableDetail = readinessUserId
       ? "正式运行时配置未通过，暂不读取当前账号的执行器能力"
       : "登录后才能检查当前账号的执行器能力";
-    const unavailableRemediation = userId
+    const unavailableRemediation = readinessUserId
       ? "先配置 RUNTIME_STORE=postgres 和 DATABASE_URL"
       : "登录产品并打开 /settings/executor";
     for (const [id, label] of [
@@ -342,8 +474,10 @@ export async function inspectRuntimeReadiness(userId?: string) {
   }
 
   const operationalConfigurationReady = checks.every((item) => !item.required || item.status === "pass");
-  // Single-user access is intentionally a Preview/local convenience and can never be production-ready.
-  const readyForProduction = operationalConfigurationReady && accessMode === "account";
+  const readyForProduction = operationalConfigurationReady &&
+    accessMode === "single_user" &&
+    outerProtection?.environment === "production" &&
+    outerProtection.scope === "all_deployments";
   const executorReady =
     executorCapabilities.capabilities.module_search.available &&
     executorCapabilities.capabilities.add_to_cart.available;

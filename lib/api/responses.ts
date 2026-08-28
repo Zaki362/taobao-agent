@@ -1,5 +1,26 @@
 import { NextResponse } from "next/server";
 
+const SERVER_ONLY_IDENTITY_KEYS = new Set(["owner_id", "user_id"]);
+
+/**
+ * Ownership identifiers are authorization inputs, not public DTO fields. Keep
+ * them available to repositories and server-side workflow code, but remove
+ * them from every JSON response before it can reach a browser or Worker.
+ */
+export function publicApiPayload<T>(payload: T): T {
+  if (Array.isArray(payload)) {
+    return payload.map((item) => publicApiPayload(item)) as T;
+  }
+  if (!payload || typeof payload !== "object") return payload;
+  if (payload instanceof Date) return payload;
+
+  return Object.fromEntries(
+    Object.entries(payload as Record<string, unknown>)
+      .filter(([key]) => !SERVER_ONLY_IDENTITY_KEYS.has(key.toLowerCase()))
+      .map(([key, value]) => [key, publicApiPayload(value)])
+  ) as T;
+}
+
 export class ApiRouteError extends Error {
   constructor(
     message: string,
@@ -12,7 +33,7 @@ export class ApiRouteError extends Error {
 }
 
 export function apiOk<T>(payload: T, status = 200) {
-  return NextResponse.json(payload, { status });
+  return NextResponse.json(publicApiPayload(payload), { status });
 }
 
 export function apiError(message: string, status = 500, code = "internal_error", headers?: HeadersInit) {

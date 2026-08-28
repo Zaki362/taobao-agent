@@ -62,6 +62,81 @@ const publicDemoOrigin = normalizeHttpsOrigin(
 const demoOriginSeparated = Boolean(publicDemoOrigin)
   && !formalOrigins(process.env.APP_ORIGIN).includes(publicDemoOrigin);
 
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const LIVE_AUDIT_MAX_AGE_MS = 24 * 60 * 60 * 1_000;
+const MAX_CLOCK_SKEW_MS = 5 * 60 * 1_000;
+
+function recentIsoTimestamp(value, maxAgeMs) {
+  if (!configured(value)) return null;
+  const parsed = Date.parse(value.trim());
+  const now = Date.now();
+  if (!Number.isFinite(parsed) || parsed > now + MAX_CLOCK_SKEW_MS || now - parsed > maxAgeMs) return null;
+  return new Date(parsed).toISOString();
+}
+
+function expectedVercelProductionOrigin() {
+  const host = process.env.VERCEL_PROJECT_PRODUCTION_URL?.trim();
+  return host ? normalizeHttpsOrigin(`https://${host}`) : null;
+}
+
+const declaredProtectionOrigin = normalizeHttpsOrigin(process.env.SCENECART_OUTER_PROTECTION_ORIGIN);
+const declaredProtectionProjectId = process.env.SCENECART_OUTER_PROTECTION_PROJECT_ID?.trim() ?? "";
+const currentVercelProjectId = process.env.VERCEL_PROJECT_ID?.trim() ?? "";
+const currentVercelProductionOrigin = expectedVercelProductionOrigin();
+const outerProtectionConfigurationReady =
+  process.env.SCENECART_ACCESS_MODE === "single_user" &&
+  process.env.VERCEL_ENV === "production" &&
+  process.env.SCENECART_OUTER_PROTECTION_VERIFIED === "true" &&
+  process.env.SCENECART_OUTER_PROTECTION_SCOPE === "all_deployments" &&
+  Boolean(recentIsoTimestamp(process.env.SCENECART_OUTER_PROTECTION_VERIFIED_AT, 30 * 24 * 60 * 60 * 1_000)) &&
+  Boolean(declaredProtectionProjectId) &&
+  declaredProtectionProjectId === currentVercelProjectId &&
+  Boolean(declaredProtectionOrigin) &&
+  formalOrigins(process.env.APP_ORIGIN).length === 1 &&
+  formalOrigins(process.env.APP_ORIGIN)[0] === declaredProtectionOrigin &&
+  currentVercelProductionOrigin === declaredProtectionOrigin;
+
+function readLiveProtectionReceipt() {
+  const receiptPath = process.env.SCENECART_OUTER_PROTECTION_AUDIT_RECEIPT?.trim();
+  if (!receiptPath) return { valid: false, detail: "未提供独立 live 核验回执" };
+  const absolutePath = path.isAbsolute(receiptPath) ? receiptPath : path.join(ROOT, receiptPath);
+  try {
+    const receipt = JSON.parse(fs.readFileSync(absolutePath, "utf-8"));
+    const checks = receipt?.checks ?? {};
+    const valid =
+      receipt?.version === 1 &&
+      receipt?.environment === "production" &&
+      receipt?.project_id === declaredProtectionProjectId &&
+      normalizeHttpsOrigin(receipt?.origin) === declaredProtectionOrigin &&
+      configured(receipt?.deployment_id) &&
+      Boolean(recentIsoTimestamp(receipt?.verified_at, LIVE_AUDIT_MAX_AGE_MS)) &&
+      checks.vercel_protection_settings_observed === true &&
+      checks.unauthenticated_page_challenged === true &&
+      checks.unauthenticated_api_challenged === true &&
+      checks.authorized_owner_page_succeeded === true &&
+      checks.application_login_absent === true;
+    return {
+      valid,
+      detail: valid
+        ? "24 小时内的 Vercel 设置与匿名/授权 HTTP live 核验回执完整"
+        : "live 核验回执字段不完整、已过期或与当前项目/origin 不匹配"
+    };
+  } catch {
+    return { valid: false, detail: "无法读取或解析独立 live 核验回执" };
+  }
+}
+
+const liveProtectionReceipt = readLiveProtectionReceipt();
+const loginPageSource = fs.readFileSync(path.join(ROOT, "app/login/page.tsx"), "utf-8");
+const loginRouteSource = fs.readFileSync(path.join(ROOT, "app/api/auth/login/route.ts"), "utf-8");
+const registerRouteSource = fs.readFileSync(path.join(ROOT, "app/api/auth/register/route.ts"), "utf-8");
+const interactiveAuthenticationClosed =
+  loginPageSource.includes('permanentRedirect("/")') &&
+  loginRouteSource.includes("410") &&
+  registerRouteSource.includes("410") &&
+  !loginRouteSource.includes("readJsonObject") &&
+  !registerRouteSource.includes("readJsonObject");
+
 function check(id, label, pass, detail, remediation) {
   return { id, label, status: pass ? "pass" : "fail", detail, remediation: pass ? undefined : remediation };
 }
@@ -98,11 +173,36 @@ const checks = [
     "设置 DATABASE_SSL=true、DATABASE_SSL_REJECT_UNAUTHORIZED=true；私有 CA 使用 DATABASE_SSL_CA"
   ),
   check(
-    "authentication",
-    "强制用户认证",
-    process.env.AUTH_REQUIRED === "true",
-    process.env.AUTH_REQUIRED === "true" ? "用户隔离已启用" : "当前允许匿名访问",
-    "设置 AUTH_REQUIRED=true"
+    "fixed_single_user",
+    "固定单用户访问",
+    process.env.SCENECART_ACCESS_MODE === "single_user" && UUID_PATTERN.test(process.env.SCENECART_SINGLE_USER_ID ?? ""),
+    process.env.SCENECART_ACCESS_MODE === "single_user" && UUID_PATTERN.test(process.env.SCENECART_SINGLE_USER_ID ?? "")
+      ? "已配置 server-only 固定 owner；发布后仍须由 readiness 验证 owner 存在"
+      : "未启用固定单用户访问或 owner UUID 无效",
+    "设置 SCENECART_ACCESS_MODE=single_user 与既有 SCENECART_SINGLE_USER_ID"
+  ),
+  check(
+    "interactive_authentication",
+    "关闭应用登录与注册",
+    interactiveAuthenticationClosed,
+    interactiveAuthenticationClosed ? "/login 永久回首页，登录/注册 POST 在读取请求体前返回 410" : "仍存在应用登录或注册入口",
+    "永久关闭 /login 与登录/注册 POST，并运行 auth 回归测试"
+  ),
+  check(
+    "outer_protection_configuration",
+    "外层保护服务端证明",
+    outerProtectionConfigurationReady,
+    outerProtectionConfigurationReady
+      ? "保护声明、全部署范围、核验时间、项目 ID 与正式 origin 相符；该声明本身不等于线上已验证"
+      : "外层保护声明、作用域、时间、项目 ID 或正式 origin 不完整",
+    "现场核验 Vercel 保护后配置 server-only 证明；Production 必须使用 all_deployments"
+  ),
+  check(
+    "outer_protection_live_audit",
+    "外层保护 live 人工核验",
+    liveProtectionReceipt.valid,
+    liveProtectionReceipt.detail,
+    "提供 24 小时内独立回执文件，记录 Vercel 设置、匿名页面/API 挑战、owner 成功访问及应用登录关闭；不能只设置环境变量"
   ),
   check(
     "workflow_recovery",
@@ -112,13 +212,6 @@ const checks = [
       ? "恢复扫描密钥已配置"
       : "未配置至少 32 字符的恢复扫描密钥",
     "配置 SCENECART_CRON_SECRET，并启动 worker:recovery 或云端 Cron"
-  ),
-  check(
-    "secure_cookie",
-    "安全会话 Cookie",
-    process.env.AUTH_COOKIE_SECURE === "true",
-    process.env.AUTH_COOKIE_SECURE === "true" ? "Secure Cookie 已启用" : "Secure Cookie 未启用",
-    "在 HTTPS 环境设置 AUTH_COOKIE_SECURE=true"
   ),
   check(
     "app_origin",

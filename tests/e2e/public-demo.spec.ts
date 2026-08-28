@@ -3,7 +3,7 @@ import { getScenarioConfig } from "../../lib/scenarios";
 import type { ScenarioId } from "../../lib/session/types";
 
 function isPublicDemoInternalHref(href: string | null): boolean {
-  return Boolean(href?.startsWith("/demo") || href?.startsWith("/product-guide"));
+  return Boolean(href === "/" || href?.startsWith("/demo") || href?.startsWith("/product-guide"));
 }
 
 async function enterResultsManually(page: Page) {
@@ -31,7 +31,7 @@ test("public demo reuses the real product flow and keeps every action local", as
     if (pathname.startsWith("/api/")) apiRequests.push(pathname);
   });
 
-  await page.goto("/demo?demoSpeed=fast");
+  await page.goto("/?demoSpeed=fast");
   await expect(page.getByRole("heading", { name: "把一句需求，变成买得明白的方案" })).toBeVisible();
   await expect(page.locator(".public-demo-disclosure")).toHaveCount(0);
   await enterResultsManually(page);
@@ -108,7 +108,7 @@ test("every visible product scenario completes through the same frozen product f
 
   for (const scenarioId of scenarioIds) {
     const scenario = getScenarioConfig(scenarioId);
-    await page.goto("/demo?demoSpeed=fast");
+    await page.goto("/?demoSpeed=fast");
     await page.getByRole("button", {
       name: `${scenario.name} ${scenario.short_description}`,
       exact: true
@@ -160,15 +160,20 @@ test("frozen navigation and refresh actions stay inside the demo", async ({ cont
     observePage(popup);
   });
 
-  await page.goto("/demo?demoSpeed=fast");
+  await page.goto("/?demoSpeed=fast");
   const guideButton = page.getByRole("button", { name: "产品说明" });
   await expect(guideButton).toBeVisible();
   await guideButton.click();
   await expect(page.getByRole("dialog", { name: "SceneCart AI 产品说明" })).toBeVisible();
-  await expect(page).toHaveURL(/\/demo/);
+  await expect(page).toHaveURL(/\?demoSpeed=fast$/);
   await page.getByRole("button", { name: "技术方案" }).click();
   await expect(page.getByRole("heading", { name: "云端组织决策，本地执行器连接真实淘宝环境" })).toBeVisible();
   await page.keyboard.press("Escape");
+  await expect(page.getByRole("dialog", { name: "SceneCart AI 产品说明" })).toBeHidden();
+  await expect(guideButton).toBeFocused();
+  await guideButton.click();
+  await expect(page.getByRole("dialog", { name: "SceneCart AI 产品说明" })).toBeVisible();
+  await page.mouse.click(4, 4);
   await expect(page.getByRole("dialog", { name: "SceneCart AI 产品说明" })).toBeHidden();
   await expect(guideButton).toBeFocused();
   const landingLinks = await page.locator('[data-public-demo] a[href]').evaluateAll((links) =>
@@ -181,7 +186,7 @@ test("frozen navigation and refresh actions stay inside the demo", async ({ cont
   await expect(page.getByText(/不会离开冻结体验/)).toBeHidden({ timeout: 6_000 });
   await page.getByRole("link", { name: "最近任务" }).click();
   await expect(page.getByText(/“执行详情”入口/)).toBeVisible();
-  await expect(page).toHaveURL(/\/demo/);
+  await expect(page).toHaveURL(/\?demoSpeed=fast$/);
 
   await page.locator('[data-demo-target="scene:example:new-car:0"]').click();
   await page.locator('[data-demo-target="scene:start"]').click();
@@ -199,29 +204,73 @@ test("frozen navigation and refresh actions stay inside the demo", async ({ cont
   await page.getByRole("link", { name: "执行器设置" }).click();
   await expect(page.getByText(/“执行器设置”入口/)).toBeVisible();
 
-  expect(new URL(page.url()).pathname.replace(/\/$/, "")).toBe("/demo");
+  expect(new URL(page.url()).pathname).toBe("/");
   expect(popupUrls).toEqual([]);
   expect(apiRequests).toEqual([]);
   expect(externalRequests).toEqual([]);
 });
 
-test("product guide direct route opens the same document window and returns to the public demo", async ({ page }) => {
+test("product guide compatibility route opens the shared dialog and keeps the canonical Demo URL", async ({ page }) => {
   const apiRequests: string[] = [];
   page.on("request", (request) => {
     const pathname = new URL(request.url()).pathname;
     if (pathname.startsWith("/api/")) apiRequests.push(pathname);
   });
 
-  const response = await page.goto("/product-guide");
+  const response = await page.goto("/product-guide?demoSpeed=fast&source=legacy-guide");
   expect(response?.status()).toBe(200);
   await expect(page.getByRole("dialog", { name: "SceneCart AI 产品说明" })).toBeVisible();
+  await expect(page).toHaveURL(/\?demoSpeed=fast&source=legacy-guide$/);
   await expect(page.getByRole("heading", {
     name: "把模糊的购物目标，变成可执行的购物方案"
   })).toBeVisible();
   await expect(page.getByRole("navigation", { name: "产品说明目录" }).first()).toContainText("正式产品与 Demo");
+
+  const positioningButton = page.getByRole("button", { name: "产品定位" });
+  await positioningButton.focus();
+  await page.keyboard.press("End");
+  await expect(page.getByRole("button", { name: "安全边界" })).toBeFocused();
+  await expect(page.getByRole("heading", { name: "协助购物决策，不绕过平台规则" })).toBeVisible();
+
+  await page.getByRole("button", { name: "电商为何不够" }).click();
+  await expect(page.getByRole("heading", { name: "组合需求难以被单点搜索承接" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "需求尚未收敛，关键词也不明确" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "信息很多，却难以形成购买判断" })).toBeVisible();
+
   await page.getByRole("button", { name: "关闭产品说明" }).click();
-  await expect(page).toHaveURL(/\/demo\/?$/);
+  await expect(page).toHaveURL(/\?demoSpeed=fast&source=legacy-guide$/);
   expect(apiRequests).toEqual([]);
+});
+
+test("opening the guide during autoplay pauses without losing the tour state", async ({ page }) => {
+  const apiRequests: string[] = [];
+  const externalRequests: string[] = [];
+  const popups: Page[] = [];
+  page.on("request", (request) => {
+    const url = new URL(request.url());
+    if (url.pathname.startsWith("/api/")) apiRequests.push(url.pathname);
+    if (url.hostname !== "127.0.0.1" && url.hostname !== "localhost") externalRequests.push(url.toString());
+  });
+  page.on("popup", (popup) => popups.push(popup));
+
+  await page.goto("/product-guide?autoplay=1&demoSpeed=fast&source=legacy-guide");
+  const dialog = page.getByRole("dialog", { name: "SceneCart AI 产品说明" });
+  await expect(dialog).toBeVisible();
+  await expect(page).toHaveURL(/\?autoplay=1&demoSpeed=fast&source=legacy-guide$/);
+  await expect(page.getByRole("button", { name: "继续演示" })).toBeVisible();
+  await expect(page.locator(".public-demo-narrator")).toHaveAttribute("data-demo-phase", "paused");
+  await expect(page.locator(".public-demo-cursor")).not.toHaveClass(/public-demo-cursor-visible/);
+
+  await page.getByRole("button", { name: "关闭产品说明" }).click();
+  await expect(dialog).toBeHidden();
+  await expect(page.getByRole("heading", { name: "把一句需求，变成买得明白的方案" })).toBeVisible();
+  await page.getByRole("button", { name: "继续演示" }).click();
+  await expect(page.getByRole("heading", { name: "购物清单共 4 件" })).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByText("演示清单", { exact: true })).toHaveCount(4);
+
+  expect(apiRequests).toEqual([]);
+  expect(externalRequests).toEqual([]);
+  expect(popups).toEqual([]);
 });
 
 test("a user can open the corresponding Taobao product detail link", async ({ context, page }) => {
@@ -232,7 +281,7 @@ test("a user can open the corresponding Taobao product detail link", async ({ co
       body: "<title>Frozen product detail target</title>"
     });
   });
-  await page.goto("/demo?demoSpeed=fast");
+  await page.goto("/?demoSpeed=fast");
   await enterResultsManually(page);
 
   const popupPromise = page.waitForEvent("popup");
@@ -244,7 +293,7 @@ test("a user can open the corresponding Taobao product detail link", async ({ co
 
 test("auto narrator explains at the top before the cursor starts moving", async ({ page }) => {
   await page.setViewportSize({ width: 1470, height: 900 });
-  await page.goto("/demo");
+  await page.goto("/");
   const launchButton = page.getByRole("button", { name: "启动自动演示" });
   await expect(launchButton).toHaveClass(/public-demo-launch-button/);
   await expect(launchButton).toHaveCSS("background-color", "rgb(246, 112, 35)");
@@ -288,11 +337,12 @@ test("autoplay starts once while the normal Demo URL stays manually controlled",
   });
   page.on("popup", (popup) => popups.push(popup));
 
-  await page.goto("/demo?demoSpeed=fast");
+  await page.goto("/?demoSpeed=fast");
   await expect(page.getByRole("button", { name: "启动自动演示" })).toBeVisible();
   await expect(page.locator(".public-demo-narrator")).toHaveCount(0);
 
-  await page.goto("/demo?autoplay=1&demoSpeed=fast");
+  await page.goto("/demo?autoplay=1&demoSpeed=fast&source=legacy-demo");
+  await expect(page).toHaveURL(/\?autoplay=1&demoSpeed=fast&source=legacy-demo$/);
   await expect(page.getByRole("button", { name: "暂停演示" })).toBeVisible();
   await expect(page.locator(".public-demo-narrator")).toBeVisible();
 
@@ -307,7 +357,7 @@ test("autoplay starts once while the normal Demo URL stays manually controlled",
 });
 
 test("auto tour moves its cursor onto real controls and reaches the real cart review", async ({ page }) => {
-  await page.goto("/demo?demoSpeed=fast");
+  await page.goto("/?demoSpeed=fast");
   await page.evaluate(() => {
     type ClickSample = { target: string; distance: number; cursor: [number, number]; center: [number, number]; callout?: string };
     const samples: ClickSample[] = [];
@@ -385,7 +435,7 @@ test("auto tour moves its cursor onto real controls and reaches the real cart re
 });
 
 test("auto tour pauses on any page click and resumes without duplicate cart writes", async ({ page }) => {
-  await page.goto("/demo?demoSpeed=fast");
+  await page.goto("/?demoSpeed=fast");
   await page.evaluate(() => {
     const firstTarget = document.querySelector<HTMLElement>('[data-demo-target="scene:example:new-car:0"]');
     (window as unknown as { __firstTargetClickCount: number }).__firstTargetClickCount = 0;
@@ -425,7 +475,7 @@ test("auto tour pauses on any page click and resumes without duplicate cart writ
     (window as unknown as { __firstTargetClickCount: number }).__firstTargetClickCount
   )).toBe(1);
 
-  await page.goto("/demo?demoSpeed=fast");
+  await page.goto("/?demoSpeed=fast");
   await page.evaluate(() => {
     const firstTarget = document.querySelector<HTMLElement>('[data-demo-target="scene:example:new-car:0"]');
     (window as unknown as { __resumeFirstTargetClickCount: number }).__resumeFirstTargetClickCount = 0;
@@ -450,7 +500,22 @@ test("auto tour pauses on any page click and resumes without duplicate cart writ
 
 test("mobile result and cart layouts have no horizontal overflow", async ({ page }, testInfo) => {
   await page.setViewportSize({ width: 390, height: 844 });
-  await page.goto("/demo");
+  await page.goto("/");
+  const guideButton = page.getByRole("button", { name: "产品说明" });
+  await guideButton.click();
+  const guideDialog = page.getByRole("dialog", { name: "SceneCart AI 产品说明" });
+  await expect(guideDialog).toBeVisible();
+  const guideGeometry = await guideDialog.evaluate((element) => ({
+    width: element.getBoundingClientRect().width,
+    viewportWidth: window.innerWidth,
+    scrollWidth: document.documentElement.scrollWidth
+  }));
+  expect(guideGeometry).toEqual({ width: 390, viewportWidth: 390, scrollWidth: 390 });
+  await page.getByRole("button", { name: "技术方案" }).click();
+  await expect(page.getByRole("heading", { name: "云端组织决策，本地执行器连接真实淘宝环境" })).toBeVisible();
+  await page.getByRole("button", { name: "关闭产品说明" }).click();
+  await expect(guideDialog).toBeHidden();
+
   await page.getByRole("button", { name: "启动自动演示" }).click();
   const mobileNarrator = page.locator(".public-demo-narrator");
   await expect(mobileNarrator).toHaveAttribute("data-demo-phase", "explaining");
@@ -462,7 +527,7 @@ test("mobile result and cart layouts have no horizontal overflow", async ({ page
   await page.getByRole("heading", { name: "把一句需求，变成买得明白的方案" }).click();
   await expect(page.getByRole("button", { name: "继续演示" })).toBeVisible();
 
-  await page.goto("/demo?demoSpeed=fast");
+  await page.goto("/?demoSpeed=fast");
   await page.getByRole("button", { name: "启动自动演示" }).click();
   await expect(page.getByRole("heading", { name: "购物清单共 4 件" })).toBeVisible({ timeout: 20_000 });
   await expect(page.getByRole("button", { name: "重新自动演示" })).toBeVisible();
@@ -497,7 +562,11 @@ test("mobile result and cart layouts have no horizontal overflow", async ({ page
 
 test("reduced motion still completes the real flow without cursor travel", async ({ page }) => {
   await page.emulateMedia({ reducedMotion: "reduce" });
-  await page.goto("/demo?demoSpeed=fast");
+  await page.goto("/?demoSpeed=fast");
+  await page.getByRole("button", { name: "产品说明" }).click();
+  await expect(page.locator(".product-guide-modal-surface")).toHaveCSS("animation-name", "none");
+  await expect(page.locator(".product-guide-panel")).toHaveCSS("animation-name", "none");
+  await page.getByRole("button", { name: "关闭产品说明" }).click();
   const launchButton = page.getByRole("button", { name: "启动自动演示" });
   await expect(launchButton).toHaveCSS("animation-name", "none");
   await launchButton.click();

@@ -31,17 +31,18 @@ async function expectNavigationFitsViewport(page: import("@playwright/test").Pag
   expect(clippedControls, JSON.stringify(geometry)).toEqual([]);
 }
 
-test("formal product does not expose the frozen Demo route", async ({ request }) => {
-  const responses = await Promise.all([
-    request.get("/demo"),
-    request.get("/demo?autoplay=1")
-  ]);
+test("formal compatibility routes point to the public Demo and in-place guide", async ({ request }) => {
+  const demoResponse = await request.get("/demo", { maxRedirects: 0 });
+  expect([307, 308]).toContain(demoResponse.status());
+  expect(demoResponse.headers().location).toBe("https://scenecart-public-demo.vercel.app/");
 
-  expect(responses.map((response) => response.status())).toEqual([404, 404]);
+  const guideResponse = await request.get("/product-guide", { maxRedirects: 0 });
+  expect([307, 308]).toContain(guideResponse.status());
+  expect(guideResponse.headers().location).toBe("/?guide=1");
 });
 
 test("formal login and authenticated navigation open the independent public Demo", async ({ page }) => {
-  const expectedUrl = "https://scenecart-public-demo.vercel.app/demo?autoplay=1";
+  const expectedUrl = "https://scenecart-public-demo.vercel.app/?autoplay=1";
 
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/login");
@@ -71,6 +72,19 @@ test("formal login and authenticated navigation open the independent public Demo
   await expectNavigationFitsViewport(page, ".landing-nav");
 
   await page.locator('[data-demo-target="scene:example:new-car:0"]').click();
+  const requirementInput = page.getByRole("textbox", { name: "描述你的购物场景" });
+  const requirementBeforeGuide = await requirementInput.inputValue();
+  const productGuideButton = page.getByRole("button", { name: "产品说明" });
+  await productGuideButton.click();
+  await expect(page.getByRole("dialog", { name: "SceneCart AI 产品说明" })).toBeVisible();
+  await expect(page.getByText("Vercel 外层保护，通过后直接绑定固定 owner", { exact: true })).toHaveCount(0);
+  await page.getByRole("button", { name: "正式产品与 Demo" }).click();
+  await expect(page.getByText("Vercel 外层保护，通过后直接绑定固定 owner", { exact: true })).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("dialog", { name: "SceneCart AI 产品说明" })).toBeHidden();
+  await expect(productGuideButton).toBeFocused();
+  await expect(requirementInput).toHaveValue(requirementBeforeGuide);
+
   await page.locator('[data-demo-target="scene:start"]').click();
   const workflowDemoLink = page.getByRole("link", { name: /^观看 Demo 自动演示/ });
   await expect(workflowDemoLink).toBeVisible();

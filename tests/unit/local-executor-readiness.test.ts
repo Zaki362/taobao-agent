@@ -4,6 +4,16 @@ import { describe, expect, it } from "vitest";
 // The local Worker imports this native ESM module directly from Node.
 // @ts-expect-error Runtime utility intentionally has no TypeScript declarations.
 import * as readiness from "../../scripts/local-executor-readiness.mjs";
+// Worker-only security helpers intentionally remain native Node ESM outside the browser bundle.
+// @ts-expect-error Runtime utility intentionally has no TypeScript declarations.
+import * as protectionBypass from "../../scripts/vercel-protection-bypass.mjs";
+
+const {
+  isVercelProtectionChallenge,
+  redactSceneCartSecrets,
+  vercelProtectedFetch,
+  vercelProtectionBypassHeaders
+} = protectionBypass;
 
 const {
   executorDoctorExitCode,
@@ -110,5 +120,138 @@ describe("local executor MCP readiness", () => {
     expect(source).not.toContain('job.job_type === "module_search" &&\n          error instanceof ExecutorJobError');
     expect(source).toContain("automatic replay is forbidden");
     expect(source).toContain("retrying without repeating the Taobao action");
+  });
+});
+
+describe("local executor Vercel protection boundary", () => {
+  const protectedOrigin = "https://protected.scenecart.test";
+  const bypassSecret = "bypass_secret_that_must_never_be_logged_123";
+  const deviceToken = "device_token_that_must_never_be_logged_123";
+  const cronSecret = "cron_secret_that_must_never_be_logged_12345";
+  const environment = {
+    SCENECART_VERCEL_PROTECTED_ORIGIN: protectedOrigin,
+    SCENECART_VERCEL_PROTECTION_BYPASS_SECRET: bypassSecret,
+    SCENECART_DEVICE_TOKEN: deviceToken,
+    SCENECART_CRON_SECRET: cronSecret
+  };
+
+  function protectedServer(requiredAuthorization: string) {
+    return (async (input: string | URL | Request, init?: RequestInit) => {
+      const headers = new Headers(init?.headers);
+      if (headers.get("x-vercel-protection-bypass") !== bypassSecret) {
+        return new Response("<html>Vercel Authentication Required</html>", {
+          status: 403,
+          headers: { "Content-Type": "text/html", "x-vercel-id": "test" }
+        });
+      }
+      if (headers.get("authorization") !== requiredAuthorization) {
+        return new Response(JSON.stringify({ error: "invalid SceneCart credential" }), {
+          status: 401,
+          headers: { "Content-Type": "application/json" }
+        });
+      }
+      return new Response(JSON.stringify({ ok: true, path: new URL(String(input)).pathname }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" }
+      });
+    }) as typeof fetch;
+  }
+
+  it("sends a bypass only to the exact protected remote origin and fails closed when it is missing", () => {
+    expect(vercelProtectionBypassHeaders(`${protectedOrigin}/api/runtime/health`, environment))
+      .toEqual({ "x-vercel-protection-bypass": bypassSecret });
+    expect(vercelProtectionBypassHeaders("https://other.scenecart.test/api/runtime/health", environment))
+      .toEqual({});
+    expect(vercelProtectionBypassHeaders("http://127.0.0.1:3000/api/runtime/health", {}))
+      .toEqual({});
+    expect(() => vercelProtectionBypassHeaders(`${protectedOrigin}/api/runtime/health`, {
+      SCENECART_VERCEL_PROTECTED_ORIGIN: protectedOrigin
+    })).toThrow(/请求已在发送前停止/);
+  });
+
+  it("keeps Vercel bypass and SceneCart device Bearer as independent credentials", async () => {
+    const fetchImpl = protectedServer(`Bearer ${deviceToken}`);
+    const noBypass = await fetchImpl(`${protectedOrigin}/api/executor/startup`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${deviceToken}` }
+    });
+    expect(isVercelProtectionChallenge(noBypass, {
+      input: `${protectedOrigin}/api/executor/startup`,
+      body: await noBypass.text(),
+      environment
+    })).toBe(true);
+
+    const bypassOnly = await vercelProtectedFetch(
+      `${protectedOrigin}/api/executor/heartbeat`,
+      { method: "POST" },
+      { environment, fetchImpl }
+    );
+    expect(bypassOnly.status).toBe(401);
+
+    for (const pathname of [
+      "/api/executor/startup",
+      "/api/executor/heartbeat",
+      "/api/executor/jobs/claim",
+      "/api/executor/jobs/job-1/resolve"
+    ]) {
+      const response = await vercelProtectedFetch(
+        `${protectedOrigin}${pathname}`,
+        { method: "POST", headers: { Authorization: `Bearer ${deviceToken}` } },
+        { environment, fetchImpl }
+      );
+      expect(response.status).toBe(200);
+    }
+  });
+
+  it("requires bypass plus the independent cron Bearer for recovery", async () => {
+    const fetchImpl = protectedServer(`Bearer ${cronSecret}`);
+    const bypassOnly = await vercelProtectedFetch(
+      `${protectedOrigin}/api/internal/workflow-recovery?limit=5`,
+      {},
+      { environment, fetchImpl }
+    );
+    expect(bypassOnly.status).toBe(401);
+
+    const authenticated = await vercelProtectedFetch(
+      `${protectedOrigin}/api/internal/workflow-recovery?limit=5`,
+      { headers: { Authorization: `Bearer ${cronSecret}` } },
+      { environment, fetchImpl }
+    );
+    expect(authenticated.status).toBe(200);
+  });
+
+  it("classifies an outer-protection rejection and redacts every machine secret", async () => {
+    const alwaysChallenges = (async () => new Response(
+      `<html>Vercel Authentication Required ${bypassSecret} ${deviceToken} ${cronSecret}</html>`,
+      { status: 403, headers: { "Content-Type": "text/html" } }
+    )) as typeof fetch;
+    await expect(vercelProtectedFetch(
+      `${protectedOrigin}/api/runtime/health`,
+      {},
+      { environment, fetchImpl: alwaysChallenges }
+    )).rejects.toMatchObject({
+      name: "VercelProtectionError",
+      code: "vercel_protection_failed",
+      status: 403
+    });
+
+    const unsafe = `Authorization: Bearer ${deviceToken}; x-vercel-protection-bypass=${bypassSecret}; cron=${cronSecret}`;
+    const safe = redactSceneCartSecrets(unsafe, environment);
+    expect(safe).not.toContain(deviceToken);
+    expect(safe).not.toContain(bypassSecret);
+    expect(safe).not.toContain(cronSecret);
+  });
+
+  it("wires protection failures into fatal Worker paths instead of retry loops", async () => {
+    const [executorSource, doctorSource, recoverySource] = await Promise.all([
+      fs.readFile(path.join(process.cwd(), "scripts", "local-executor.mjs"), "utf8"),
+      fs.readFile(path.join(process.cwd(), "scripts", "executor-doctor.mjs"), "utf8"),
+      fs.readFile(path.join(process.cwd(), "scripts", "workflow-recovery-worker.mjs"), "utf8")
+    ]);
+    expect(executorSource).toContain("isVercelProtectionError(error)");
+    expect(executorSource).toContain("new FatalExecutorApiError(");
+    expect(doctorSource).toContain("vercelProtectedFetch");
+    expect(recoverySource).toContain("fatalAuthenticationError = error");
+    expect(recoverySource).toContain("if (fatalAuthenticationError) process.exitCode = 1");
   });
 });

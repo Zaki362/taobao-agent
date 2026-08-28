@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useRef } from "react";
 import {
   Archive,
   ArchiveRestore,
@@ -28,7 +28,6 @@ import { ProductGuideLink } from "@/components/product-guide-link";
 import { API_INPUT_LIMITS } from "@/lib/api/input-limits";
 import { Textarea } from "@/components/ui/textarea";
 import {
-  clearWorkflowStorageForOwner,
   scenarioOptions,
   stageLabels,
 } from "@/components/dashboard-config";
@@ -85,7 +84,7 @@ const workflowPhases: Array<{ label: string; stages: WorkflowStage[] }> = [
   { label: "推荐", stages: ["review_results", "carting", "cart_review"] }
 ];
 
-export type DashboardNavigationDestination = "home" | "history" | "settings" | "login";
+export type DashboardNavigationDestination = "home" | "history" | "settings";
 
 export function TopHeader({
   currentStage,
@@ -98,31 +97,7 @@ export function TopHeader({
   onNavigationRequest?: (destination: DashboardNavigationDestination) => void;
   showProductGuideLink?: boolean;
 }) {
-  const [authenticated, setAuthenticated] = useState(false);
-  const [authenticationRequired, setAuthenticationRequired] = useState(false);
-  const [accountId, setAccountId] = useState("");
   const activePhaseIndex = Math.max(0, workflowPhases.findIndex((phase) => phase.stages.includes(currentStage)));
-
-  useEffect(() => {
-    if (authMode === "frozen-demo") return;
-    fetch("/api/auth/me")
-      .then((response) => response.json())
-      .then((payload) => {
-        setAuthenticated(payload.authenticated === true);
-        setAuthenticationRequired(payload.authentication_required === true);
-        setAccountId(typeof payload.user?.id === "string" ? payload.user.id : "");
-      })
-      .catch(() => undefined);
-  }, [authMode]);
-
-  async function logout() {
-    await fetch("/api/auth/logout", { method: "POST" }).catch(() => undefined);
-    clearWorkflowStorageForOwner(
-      window.localStorage,
-      accountId ? `user:${accountId}` : authenticationRequired ? undefined : "anonymous"
-    );
-    window.location.assign(authenticationRequired ? "/login" : "/");
-  }
 
   return (
     <header className="workflow-header">
@@ -178,21 +153,6 @@ export function TopHeader({
         >
           <Settings2 className="h-4 w-4" />
         </a>
-        {authenticationRequired ? (
-          authenticated ? (
-            <button type="button" onClick={logout} className="header-text-link">退出</button>
-          ) : (
-            <a
-              href={onNavigationRequest ? "/demo" : "/login"}
-              className="header-text-link"
-              onClick={(event) => {
-                if (!onNavigationRequest) return;
-                event.preventDefault();
-                onNavigationRequest("login");
-              }}
-            >登录</a>
-          )
-        ) : null}
       </nav>
     </header>
   );
@@ -240,33 +200,8 @@ export function LandingPage({
   showProductGuideLink?: boolean;
 }) {
   const inputRef = useRef<HTMLTextAreaElement>(null);
-  const [authenticated, setAuthenticated] = useState(false);
-  const [authenticationRequired, setAuthenticationRequired] = useState(false);
-  const [accountEmail, setAccountEmail] = useState("");
-  const [accountId, setAccountId] = useState("");
-  const [accountMenuOpen, setAccountMenuOpen] = useState(false);
   const canStart = sceneInput.trim().length >= 6 && interactiveReady && !busy;
   const scenario = getScenarioConfig(selectedScenario);
-
-  useEffect(() => {
-    if (authMode === "frozen-demo") return;
-    fetch("/api/auth/me")
-      .then((response) => response.json())
-      .then((payload) => {
-        setAuthenticated(payload.authenticated === true);
-        setAuthenticationRequired(payload.authentication_required === true);
-        setAccountEmail(typeof payload.user?.email === "string" ? payload.user.email : "");
-        setAccountId(typeof payload.user?.id === "string" ? payload.user.id : "");
-      })
-      .catch(() => undefined);
-  }, [authMode]);
-
-  async function logout() {
-    setAccountMenuOpen(false);
-    await fetch("/api/auth/logout", { method: "POST" }).catch(() => undefined);
-    clearWorkflowStorageForOwner(window.localStorage, accountId ? `user:${accountId}` : undefined);
-    window.location.assign("/login");
-  }
 
   return (
     <div className="landing-shell">
@@ -313,66 +248,6 @@ export function LandingPage({
           >
             <Settings2 className="h-4 w-4" />
           </a>
-          {authenticationRequired ? (
-            authenticated ? (
-              <div className="relative">
-                <button
-                  type="button"
-                  className="header-text-link"
-                  aria-label="账户菜单"
-                  aria-haspopup="menu"
-                  aria-expanded={accountMenuOpen}
-                  onClick={() => setAccountMenuOpen((open) => !open)}
-                >
-                  账户
-                </button>
-                {accountMenuOpen ? (
-                  <div
-                    role="menu"
-                    aria-label="账户菜单"
-                    className="absolute right-0 top-11 z-50 w-64 rounded-[20px] border border-border/70 bg-white p-2 shadow-xl"
-                  >
-                    <div className="px-3 py-2">
-                      <p className="text-[11px] font-medium uppercase tracking-[0.12em] text-muted-foreground">当前账户</p>
-                      <p className="mt-1 truncate text-sm font-medium text-foreground" title={accountEmail || "已登录"}>
-                        {accountEmail || "已登录"}
-                      </p>
-                    </div>
-                    <a
-                      href={onNavigationRequest ? "/demo" : "/settings/executor"}
-                      role="menuitem"
-                      className="flex h-10 items-center rounded-[14px] px-3 text-sm text-foreground transition hover:bg-muted"
-                      onClick={(event) => {
-                        if (!onNavigationRequest) return;
-                        event.preventDefault();
-                        onNavigationRequest("settings");
-                      }}
-                    >
-                      执行器设置
-                    </a>
-                    <button
-                      type="button"
-                      role="menuitem"
-                      onClick={logout}
-                      className="flex h-10 w-full items-center rounded-[14px] px-3 text-left text-sm text-red-600 transition hover:bg-red-50"
-                    >
-                      退出登录
-                    </button>
-                  </div>
-                ) : null}
-              </div>
-            ) : (
-              <a
-                href={onNavigationRequest ? "/demo" : "/login"}
-                className="header-text-link"
-                onClick={(event) => {
-                  if (!onNavigationRequest) return;
-                  event.preventDefault();
-                  onNavigationRequest("login");
-                }}
-              >登录</a>
-            )
-          ) : null}
         </nav>
       </header>
 

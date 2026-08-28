@@ -36,6 +36,7 @@ type ReadinessCheck = {
 
 type Readiness = {
   product_mode: "development" | "production";
+  access_mode: "single_user" | "account";
   demo_cart_fallback: boolean;
   ready_for_production: boolean;
   operational_for_shopping: boolean;
@@ -97,6 +98,7 @@ export function ExecutorSettings() {
   const authenticationRequiredDevices = activeDevices.filter((device) => executorDeviceViewState(device) === "authentication_required");
   const searchAvailable = readiness?.executor_capabilities.capabilities.module_search.available ?? false;
   const cartAvailable = readiness?.executor_capabilities.capabilities.add_to_cart.available ?? false;
+  const singleUserMode = readiness?.access_mode === "single_user";
   const environmentConfig = `TAOBAO_EXECUTION_BACKEND=local_executor\nSCENECART_API_URL=${apiUrl}\nSCENECART_DEVICE_TOKEN=${token || "你的设备令牌"}`;
   const configureCommand = `SCENECART_API_URL=${apiUrl} npm run executor:configure`;
   const doctorCommand = "npm run executor:doctor";
@@ -217,7 +219,9 @@ export function ExecutorSettings() {
     },
     {
       title: "注册执行设备",
-      detail: "生成仅属于当前账号和这台电脑的一次性设备令牌，再通过安全配置命令保存到本机。",
+      detail: singleUserMode
+        ? "正式单用户模式不会把执行器密钥发送给浏览器；继续使用仅保存在本机的既有设备令牌。"
+        : "生成仅属于当前账号和这台电脑的一次性设备令牌，再通过安全配置命令保存到本机。",
       status: activeDevices.length > 0 ? "done" as const : "pending" as const,
       icon: ShieldCheck
     },
@@ -245,7 +249,8 @@ export function ExecutorSettings() {
           </div>
           <h1 className="mt-3 text-3xl font-semibold">连接这台电脑上的淘宝执行器</h1>
           <p className="mt-3 max-w-3xl text-sm leading-7 text-muted-foreground">
-            网页只负责任务规划和状态展示；真实淘宝操作由本地执行器领取持久化任务后完成。设备令牌只在注册时展示一次。
+            网页只负责任务规划和状态展示；真实淘宝操作由本地执行器领取持久化任务后完成。
+            {singleUserMode ? " 固定单用户模式不会向浏览器下发设备令牌。" : " 设备令牌只在注册时展示一次。"}
           </p>
           <div className="mt-5 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
             <span className={`rounded-full px-3 py-1.5 font-semibold ${readiness?.product_mode === "production" ? "bg-emerald-50 text-emerald-700" : "bg-slate-100 text-slate-700"}`}>
@@ -429,21 +434,29 @@ export function ExecutorSettings() {
             </div>
           ))}
           {devices.length === 0 ? <p className="text-sm text-muted-foreground">还没有已注册设备。</p> : null}
-          <label className="flex items-start gap-3 rounded-[18px] border border-border/80 bg-white px-4 py-3 text-sm">
-            <input
-              type="checkbox"
-              checked={enableCartCapability}
-              onChange={(event) => setEnableCartCapability(event.target.checked)}
-              className="mt-1 h-4 w-4 rounded border-border accent-primary"
-            />
-            <span>
-              <span className="font-medium text-foreground">允许这台设备执行真实加购</span>
-              <span className="mt-1 block text-xs leading-5 text-muted-foreground">
-                默认只授予商品搜索。开启后仍会在每次加购前要求用户显式确认，不包含下单或付款权限。
-              </span>
-            </span>
-          </label>
-          <Button onClick={register} disabled={busy}>{busy ? "正在注册" : "注册当前设备"}</Button>
+          {singleUserMode ? (
+            <div className="rounded-[18px] border border-amber-200 bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-900">
+              为避免执行器密钥进入浏览器，正式单用户模式已关闭网页注册。设备 Bearer Token 与 Vercel Protection Bypass 只保存在本机 Worker 环境中。
+            </div>
+          ) : (
+            <>
+              <label className="flex items-start gap-3 rounded-[18px] border border-border/80 bg-white px-4 py-3 text-sm">
+                <input
+                  type="checkbox"
+                  checked={enableCartCapability}
+                  onChange={(event) => setEnableCartCapability(event.target.checked)}
+                  className="mt-1 h-4 w-4 rounded border-border accent-primary"
+                />
+                <span>
+                  <span className="font-medium text-foreground">允许这台设备执行真实加购</span>
+                  <span className="mt-1 block text-xs leading-5 text-muted-foreground">
+                    默认只授予商品搜索。开启后仍会在每次加购前要求用户显式确认，不包含下单或付款权限。
+                  </span>
+                </span>
+              </label>
+              <Button onClick={register} disabled={busy}>{busy ? "正在注册" : "注册当前设备"}</Button>
+            </>
+          )}
           {error ? <p className="rounded-[16px] bg-red-50 px-4 py-3 text-sm text-red-700">{error}</p> : null}
         </CardContent>
       </Card>

@@ -27,8 +27,16 @@ export function resolvePublicDemoOrigin(configuredUrl?: string) {
 }
 
 export function buildPublicDemoAutoplayUrl(configuredUrl?: string) {
-  return new URL("/demo?autoplay=1", `${resolvePublicDemoOrigin(configuredUrl)}/`).toString();
+  return new URL("/?autoplay=1", `${resolvePublicDemoOrigin(configuredUrl)}/`).toString();
 }
+
+export function buildPublicDemoRootUrl(configuredUrl?: string) {
+  return `${resolvePublicDemoOrigin(configuredUrl)}/`;
+}
+
+export const PUBLIC_DEMO_ROOT_URL = buildPublicDemoRootUrl(
+  process.env.NEXT_PUBLIC_SCENECART_PUBLIC_DEMO_URL
+);
 
 export const PUBLIC_DEMO_AUTOPLAY_URL = buildPublicDemoAutoplayUrl(
   process.env.NEXT_PUBLIC_SCENECART_PUBLIC_DEMO_URL

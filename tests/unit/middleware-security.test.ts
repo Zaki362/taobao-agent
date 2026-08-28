@@ -8,6 +8,13 @@ const originalAppOrigin = process.env.APP_ORIGIN;
 const originalAccessMode = process.env.SCENECART_ACCESS_MODE;
 const originalVercelEnvironment = process.env.VERCEL_ENV;
 const originalVercelUrl = process.env.VERCEL_URL;
+const originalProtectionVerified = process.env.SCENECART_OUTER_PROTECTION_VERIFIED;
+const originalProtectionScope = process.env.SCENECART_OUTER_PROTECTION_SCOPE;
+const originalProtectionVerifiedAt = process.env.SCENECART_OUTER_PROTECTION_VERIFIED_AT;
+const originalProtectionProjectId = process.env.SCENECART_OUTER_PROTECTION_PROJECT_ID;
+const originalProtectionOrigin = process.env.SCENECART_OUTER_PROTECTION_ORIGIN;
+const originalVercelProjectId = process.env.VERCEL_PROJECT_ID;
+const originalVercelProductionUrl = process.env.VERCEL_PROJECT_PRODUCTION_URL;
 
 function restore(name: "AUTH_REQUIRED" | "APP_ORIGIN", value: string | undefined) {
   if (value === undefined) delete process.env[name];
@@ -36,6 +43,20 @@ describe("API mutation origin protection", () => {
     else process.env.VERCEL_ENV = originalVercelEnvironment;
     if (originalVercelUrl === undefined) delete process.env.VERCEL_URL;
     else process.env.VERCEL_URL = originalVercelUrl;
+    if (originalProtectionVerified === undefined) delete process.env.SCENECART_OUTER_PROTECTION_VERIFIED;
+    else process.env.SCENECART_OUTER_PROTECTION_VERIFIED = originalProtectionVerified;
+    if (originalProtectionScope === undefined) delete process.env.SCENECART_OUTER_PROTECTION_SCOPE;
+    else process.env.SCENECART_OUTER_PROTECTION_SCOPE = originalProtectionScope;
+    if (originalProtectionVerifiedAt === undefined) delete process.env.SCENECART_OUTER_PROTECTION_VERIFIED_AT;
+    else process.env.SCENECART_OUTER_PROTECTION_VERIFIED_AT = originalProtectionVerifiedAt;
+    if (originalProtectionProjectId === undefined) delete process.env.SCENECART_OUTER_PROTECTION_PROJECT_ID;
+    else process.env.SCENECART_OUTER_PROTECTION_PROJECT_ID = originalProtectionProjectId;
+    if (originalProtectionOrigin === undefined) delete process.env.SCENECART_OUTER_PROTECTION_ORIGIN;
+    else process.env.SCENECART_OUTER_PROTECTION_ORIGIN = originalProtectionOrigin;
+    if (originalVercelProjectId === undefined) delete process.env.VERCEL_PROJECT_ID;
+    else process.env.VERCEL_PROJECT_ID = originalVercelProjectId;
+    if (originalVercelProductionUrl === undefined) delete process.env.VERCEL_PROJECT_PRODUCTION_URL;
+    else process.env.VERCEL_PROJECT_PRODUCTION_URL = originalVercelProductionUrl;
   });
 
   it("does not let an arbitrary Bearer value bypass Origin checks for a session request", async () => {
@@ -82,11 +103,33 @@ describe("API mutation origin protection", () => {
     process.env.SCENECART_ACCESS_MODE = "single_user";
     process.env.VERCEL_ENV = "preview";
     process.env.VERCEL_URL = "scenecart-owner-preview.example.vercel.app";
+    process.env.SCENECART_OUTER_PROTECTION_VERIFIED = "true";
+    process.env.SCENECART_OUTER_PROTECTION_SCOPE = "preview";
+    process.env.SCENECART_OUTER_PROTECTION_VERIFIED_AT = new Date().toISOString();
+    process.env.SCENECART_OUTER_PROTECTION_PROJECT_ID = "project_scenecart";
+    process.env.SCENECART_OUTER_PROTECTION_ORIGIN = "https://scenecart.example.com";
+    process.env.VERCEL_PROJECT_ID = "project_scenecart";
+    process.env.VERCEL_PROJECT_PRODUCTION_URL = "scenecart.example.com";
 
     const response = middleware(mutationRequest({
       origin: "https://scenecart-owner-preview.example.vercel.app"
     }));
 
     expect(response.headers.get("x-middleware-next")).toBe("1");
+  });
+
+  it("fails closed for browser mutations when single-user Preview lacks proof", async () => {
+    process.env.SCENECART_ACCESS_MODE = "single_user";
+    process.env.VERCEL_ENV = "preview";
+    delete process.env.SCENECART_OUTER_PROTECTION_VERIFIED;
+
+    const response = middleware(mutationRequest({
+      origin: "https://scenecart.example.com"
+    }));
+
+    expect(response.status).toBe(503);
+    await expect(response.json()).resolves.toMatchObject({
+      code: "single_user_outer_protection_required"
+    });
   });
 });

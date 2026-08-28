@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import type { LucideIcon } from "lucide-react";
 import {
   ArrowRight,
@@ -126,7 +126,7 @@ const architectureLayers: Array<{ icon: LucideIcon; title: string; detail: strin
 
 const comparisonRows = [
   ["主要用途", "个人真实体验与购物执行", "项目展示与公开流程体验"],
-  ["登录", "需要账户登录", "无需登录"],
+  ["访问", "Vercel 外层保护，通过后直接绑定固定 owner", "完全公开，无需登录"],
   ["需求与规划", "DeepSeek + 安全规则", "冻结样本流程"],
   ["商品数据", "本地执行器连接淘宝工具", "脱敏历史快照或固定样本"],
   ["价格与库存", "以当次真实搜索为准", "不代表实时价格和库存"],
@@ -240,6 +240,23 @@ function GuidePanel({ sectionId, mode }: { sectionId: GuideSectionId; mode: Prod
         <p className="product-guide-plain-note">
           信息过载并不等于决策充分。传统电商解决“已知目标商品”的查找问题，SceneCart 聚焦“尚未想清楚完整清单”的任务型购物问题。
         </p>
+        <div className="product-guide-problem-grid" aria-label="传统电商难以充分承接的购物问题">
+          <div>
+            <span>场景化购物</span>
+            <h3>组合需求难以被单点搜索承接</h3>
+            <p>新车置办、露营、装修或搬家包含多个相互关联的模块，用户需要的是一套按阶段和预算组织的方案，而不是彼此孤立的搜索结果。</p>
+          </div>
+          <div>
+            <span>礼物选购</span>
+            <h3>需求尚未收敛，关键词也不明确</h3>
+            <p>用户往往还没想清楚送什么，需要先结合对象、关系、场合、预算与偏好探索方向，再逐步收敛到合适候选。</p>
+          </div>
+          <div>
+            <span>价格决策</span>
+            <h3>信息很多，却难以形成购买判断</h3>
+            <p>价格、规格、优惠、测评和风险分散在不同页面。AI 更适合统一整理这些信息，解释取舍，并帮助用户判断现在是否值得买。</p>
+          </div>
+        </div>
       </section>
     );
   }
@@ -376,7 +393,7 @@ function GuidePanel({ sectionId, mode }: { sectionId: GuideSectionId; mode: Prod
           <ShieldCheck className="h-4 w-4 shrink-0" aria-hidden="true" />
           <p>{mode === "demo"
             ? "当前是公开 Demo。你可以体验完整产品流程，但其中商品与价格不代表实时淘宝数据。"
-            : "当前是正式产品。真实搜索和加购还需要本地执行器在线，并由用户明确确认。"}</p>
+            : "当前是受 Vercel 外层保护的正式产品。通过验证后会直接绑定服务端配置的固定 owner；真实搜索和加购仍需要本地执行器在线。"}</p>
         </div>
       </section>
     );
@@ -425,11 +442,36 @@ export function ProductGuideDialog({ mode, open, onOpenChange }: { mode: Product
   const closeDialog = () => onOpenChange(false);
   const groups = ["产品认知", "产品运行", "版本与边界"] as const;
 
+  function handleNavigationKeyDown(event: KeyboardEvent<HTMLButtonElement>, sectionId: GuideSectionId) {
+    const currentIndex = guideSections.findIndex((section) => section.id === sectionId);
+    let nextIndex: number | null = null;
+
+    if (event.key === "ArrowDown" || event.key === "ArrowRight") {
+      nextIndex = (currentIndex + 1) % guideSections.length;
+    } else if (event.key === "ArrowUp" || event.key === "ArrowLeft") {
+      nextIndex = (currentIndex - 1 + guideSections.length) % guideSections.length;
+    } else if (event.key === "Home") {
+      nextIndex = 0;
+    } else if (event.key === "End") {
+      nextIndex = guideSections.length - 1;
+    }
+
+    if (nextIndex === null) return;
+    event.preventDefault();
+    const nextSection = guideSections[nextIndex];
+    setActiveSection(nextSection.id);
+    dialogRef.current
+      ?.querySelector<HTMLButtonElement>(`[data-guide-section="${nextSection.id}"]`)
+      ?.focus();
+  }
+
   return (
     <dialog
+      id="scenecart-product-guide-dialog"
       ref={dialogRef}
       className="product-guide-modal"
       aria-labelledby="product-guide-dialog-title"
+      aria-describedby="product-guide-dialog-description"
       aria-modal="true"
       onCancel={(event) => { event.preventDefault(); closeDialog(); }}
       onClose={closeDialog}
@@ -443,7 +485,7 @@ export function ProductGuideDialog({ mode, open, onOpenChange }: { mode: Product
             <div>
               <p>PRODUCT GUIDE</p>
               <h1 id="product-guide-dialog-title">SceneCart AI 产品说明</h1>
-              <span>产品定位、当前能力、技术架构与公开 Demo 说明</span>
+              <span id="product-guide-dialog-description">产品定位、当前能力、技术架构与公开 Demo 说明</span>
             </div>
           </div>
           <button type="button" className="product-guide-close" onClick={closeDialog} aria-label="关闭产品说明">
@@ -460,10 +502,15 @@ export function ProductGuideDialog({ mode, open, onOpenChange }: { mode: Product
                   {guideSections.filter((section) => section.group === group).map((section) => (
                     <button
                       key={section.id}
+                      id={`product-guide-tab-${section.id}`}
                       type="button"
                       className={activeSection === section.id ? "product-guide-nav-active" : undefined}
                       aria-current={activeSection === section.id ? "page" : undefined}
+                      aria-controls="scenecart-product-guide-panel"
+                      tabIndex={activeSection === section.id ? 0 : -1}
+                      data-guide-section={section.id}
                       onClick={() => setActiveSection(section.id)}
+                      onKeyDown={(event) => handleNavigationKeyDown(event, section.id)}
                     >
                       {section.label}
                     </button>
@@ -472,39 +519,23 @@ export function ProductGuideDialog({ mode, open, onOpenChange }: { mode: Product
               ))}
             </nav>
             <div className="product-guide-mode-cards" aria-label="当前运行版本">
-              <div className={!isDemo ? "product-guide-mode-active" : undefined}><strong>正式产品</strong><span>账户与真实任务环境</span></div>
+              <div className={!isDemo ? "product-guide-mode-active" : undefined}><strong>正式产品</strong><span>Vercel 保护、固定 owner 与真实任务环境</span></div>
               <div className={isDemo ? "product-guide-mode-active" : undefined}><strong>公开 Demo</strong><span>冻结数据体验版</span></div>
             </div>
           </aside>
 
-          <article ref={contentRef} className="product-guide-panel" key={activeSection}>
+          <article
+            id="scenecart-product-guide-panel"
+            ref={contentRef}
+            className="product-guide-panel"
+            key={activeSection}
+            role="region"
+            aria-labelledby={`product-guide-tab-${activeSection}`}
+          >
             <GuidePanel sectionId={activeSection} mode={mode} />
           </article>
         </div>
       </div>
     </dialog>
-  );
-}
-
-export function ProductGuideRoute({ mode }: { mode: ProductGuideMode }) {
-  const [open, setOpen] = useState(true);
-  const homeHref = mode === "demo" ? "/demo/" : "/";
-
-  function handleOpenChange(nextOpen: boolean) {
-    setOpen(nextOpen);
-    if (!nextOpen) window.location.assign(homeHref);
-  }
-
-  return (
-    <main className="product-guide-route" aria-label="SceneCart 产品说明入口">
-      <header className="product-guide-route-header">
-        <span className="flex items-center gap-3">
-          <BrandMark />
-          <span><strong>SceneCart</strong><small>场景化购物助手</small></span>
-        </span>
-      </header>
-      <div className="product-guide-route-placeholder" aria-hidden="true"><span /><span /><span /></div>
-      <ProductGuideDialog mode={mode} open={open} onOpenChange={handleOpenChange} />
-    </main>
   );
 }

@@ -201,15 +201,17 @@ export const postgresRuntimeRepository: RuntimeRepository = {
   },
 
   async saveSession(state) {
-    await query(
+    const result = await query(
       `INSERT INTO shopping_sessions(id, user_id, state)
        VALUES($1, $2, $3::jsonb)
        ON CONFLICT(id) DO UPDATE SET
-         user_id = EXCLUDED.user_id,
          state = EXCLUDED.state,
-         updated_at = NOW()`,
+         updated_at = NOW()
+       WHERE shopping_sessions.user_id IS NOT DISTINCT FROM EXCLUDED.user_id
+       RETURNING id`,
       [state.session_id, state.owner_id ?? null, JSON.stringify(state)]
     );
+    if (!result.rowCount) throw new Error("session owner mismatch");
   },
 
   async listSessions(userId) {
@@ -433,11 +435,11 @@ export const postgresRuntimeRepository: RuntimeRepository = {
     const maxAttempts = input.job_type === "add_to_cart" ? 1 : input.max_attempts ?? 3;
     const result = await query(
       `INSERT INTO agent_jobs(id, user_id, session_id, job_type, idempotency_key, payload, priority, max_attempts)
-       SELECT $1, $2, $3, $4, $5, $6::jsonb, $7, $8
-       WHERE NOT EXISTS (
-         SELECT 1 FROM shopping_sessions AS sessions
-         WHERE sessions.id = $3 AND sessions.state ? 'archived_at'
-       )
+       SELECT $1, $2, sessions.id, $4, $5, $6::jsonb, $7, $8
+       FROM shopping_sessions AS sessions
+       WHERE sessions.id = $3
+         AND sessions.user_id IS NOT DISTINCT FROM $2
+         AND NOT (sessions.state ? 'archived_at')
        ON CONFLICT(idempotency_key) DO UPDATE SET
          status = CASE WHEN agent_jobs.status IN ('failed', 'cancelled') THEN 'pending' ELSE agent_jobs.status END,
          payload = CASE WHEN agent_jobs.status IN ('failed', 'cancelled') THEN EXCLUDED.payload ELSE agent_jobs.payload END,
@@ -453,7 +455,9 @@ export const postgresRuntimeRepository: RuntimeRepository = {
          lease_protocol = CASE WHEN agent_jobs.status IN ('failed', 'cancelled') THEN NULL ELSE agent_jobs.lease_protocol END,
          completed_at = CASE WHEN agent_jobs.status IN ('failed', 'cancelled') THEN NULL ELSE agent_jobs.completed_at END,
          updated_at = CASE WHEN agent_jobs.status IN ('failed', 'cancelled') THEN NOW() ELSE agent_jobs.updated_at END
-       WHERE NOT EXISTS (
+       WHERE agent_jobs.user_id IS NOT DISTINCT FROM EXCLUDED.user_id
+         AND agent_jobs.session_id = EXCLUDED.session_id
+         AND NOT EXISTS (
          SELECT 1
          FROM LATERAL (
            SELECT hold_events.event_type
@@ -484,15 +488,30 @@ export const postgresRuntimeRepository: RuntimeRepository = {
     );
     if (!result.rowCount) {
       const existing = await query(
-        "SELECT id FROM agent_jobs WHERE idempotency_key = $1",
+        "SELECT id, user_id, session_id FROM agent_jobs WHERE idempotency_key = $1",
         [input.idempotency_key]
       );
+      if (
+        existing.rowCount &&
+        (
+          existing.rows[0].user_id !== (input.user_id ?? null) ||
+          String(existing.rows[0].session_id) !== input.session_id
+        )
+      ) {
+        throw new Error("job owner mismatch");
+      }
       if (
         existing.rowCount &&
         await selectActiveAuthenticationFailureHold(String(existing.rows[0].id))
       ) {
         throw new Error("authentication failure hold requires explicit user release");
       }
+      const session = await query(
+        "SELECT user_id, state ? 'archived_at' AS archived FROM shopping_sessions WHERE id = $1",
+        [input.session_id]
+      );
+      if (!session.rowCount) throw new Error("session not found");
+      if (session.rows[0].user_id !== (input.user_id ?? null)) throw new Error("job owner mismatch");
       throw new Error("session archived");
     }
     return normalizeJob(result.rows[0]);
@@ -921,7 +940,7 @@ export const postgresRuntimeRepository: RuntimeRepository = {
 
   async cancelJob(jobId, userId) {
     const values: unknown[] = [jobId];
-    const ownerClause = userId ? "AND (user_id IS NULL OR user_id = $2)" : "";
+    const ownerClause = userId ? "AND user_id = $2" : "";
     if (userId) values.push(userId);
     const result = await query(
       `UPDATE agent_jobs SET

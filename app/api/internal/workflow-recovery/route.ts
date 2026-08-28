@@ -1,5 +1,6 @@
 import { NextRequest } from "next/server";
 import { recoverAgentWorkflows } from "@/lib/agent/workflow-recovery";
+import { configuredSingleUserId, getSceneCartAccessMode } from "@/lib/auth/access-mode";
 import { apiOk, apiRouteError } from "@/lib/api/responses";
 import { getRuntimeRepository } from "@/lib/runtime";
 import { assertWorkflowRecoveryAccess } from "@/lib/runtime/internal-auth";
@@ -14,8 +15,12 @@ async function recover(request: NextRequest) {
     assertWorkflowRecoveryAccess(request);
     const limitValue = Number(request.nextUrl.searchParams.get("limit") ?? 5);
     const limit = Math.min(Math.max(Number.isFinite(limitValue) ? limitValue : 5, 1), 5);
+    const recoveryOwner = getSceneCartAccessMode() === "single_user"
+      ? configuredSingleUserId() ?? undefined
+      : undefined;
     try {
       const result = await recoverAgentWorkflows({
+        userId: recoveryOwner,
         limit,
         maxRecoveries: limit
       });

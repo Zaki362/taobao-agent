@@ -1,4 +1,8 @@
 import { ApiRouteError } from "@/lib/api/responses";
+import {
+  inspectOuterProtectionConfiguration,
+  isLocalSingleUserDevelopment
+} from "@/lib/auth/outer-protection";
 import { getRuntimeRepository } from "@/lib/runtime";
 
 export type SceneCartAccessMode = "account" | "single_user";
@@ -21,27 +25,31 @@ export function isSingleUserAccessMode() {
 
 export function configuredSingleUserId() {
   if (!isSingleUserAccessMode()) return null;
-  const vercelEnvironment = process.env.VERCEL_ENV?.trim();
-  const protectedPreview = vercelEnvironment === "preview";
-  const localDevelopment = (
-    !vercelEnvironment || vercelEnvironment === "development"
-  ) && process.env.NODE_ENV !== "production";
-  if (!protectedPreview && !localDevelopment) {
-    throw new ApiRouteError(
-      "单用户免登录模式仅允许本地或受保护的 Preview，不能用于 Production",
-      503,
-      "single_user_production_forbidden"
-    );
+  if (!isLocalSingleUserDevelopment()) {
+    const outerProtection = inspectOuterProtectionConfiguration();
+    if (!outerProtection.valid) {
+      throw new ApiRouteError(
+        `固定单用户访问的外层保护配置无效：${outerProtection.issues.join("；")}`,
+        503,
+        "single_user_outer_protection_required"
+      );
+    }
   }
   const userId = process.env.SCENECART_SINGLE_USER_ID?.trim() ?? "";
   if (!UUID_PATTERN.test(userId)) {
     throw new ApiRouteError(
-      "单用户免登录模式缺少有效的 SCENECART_SINGLE_USER_ID",
+      "固定单用户模式缺少有效的 SCENECART_SINGLE_USER_ID",
       503,
       "single_user_owner_misconfigured"
     );
   }
   return userId.toLowerCase();
+}
+
+function configuredSingleUserIdForInspection() {
+  if (!isSingleUserAccessMode()) return null;
+  const userId = process.env.SCENECART_SINGLE_USER_ID?.trim() ?? "";
+  return UUID_PATTERN.test(userId) ? userId.toLowerCase() : null;
 }
 
 export async function resolveSingleUserOwner() {
@@ -58,11 +66,16 @@ export async function resolveSingleUserOwner() {
   return user;
 }
 
+export async function inspectConfiguredSingleUserOwner() {
+  const userId = configuredSingleUserIdForInspection();
+  if (!userId) return null;
+  return getRuntimeRepository().findUserById(userId);
+}
+
 export function assertInteractiveAuthenticationEnabled() {
-  if (!isSingleUserAccessMode()) return;
   throw new ApiRouteError(
-    "当前使用单用户免登录模式，不开放账号登录或注册",
-    404,
+    "SceneCart 使用固定单用户访问，不开放账号登录或注册",
+    410,
     "interactive_authentication_disabled"
   );
 }

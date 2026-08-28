@@ -11,7 +11,14 @@ const original = {
   singleUserId: process.env.SCENECART_SINGLE_USER_ID,
   vercelEnvironment: process.env.VERCEL_ENV,
   authCookieSecure: process.env.AUTH_COOKIE_SECURE,
-  appOrigin: process.env.APP_ORIGIN
+  appOrigin: process.env.APP_ORIGIN,
+  protectionVerified: process.env.SCENECART_OUTER_PROTECTION_VERIFIED,
+  protectionScope: process.env.SCENECART_OUTER_PROTECTION_SCOPE,
+  protectionVerifiedAt: process.env.SCENECART_OUTER_PROTECTION_VERIFIED_AT,
+  protectionProjectId: process.env.SCENECART_OUTER_PROTECTION_PROJECT_ID,
+  protectionOrigin: process.env.SCENECART_OUTER_PROTECTION_ORIGIN,
+  vercelProjectId: process.env.VERCEL_PROJECT_ID,
+  vercelProductionUrl: process.env.VERCEL_PROJECT_PRODUCTION_URL
 };
 
 function restore(key: keyof typeof original, environmentKey: string) {
@@ -29,7 +36,14 @@ afterEach(() => {
   restore("singleUserId", "SCENECART_SINGLE_USER_ID");
   restore("vercelEnvironment", "VERCEL_ENV");
   restore("authCookieSecure", "AUTH_COOKIE_SECURE");
-  restore("appOrigin", "APP_ORIGIN");
+    restore("appOrigin", "APP_ORIGIN");
+    restore("protectionVerified", "SCENECART_OUTER_PROTECTION_VERIFIED");
+    restore("protectionScope", "SCENECART_OUTER_PROTECTION_SCOPE");
+    restore("protectionVerifiedAt", "SCENECART_OUTER_PROTECTION_VERIFIED_AT");
+    restore("protectionProjectId", "SCENECART_OUTER_PROTECTION_PROJECT_ID");
+    restore("protectionOrigin", "SCENECART_OUTER_PROTECTION_ORIGIN");
+    restore("vercelProjectId", "VERCEL_PROJECT_ID");
+    restore("vercelProductionUrl", "VERCEL_PROJECT_PRODUCTION_URL");
 });
 
 describe("formal runtime safety", () => {
@@ -45,16 +59,24 @@ describe("formal runtime safety", () => {
     process.env.SCENECART_ACCESS_MODE = "single_user";
     process.env.SCENECART_SINGLE_USER_ID = "11111111-1111-4111-8111-111111111111";
     process.env.VERCEL_ENV = "preview";
+    process.env.APP_ORIGIN = "https://scenecart.example.com";
+    process.env.SCENECART_OUTER_PROTECTION_VERIFIED = "true";
+    process.env.SCENECART_OUTER_PROTECTION_SCOPE = "preview";
+    process.env.SCENECART_OUTER_PROTECTION_VERIFIED_AT = new Date().toISOString();
+    process.env.SCENECART_OUTER_PROTECTION_PROJECT_ID = "project_scenecart";
+    process.env.SCENECART_OUTER_PROTECTION_ORIGIN = "https://scenecart.example.com";
+    process.env.VERCEL_PROJECT_ID = "project_scenecart";
+    process.env.VERCEL_PROJECT_PRODUCTION_URL = "scenecart.example.com";
 
     expect(isAuthenticationRequired()).toBe(false);
   });
 
-  it("makes the authentication contract fail closed in Vercel Production", () => {
+  it("makes the authentication contract fail closed without Production outer protection", () => {
     process.env.SCENECART_ACCESS_MODE = "single_user";
     process.env.SCENECART_SINGLE_USER_ID = "11111111-1111-4111-8111-111111111111";
     process.env.VERCEL_ENV = "production";
 
-    expect(() => isAuthenticationRequired()).toThrow("不能用于 Production");
+    expect(() => isAuthenticationRequired()).toThrow("外层保护配置无效");
   });
 
   it("refuses to use the local repository in formal product mode", () => {

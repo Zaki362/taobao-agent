@@ -33,6 +33,11 @@ import {
   PendingResultAcknowledgementStore,
   prepareTaobaoCartAction
 } from "./local-executor-utils.mjs";
+import {
+  isVercelProtectionError,
+  safeMachineErrorMessage,
+  vercelProtectedFetch
+} from "./vercel-protection-bypass.mjs";
 
 nextEnv.loadEnvConfig(process.cwd());
 
@@ -88,7 +93,7 @@ let lastTaobaoSearchFinishedAt = 0;
 const leaseGuard = new ExecutorLeaseGuard({
   failureLimit: leaseFailureLimit,
   onLeaseLost: ({ jobId, reason }) => {
-    process.stderr.write(`[local-executor] lease lost for ${jobId}: ${reason}; stopping local execution\n`);
+    process.stderr.write(`[local-executor] lease lost for ${jobId}: ${safeMachineErrorMessage(reason)}; stopping local execution\n`);
   }
 });
 const pendingAuthFailureStore = new PendingAuthenticationFailureStore(pendingAuthFailurePath);
@@ -136,16 +141,29 @@ function sleep(ms) {
 }
 
 async function api(path, options = {}) {
-  const response = await fetch(`${apiBaseUrl}${path}`, {
-    ...options,
-    signal: options.signal ?? AbortSignal.timeout(apiTimeoutMs),
-    headers: {
-      Authorization: `Bearer ${deviceToken}`,
-      "Content-Type": "application/json",
-      "X-SceneCart-Executor-Protocol": executorProtocolVersion,
-      ...(options.headers || {})
+  const url = `${apiBaseUrl}${path}`;
+  let response;
+  try {
+    response = await vercelProtectedFetch(url, {
+      ...options,
+      signal: options.signal ?? AbortSignal.timeout(apiTimeoutMs),
+      headers: {
+        Authorization: `Bearer ${deviceToken}`,
+        "Content-Type": "application/json",
+        "X-SceneCart-Executor-Protocol": executorProtocolVersion,
+        ...(options.headers || {})
+      }
+    });
+  } catch (error) {
+    if (isVercelProtectionError(error)) {
+      throw new FatalExecutorApiError(
+        safeMachineErrorMessage(error),
+        error.status,
+        error.code
+      );
     }
-  });
+    throw error;
+  }
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) {
     const message = payload.error || `${path} failed with ${response.status}`;
@@ -158,7 +176,7 @@ async function api(path, options = {}) {
 }
 
 async function verifyStartup() {
-  const response = await fetch(`${apiBaseUrl}/api/runtime/health`, {
+  const response = await vercelProtectedFetch(`${apiBaseUrl}/api/runtime/health`, {
     signal: AbortSignal.timeout(apiTimeoutMs)
   });
   const payload = await response.json().catch(() => ({}));
@@ -260,7 +278,7 @@ function activateTaobaoCliSearchFallback(reason) {
   taobaoClient.resetSession();
   if (changed) {
     process.stderr.write(
-      `[local-executor] HTTP MCP search unavailable; using the official Taobao CLI for read-only searches: ${reason instanceof Error ? reason.message : String(reason)}\n`
+      `[local-executor] HTTP MCP search unavailable; using the official Taobao CLI for read-only searches: ${safeMachineErrorMessage(reason)}\n`
     );
   }
 }
@@ -271,7 +289,7 @@ function enterMcpUnavailable(error) {
   taobaoClient.resetSession();
   if (!wasUnavailable && error) {
     process.stderr.write(
-      `[local-executor] Taobao MCP readiness circuit opened: ${error instanceof Error ? error.message : String(error)}\n`
+      `[local-executor] Taobao MCP readiness circuit opened: ${safeMachineErrorMessage(error)}\n`
     );
   }
 }
@@ -354,7 +372,7 @@ async function waitForMcpReadiness() {
       } catch (cliError) {
         if (cliError instanceof FatalExecutorApiError || fatalApiError || stopped) return false;
         const combinedError = new Error(
-          `HTTP MCP: ${httpError instanceof Error ? httpError.message : String(httpError)}; 官方 CLI: ${cliError instanceof Error ? cliError.message : String(cliError)}`
+          `HTTP MCP: ${safeMachineErrorMessage(httpError)}; 官方 CLI: ${safeMachineErrorMessage(cliError)}`
         );
         enterMcpUnavailable(combinedError);
       }
@@ -443,7 +461,7 @@ async function flushPendingResultAcknowledgement() {
       stopped = true;
       leaseGuard.stop(`fatal API ${error.status}`);
       process.stderr.write(
-        `[local-executor] fatal result acknowledgement response ${error.status}; handing restart to supervisor: ${error.message}\n`
+        `[local-executor] fatal result acknowledgement response ${error.status}; handing restart to supervisor: ${safeMachineErrorMessage(error)}\n`
       );
       return false;
     }
@@ -463,14 +481,14 @@ async function flushPendingResultAcknowledgement() {
     }
     if (outcome.cleanup_error) {
       process.stderr.write(
-        `[local-executor] confirmed ${pending.job_id}, but its local acknowledgement ledger cleanup will be retried after restart: ${outcome.cleanup_error}\n`
+        `[local-executor] confirmed ${pending.job_id}, but its local acknowledgement ledger cleanup will be retried after restart: ${safeMachineErrorMessage(outcome.cleanup_error)}\n`
       );
     }
     return true;
   }
 
   process.stderr.write(
-    `[local-executor] result acknowledgement for ${pending.job_id} remains pending; no new Taobao action will be claimed: ${outcome.error || "server did not confirm completed"}\n`
+    `[local-executor] result acknowledgement for ${pending.job_id} remains pending; no new Taobao action will be claimed: ${safeMachineErrorMessage(outcome.error || "server did not confirm completed")}\n`
   );
   return false;
 }
@@ -498,7 +516,7 @@ async function flushPendingAuthenticationFailure() {
   );
   if (outcome.state !== "confirmed") {
     process.stderr.write(
-      `[local-executor] authentication failure callback for ${pending.job_id} remains pending: ${outcome.error || "server did not confirm failed"}\n`
+      `[local-executor] authentication failure callback for ${pending.job_id} remains pending: ${safeMachineErrorMessage(outcome.error || "server did not confirm failed")}\n`
     );
     return false;
   }
@@ -784,7 +802,7 @@ async function heartbeat(options = {}) {
       if (jobId) leaseGuard.acceptHeartbeat(jobId, leaseToken, payload.lease_renewed === true);
       return payload;
     } catch (error) {
-      process.stderr.write(`[local-executor] heartbeat failed: ${error.message}\n`);
+      process.stderr.write(`[local-executor] heartbeat failed: ${safeMachineErrorMessage(error)}\n`);
       if (jobId) leaseGuard.rejectHeartbeat(jobId, leaseToken);
       if (error instanceof FatalExecutorApiError) {
         fatalApiError = error;
@@ -816,7 +834,7 @@ async function recoverTaobaoAuthentication() {
     state = await probeTaobaoAuthentication();
   } catch (error) {
     process.stderr.write(
-      `[local-executor] authentication recovery probe failed: ${error instanceof Error ? error.message : String(error)}\n`
+      `[local-executor] authentication recovery probe failed: ${safeMachineErrorMessage(error)}\n`
     );
     await heartbeat({ executorState: "authentication_required", force: true });
     return false;
@@ -845,7 +863,7 @@ async function recoverTaobaoAuthentication() {
   } catch (error) {
     enterMcpUnavailable(error);
     process.stderr.write(
-      `[local-executor] login is available but Taobao search tools are not ready yet: ${error instanceof Error ? error.message : String(error)}\n`
+      `[local-executor] login is available but Taobao search tools are not ready yet: ${safeMachineErrorMessage(error)}\n`
     );
     await heartbeat({ executorState: "authentication_required", force: true });
     return false;
@@ -887,7 +905,7 @@ try {
   }
   executorCapabilities = await verifyStartup();
 } catch (error) {
-  process.stderr.write(`[local-executor] startup failed: ${error instanceof Error ? error.message : String(error)}\n`);
+  process.stderr.write(`[local-executor] startup failed: ${safeMachineErrorMessage(error)}\n`);
   process.exit(1);
 }
 const heartbeatTimer = setInterval(() => {
@@ -907,7 +925,7 @@ async function loop() {
       }
     } catch (error) {
       process.stderr.write(
-        `[local-executor] result acknowledgement recovery failed closed: ${error instanceof Error ? error.message : String(error)}\n`
+        `[local-executor] result acknowledgement recovery failed closed: ${safeMachineErrorMessage(error)}\n`
       );
       await sleep(resultAcknowledgementRetryMs);
       continue;
@@ -957,7 +975,7 @@ async function loop() {
         });
         if (failureDisposition === "abandon_lost_lease") {
           process.stderr.write(
-            `[local-executor] abandoned ${job.id} without callback because its lease is no longer owned: ${leaseGuard.lossReason}\n`
+            `[local-executor] abandoned ${job.id} without callback because its lease is no longer owned: ${safeMachineErrorMessage(leaseGuard.lossReason)}\n`
           );
           leaseGuard.clear(job.id);
           continue;
@@ -979,7 +997,7 @@ async function loop() {
             localWalPersisted ||= persistence.persisted;
             if (!persistence.persisted) {
               process.stderr.write(
-                `[local-executor] authentication callback ledger write failed; attempting the durable server hold while the lease remains attached: ${persistence.error}\n`
+                `[local-executor] authentication callback ledger write failed; attempting the durable server hold while the lease remains attached: ${safeMachineErrorMessage(persistence.error)}\n`
               );
             }
 
@@ -1029,10 +1047,10 @@ async function loop() {
             retryable: error instanceof ExecutorJobError ? error.retryable : true,
             lease_token: job.lease_token
           }).catch((resolveError) => {
-            process.stderr.write(`[local-executor] failed to report ${job.id}: ${resolveError.message}\n`);
+            process.stderr.write(`[local-executor] failed to report ${job.id}: ${safeMachineErrorMessage(resolveError)}\n`);
           });
         }
-        process.stderr.write(`[local-executor] job ${job.id} failed: ${error.message}\n`);
+        process.stderr.write(`[local-executor] job ${job.id} failed: ${safeMachineErrorMessage(error)}\n`);
         if (authenticationRequired) {
           process.stderr.write(
             "[local-executor] authentication circuit breaker opened; no jobs will be claimed until Taobao login is verified locally\n"
@@ -1056,7 +1074,7 @@ async function loop() {
           retryable: result.retryable !== false,
           lease_token: job.lease_token
         }).catch((error) => {
-          process.stderr.write(`[local-executor] failed to report ${job.id}: ${error.message}\n`);
+          process.stderr.write(`[local-executor] failed to report ${job.id}: ${safeMachineErrorMessage(error)}\n`);
         });
         process.stderr.write(`[local-executor] job ${job.id} returned a failed result\n`);
       } else {
@@ -1066,7 +1084,7 @@ async function loop() {
         const persistence = await pendingResultAcknowledgementCoordinator.persistHeld();
         if (!persistence.persisted) {
           process.stderr.write(
-            `[local-executor] successful ${job.job_type} result for ${job.id} remains fail-closed in memory because its acknowledgement WAL could not be written; automatic replay is forbidden: ${persistence.error}\n`
+            `[local-executor] successful ${job.job_type} result for ${job.id} remains fail-closed in memory because its acknowledgement WAL could not be written; automatic replay is forbidden: ${safeMachineErrorMessage(persistence.error)}\n`
           );
         }
         const acknowledged = await flushPendingResultAcknowledgement();
@@ -1084,11 +1102,11 @@ async function loop() {
         stopped = true;
         leaseGuard.stop(`fatal API ${error.status}`);
         process.stderr.write(
-          `[local-executor] fatal API response ${error.status}; handing restart to supervisor: ${error.message}\n`
+          `[local-executor] fatal API response ${error.status}; handing restart to supervisor: ${safeMachineErrorMessage(error)}\n`
         );
         break;
       }
-      process.stderr.write(`[local-executor] polling failed: ${error.message}\n`);
+      process.stderr.write(`[local-executor] polling failed: ${safeMachineErrorMessage(error)}\n`);
       await sleep(Math.max(pollMs, 3000));
     }
   }
@@ -1104,6 +1122,6 @@ for (const signal of ["SIGINT", "SIGTERM"]) {
 
 await loop();
 await taobaoClient.close().catch((error) => {
-  process.stderr.write(`[local-executor] failed to close MCP session: ${error.message}\n`);
+  process.stderr.write(`[local-executor] failed to close MCP session: ${safeMachineErrorMessage(error)}\n`);
 });
 if (fatalApiError) process.exitCode = 1;

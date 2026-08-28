@@ -83,6 +83,10 @@ function assertNoForbiddenText() {
       message: "发现旧环境变量 TAOBAO_NATIVE_PATH；正式执行器请使用 TAOBAO_NATIVE_MCP_URL"
     },
     {
+      pattern: /NEXT_PUBLIC_SCENECART_SINGLE_USER_ID/,
+      message: "固定 owner ID 不得进入浏览器环境变量或前端 bundle"
+    },
+    {
       pattern: /\/Users\/guohuaz/,
       message: "发现本机用户名硬编码路径，请改为环境变量或 homedir()"
     },
@@ -129,6 +133,12 @@ function assertEnvExample() {
     "SCENECART_ENABLE_MCP_DEBUG",
     "SCENECART_ACCESS_MODE",
     "SCENECART_SINGLE_USER_ID",
+    "SCENECART_OUTER_PROTECTION_VERIFIED",
+    "SCENECART_OUTER_PROTECTION_SCOPE",
+    "SCENECART_OUTER_PROTECTION_VERIFIED_AT",
+    "SCENECART_OUTER_PROTECTION_PROJECT_ID",
+    "SCENECART_OUTER_PROTECTION_ORIGIN",
+    "SCENECART_OUTER_PROTECTION_AUDIT_RECEIPT",
     "SCENECART_DEV_PORT",
     "APP_ORIGIN"
   ];
@@ -188,10 +198,7 @@ function assertExecutorConfigurator() {
   const utilities = tryReadText("scripts/executor-config-utils.mjs");
   const settings = tryReadText("components/executor-settings.tsx");
   const settingsPage = tryReadText("app/settings/executor/page.tsx");
-  const loginPage = tryReadText("app/login/page.tsx");
-  const authForm = tryReadText("components/auth-form.tsx");
-  const returnPath = tryReadText("lib/auth/return-path.ts");
-  if (!configurator || !utilities || !settings || !settingsPage || !loginPage || !authForm || !returnPath) return;
+  if (!configurator || !utilities || !settings || !settingsPage) return;
 
   if (
     !configurator.includes("hiddenQuestion") ||
@@ -201,13 +208,9 @@ function assertExecutorConfigurator() {
     !utilities.includes("SCENECART_DEVICE_TOKEN") ||
     !settings.includes("npm run executor:configure") ||
     !settings.includes("SCENECART_API_URL=${apiUrl}") ||
-    !settings.includes("/login?next=%2Fsettings%2Fexecutor") ||
-    !settingsPage.includes("requireAuthenticatedPageIdentity") ||
-    !loginPage.includes("normalizeAuthReturnPath") ||
-    !authForm.includes("router.replace(returnTo)") ||
-    !returnPath.includes('candidate.startsWith("//")')
+    !settingsPage.includes("requireAuthenticatedPageIdentity")
   ) {
-    fail("本地执行器必须提供账号绑定、安全登录回跳和不回显令牌的配置入口");
+    fail("本地执行器必须提供固定 owner 绑定和不回显令牌的配置入口");
   }
 }
 
@@ -567,6 +570,11 @@ function assertArchitectureContracts() {
   const authRequest = tryReadText("lib/auth/request.ts");
   const authPage = tryReadText("lib/auth/page.ts");
   const authAccessMode = tryReadText("lib/auth/access-mode.ts");
+  const authOuterProtection = tryReadText("lib/auth/outer-protection.ts");
+  const authMeRoute = tryReadText("app/api/auth/me/route.ts");
+  const authLoginRoute = tryReadText("app/api/auth/login/route.ts");
+  const authRegisterRoute = tryReadText("app/api/auth/register/route.ts");
+  const middleware = tryReadText("middleware.ts");
   const runtimeJobs = tryReadText("lib/runtime/jobs.ts");
   const sessionStore = tryReadText("lib/session/store.ts");
   const sessionGuards = tryReadText("lib/session/guards.ts");
@@ -651,6 +659,11 @@ function assertArchitectureContracts() {
     !localRuntimeRepository ||
     !postgresRuntimeRepository ||
     !authAccessMode ||
+    !authOuterProtection ||
+    !authMeRoute ||
+    !authLoginRoute ||
+    !authRegisterRoute ||
+    !middleware ||
     !authPage ||
     !authRequest ||
     !runtimeJobs ||
@@ -681,15 +694,40 @@ function assertArchitectureContracts() {
     !runtimeIndex.includes("正式产品模式拒绝使用本地运行时") ||
     !authRequest.includes('getSceneCartAccessMode() === "single_user"') ||
     !authRequest.includes('isFormalProductMode() || process.env.AUTH_REQUIRED === "true"') ||
-    !authAccessMode.includes("if (!protectedPreview && !localDevelopment)") ||
+    !authAccessMode.includes("inspectOuterProtectionConfiguration") ||
     !authAccessMode.includes("SCENECART_SINGLE_USER_ID") ||
     !authAccessMode.includes("findUserById") ||
     !authRequest.includes("configuredSingleUserId();") ||
+    !authOuterProtection.includes("SCENECART_OUTER_PROTECTION_VERIFIED") ||
+    !authOuterProtection.includes("SCENECART_OUTER_PROTECTION_SCOPE") ||
+    !authOuterProtection.includes("SCENECART_OUTER_PROTECTION_PROJECT_ID") ||
+    !authOuterProtection.includes("VERCEL_PROJECT_PRODUCTION_URL") ||
     !authPage.includes('from "next/server"') ||
     !authPage.includes("await connection();") ||
     !authRequest.includes("if (hasHttpsAppOrigin()) return true")
   ) {
-    fail("身份相关页面必须动态渲染；正式产品保留账号隔离，Preview 单用户模式固定 owner、阻断 Production，并拒绝本地运行时与 Cookie 降级");
+    fail("身份相关页面必须动态渲染；固定 owner 只能由 server-only 外层保护契约开放，并拒绝本地运行时与 Cookie 降级");
+  }
+
+  if (
+    !loginPage.includes('permanentRedirect("/")') ||
+    authLoginRoute.includes("readJsonObject") ||
+    authRegisterRoute.includes("readJsonObject") ||
+    authLoginRoute.includes("loginUser") ||
+    authRegisterRoute.includes("registerUser") ||
+    !authLoginRoute.includes("410") ||
+    !authRegisterRoute.includes("410") ||
+    !authMeRoute.includes('identity.accessMode === "single_user"') ||
+    !authMeRoute.includes('persistence_scope: "single_user"') ||
+    !dashboardIntake.includes("PublicDemoLink") ||
+    dashboardIntake.includes('fetch("/api/auth/me")') ||
+    dashboardIntake.includes("账户菜单") ||
+    dashboardIntake.includes("退出登录") ||
+    !middleware.includes("inspectOuterProtectionConfiguration") ||
+    !releaseAudit.includes('"outer_protection_live_audit"') ||
+    !releaseAudit.includes("SCENECART_OUTER_PROTECTION_AUDIT_RECEIPT")
+  ) {
+    fail("固定单用户产品必须关闭登录/注册 UI 与 API、隐藏 owner 身份，并把外层保护 live 核验作为发布硬门");
   }
 
   const contracts = [

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { inspectRuntimeReadiness } from "@/lib/runtime/readiness";
+import { inspectRuntimeReadiness, summarizeNullOwnerIntegrity } from "@/lib/runtime/readiness";
 import { localRuntimeRepository, resetLocalRuntimeForTests } from "@/lib/runtime/local-repository";
 import { recordLlmCall, resetLlmTelemetryForTests } from "@/lib/llm/telemetry";
 
@@ -16,6 +16,13 @@ const originalSingleUserId = process.env.SCENECART_SINGLE_USER_ID;
 const originalVercelEnvironment = process.env.VERCEL_ENV;
 const originalAuthCookieSecure = process.env.AUTH_COOKIE_SECURE;
 const originalAppOrigin = process.env.APP_ORIGIN;
+const originalProtectionVerified = process.env.SCENECART_OUTER_PROTECTION_VERIFIED;
+const originalProtectionScope = process.env.SCENECART_OUTER_PROTECTION_SCOPE;
+const originalProtectionVerifiedAt = process.env.SCENECART_OUTER_PROTECTION_VERIFIED_AT;
+const originalProtectionProjectId = process.env.SCENECART_OUTER_PROTECTION_PROJECT_ID;
+const originalProtectionOrigin = process.env.SCENECART_OUTER_PROTECTION_ORIGIN;
+const originalVercelProjectId = process.env.VERCEL_PROJECT_ID;
+const originalVercelProductionUrl = process.env.VERCEL_PROJECT_PRODUCTION_URL;
 
 beforeEach(() => {
   resetLocalRuntimeForTests();
@@ -26,6 +33,13 @@ beforeEach(() => {
   delete process.env.SCENECART_ACCESS_MODE;
   delete process.env.SCENECART_SINGLE_USER_ID;
   delete process.env.VERCEL_ENV;
+  delete process.env.SCENECART_OUTER_PROTECTION_VERIFIED;
+  delete process.env.SCENECART_OUTER_PROTECTION_SCOPE;
+  delete process.env.SCENECART_OUTER_PROTECTION_VERIFIED_AT;
+  delete process.env.SCENECART_OUTER_PROTECTION_PROJECT_ID;
+  delete process.env.SCENECART_OUTER_PROTECTION_ORIGIN;
+  delete process.env.VERCEL_PROJECT_ID;
+  delete process.env.VERCEL_PROJECT_PRODUCTION_URL;
 });
 
 afterEach(() => {
@@ -55,6 +69,20 @@ afterEach(() => {
   else process.env.AUTH_COOKIE_SECURE = originalAuthCookieSecure;
   if (originalAppOrigin === undefined) delete process.env.APP_ORIGIN;
   else process.env.APP_ORIGIN = originalAppOrigin;
+  if (originalProtectionVerified === undefined) delete process.env.SCENECART_OUTER_PROTECTION_VERIFIED;
+  else process.env.SCENECART_OUTER_PROTECTION_VERIFIED = originalProtectionVerified;
+  if (originalProtectionScope === undefined) delete process.env.SCENECART_OUTER_PROTECTION_SCOPE;
+  else process.env.SCENECART_OUTER_PROTECTION_SCOPE = originalProtectionScope;
+  if (originalProtectionVerifiedAt === undefined) delete process.env.SCENECART_OUTER_PROTECTION_VERIFIED_AT;
+  else process.env.SCENECART_OUTER_PROTECTION_VERIFIED_AT = originalProtectionVerifiedAt;
+  if (originalProtectionProjectId === undefined) delete process.env.SCENECART_OUTER_PROTECTION_PROJECT_ID;
+  else process.env.SCENECART_OUTER_PROTECTION_PROJECT_ID = originalProtectionProjectId;
+  if (originalProtectionOrigin === undefined) delete process.env.SCENECART_OUTER_PROTECTION_ORIGIN;
+  else process.env.SCENECART_OUTER_PROTECTION_ORIGIN = originalProtectionOrigin;
+  if (originalVercelProjectId === undefined) delete process.env.VERCEL_PROJECT_ID;
+  else process.env.VERCEL_PROJECT_ID = originalVercelProjectId;
+  if (originalVercelProductionUrl === undefined) delete process.env.VERCEL_PROJECT_PRODUCTION_URL;
+  else process.env.VERCEL_PROJECT_PRODUCTION_URL = originalVercelProductionUrl;
 });
 
 describe("production readiness", () => {
@@ -71,6 +99,14 @@ describe("production readiness", () => {
     process.env.SCENECART_ACCESS_MODE = "single_user";
     process.env.SCENECART_SINGLE_USER_ID = ownerId;
     process.env.VERCEL_ENV = "preview";
+    process.env.APP_ORIGIN = "https://scenecart.example.com";
+    process.env.SCENECART_OUTER_PROTECTION_VERIFIED = "true";
+    process.env.SCENECART_OUTER_PROTECTION_SCOPE = "preview";
+    process.env.SCENECART_OUTER_PROTECTION_VERIFIED_AT = new Date().toISOString();
+    process.env.SCENECART_OUTER_PROTECTION_PROJECT_ID = "project_scenecart";
+    process.env.SCENECART_OUTER_PROTECTION_ORIGIN = "https://scenecart.example.com";
+    process.env.VERCEL_PROJECT_ID = "project_scenecart";
+    process.env.VERCEL_PROJECT_PRODUCTION_URL = "scenecart.example.com";
 
     const readiness = await inspectRuntimeReadiness(ownerId);
     const accessCheck = readiness.checks.find((item) => item.id === "authentication");
@@ -80,6 +116,19 @@ describe("production readiness", () => {
     expect(accessCheck).toMatchObject({
       status: "pass",
       detail: expect.stringContaining("固定 owner")
+    });
+    expect(readiness.checks.find((item) => item.id === "outer_protection")?.status).toBe("pass");
+  });
+
+  it("treats null-owner activity in any required runtime table as a hard integrity failure", () => {
+    expect(summarizeNullOwnerIntegrity([
+      { table_name: "shopping_sessions", null_owner_count: "1" },
+      { table_name: "agent_jobs", null_owner_count: 2 },
+      { table_name: "execution_events", null_owner_count: "3" }
+    ])).toEqual({
+      valid: false,
+      total: 6,
+      counts: { shoppingSessions: 1, agentJobs: 2, executionEvents: 3 }
     });
   });
 
