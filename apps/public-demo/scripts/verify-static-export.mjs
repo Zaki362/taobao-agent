@@ -9,6 +9,19 @@ const repositoryRoot = path.resolve(appRoot, "../..");
 const sourceAssetsRoot = path.join(repositoryRoot, "public", "demo-products");
 const exportedAssetsRoot = path.join(outputRoot, "demo-products");
 
+const forbiddenRuntimeMarkers = [
+  { label: "formal API path", pattern: /\/api\//i },
+  { label: "DeepSeek secret name", pattern: /DEEPSEEK_API_KEY/i },
+  { label: "database secret name", pattern: /DATABASE_URL/i },
+  { label: "fixed owner secret name", pattern: /SCENECART_SINGLE_USER_ID/i },
+  { label: "Worker device token name", pattern: /SCENECART_(?:DEVICE|EXECUTOR)_TOKEN/i },
+  { label: "Vercel protection bypass header", pattern: /x-vercel-protection-bypass/i },
+  {
+    label: "formal SceneCart API or Worker origin",
+    pattern: /https:\/\/scenecart-ai\.vercel\.app\/(?:api|worker|executor)(?:\/|\b)/i
+  }
+];
+
 async function listFiles(directory, prefix = "") {
   const entries = await readdir(directory, { withFileTypes: true });
   const files = [];
@@ -55,6 +68,19 @@ if (unexpectedRoutes.length > 0 || missingRoutes.length > 0) {
   ].filter(Boolean).join("\n"));
 }
 
+const compatibilityPages = [
+  { route: "/demo", file: path.join(outputRoot, "demo", "index.html"), forbiddenUi: "data-public-demo" },
+  { route: "/product-guide", file: path.join(outputRoot, "product-guide", "index.html"), forbiddenUi: "product-guide-modal" }
+];
+for (const compatibilityPage of compatibilityPages) {
+  const html = await readFile(compatibilityPage.file, "utf8");
+  if (html.includes(compatibilityPage.forbiddenUi)) {
+    throw new Error(
+      `${compatibilityPage.route} must remain a redirect-only compatibility route; found ${compatibilityPage.forbiddenUi}.`
+    );
+  }
+}
+
 const forbiddenRoutePattern = /(^|\/)(api|hosted|login|settings)(\/|$)/;
 const forbiddenFiles = outputFiles.filter((file) => {
   if (file.startsWith("_next/")) return false;
@@ -83,9 +109,35 @@ if (unexpectedManifestRoutes.length > 0) {
   throw new Error(`Unexpected App Router entries:\n${unexpectedManifestRoutes.join("\n")}`);
 }
 
+const runtimeFiles = outputFiles.filter((file) => file.endsWith(".js") || file.endsWith(".html"));
+const runtimeLeakFindings = [];
+for (const file of runtimeFiles) {
+  const contents = await readFile(path.join(outputRoot, file), "utf8");
+  for (const marker of forbiddenRuntimeMarkers) {
+    // Next's framework-only main chunk contains its own generic `isAPIRoute`
+    // predicate. Application code is emitted into separate chunks, so keep
+    // scanning every other marker here while excluding only that framework
+    // chunk from the literal `/api/` application-path check.
+    if (marker.label === "formal API path" && /^_next\/static\/chunks\/main-[^.]+\.js$/.test(file)) {
+      continue;
+    }
+    if (marker.pattern.test(contents)) {
+      runtimeLeakFindings.push(`${file}: ${marker.label}`);
+    }
+  }
+}
+if (runtimeLeakFindings.length > 0) {
+  throw new Error([
+    "Formal runtime markers leaked into the public Demo export.",
+    "The Demo must compile without product API, database, model, owner, Worker, or protection credentials.",
+    ...runtimeLeakFindings.map((finding) => `- ${finding}`)
+  ].join("\n"));
+}
+
 console.log(JSON.stringify({
   contract: "scenecart-public-demo-only",
   routes: publicRoutes,
   app_router_entries: manifestRoutes,
-  frozen_asset_files: exportedAssets.length
+  frozen_asset_files: exportedAssets.length,
+  runtime_boundary_files_scanned: runtimeFiles.length
 }, null, 2));
