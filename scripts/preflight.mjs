@@ -87,6 +87,14 @@ function assertNoForbiddenText() {
       message: "固定 owner ID 不得进入浏览器环境变量或前端 bundle"
     },
     {
+      pattern: /NEXT_PUBLIC_SCENECART_ALLOW_UNPROTECTED_SINGLE_USER_PRODUCTION/,
+      message: "公开单用户 Production 风险开关只能存在于服务端环境"
+    },
+    {
+      pattern: /NEXT_PUBLIC_SCENECART_VERCEL_PROTECTION_MODE/,
+      message: "Vercel 机器传输模式只能存在于服务端或本机 Worker 环境"
+    },
+    {
       pattern: /\/Users\/guohuaz/,
       message: "发现本机用户名硬编码路径，请改为环境变量或 homedir()"
     },
@@ -133,13 +141,16 @@ function assertEnvExample() {
     "SCENECART_ENABLE_MCP_DEBUG",
     "SCENECART_ACCESS_MODE",
     "SCENECART_SINGLE_USER_ID",
+    "SCENECART_ALLOW_UNPROTECTED_SINGLE_USER_PRODUCTION",
     "SCENECART_OUTER_PROTECTION_VERIFIED",
     "SCENECART_OUTER_PROTECTION_SCOPE",
     "SCENECART_OUTER_PROTECTION_VERIFIED_AT",
     "SCENECART_OUTER_PROTECTION_PROJECT_ID",
     "SCENECART_OUTER_PROTECTION_ORIGIN",
     "SCENECART_OUTER_PROTECTION_AUDIT_RECEIPT",
+    "SCENECART_PUBLIC_DEMO_URL",
     "SCENECART_DEV_PORT",
+    "SCENECART_VERCEL_PROTECTION_MODE",
     "APP_ORIGIN"
   ];
 
@@ -694,19 +705,20 @@ function assertArchitectureContracts() {
     !runtimeIndex.includes("正式产品模式拒绝使用本地运行时") ||
     !authRequest.includes('getSceneCartAccessMode() === "single_user"') ||
     !authRequest.includes('isFormalProductMode() || process.env.AUTH_REQUIRED === "true"') ||
-    !authAccessMode.includes("inspectOuterProtectionConfiguration") ||
+    !authAccessMode.includes("inspectSingleUserExposureConfiguration") ||
     !authAccessMode.includes("SCENECART_SINGLE_USER_ID") ||
     !authAccessMode.includes("findUserById") ||
     !authRequest.includes("configuredSingleUserId();") ||
     !authOuterProtection.includes("SCENECART_OUTER_PROTECTION_VERIFIED") ||
     !authOuterProtection.includes("SCENECART_OUTER_PROTECTION_SCOPE") ||
     !authOuterProtection.includes("SCENECART_OUTER_PROTECTION_PROJECT_ID") ||
+    !authOuterProtection.includes("SCENECART_ALLOW_UNPROTECTED_SINGLE_USER_PRODUCTION") ||
     !authOuterProtection.includes("VERCEL_PROJECT_PRODUCTION_URL") ||
     !authPage.includes('from "next/server"') ||
     !authPage.includes("await connection();") ||
     !authRequest.includes("if (hasHttpsAppOrigin()) return true")
   ) {
-    fail("身份相关页面必须动态渲染；固定 owner 只能由 server-only 外层保护契约开放，并拒绝本地运行时与 Cookie 降级");
+    fail("身份相关页面必须动态渲染；固定 owner 只能由 server-only 暴露策略开放，并拒绝本地运行时与 Cookie 降级");
   }
 
   if (
@@ -723,11 +735,13 @@ function assertArchitectureContracts() {
     dashboardIntake.includes('fetch("/api/auth/me")') ||
     dashboardIntake.includes("账户菜单") ||
     dashboardIntake.includes("退出登录") ||
-    !middleware.includes("inspectOuterProtectionConfiguration") ||
+    !middleware.includes("inspectSingleUserExposureConfiguration") ||
+    !releaseAudit.includes('"single_user_exposure_policy"') ||
     !releaseAudit.includes('"outer_protection_live_audit"') ||
-    !releaseAudit.includes("SCENECART_OUTER_PROTECTION_AUDIT_RECEIPT")
+    !releaseAudit.includes("SCENECART_OUTER_PROTECTION_AUDIT_RECEIPT") ||
+    !releaseAudit.includes("SCENECART_ALLOW_UNPROTECTED_SINGLE_USER_PRODUCTION")
   ) {
-    fail("固定单用户产品必须关闭登录/注册 UI 与 API、隐藏 owner 身份，并把外层保护 live 核验作为发布硬门");
+    fail("固定单用户产品必须关闭登录/注册 UI 与 API、隐藏 owner 身份，并把保护或显式风险接受作为发布硬门");
   }
 
   const contracts = [

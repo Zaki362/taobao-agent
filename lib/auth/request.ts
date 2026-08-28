@@ -29,8 +29,9 @@ export function shouldUseSecureAuthCookie() {
 
 export function isAuthenticationRequired() {
   // Fixed-owner mode is authorized by the outer-protection contract instead of
-  // an interactive application session. configuredSingleUserId() validates the
-  // complete server-side contract and fails closed when any proof is missing.
+  // an interactive application session. configuredSingleUserId() validates
+  // either verified outer protection or an explicit server-only acknowledgement
+  // of unprotected Production exposure, and otherwise fails closed.
   if (getSceneCartAccessMode() === "single_user") {
     configuredSingleUserId();
     return false;

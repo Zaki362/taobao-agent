@@ -149,7 +149,7 @@ async function runStaticAudit() {
     };
   }
   const failures = Array.isArray(audit.checks)
-    ? audit.checks.filter((item) => item.status !== "pass")
+    ? audit.checks.filter((item) => item.required !== false && item.status !== "pass")
     : [];
   return {
     check: result(
@@ -194,21 +194,22 @@ async function runDatabaseCheck() {
 async function fetchJson(url, {
   timeoutMs,
   authorization,
+  useVercelProtectionBypass = true,
   environment = process.env,
   fetchImpl = fetch
 } = {}) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs ?? DEFAULT_TIMEOUT_MS);
   try {
-    const response = await vercelProtectedFetch(url, {
+    const requestInit = {
       method: "GET",
       cache: "no-store",
       headers: authorization ? { Authorization: authorization } : undefined,
       signal: controller.signal
-    }, {
-      environment,
-      fetchImpl
-    });
+    };
+    const response = useVercelProtectionBypass
+      ? await vercelProtectedFetch(url, requestInit, { environment, fetchImpl })
+      : await fetchImpl(url, requestInit);
     const text = await response.text();
     let payload = null;
     try {
@@ -247,6 +248,28 @@ async function verifyAnonymousProtectionChallenge(baseUrl, {
   }
 }
 
+function acceptsUnprotectedSingleUserProduction(environment) {
+  const appOrigin = normalizeReleaseUrl(environment.APP_ORIGIN);
+  const productionOrigin = environment.VERCEL_PROJECT_PRODUCTION_URL
+    ? normalizeReleaseUrl(`https://${environment.VERCEL_PROJECT_PRODUCTION_URL}`)
+    : null;
+  const staleOuterProtectionProof = [
+    "SCENECART_OUTER_PROTECTION_SCOPE",
+    "SCENECART_OUTER_PROTECTION_VERIFIED_AT",
+    "SCENECART_OUTER_PROTECTION_PROJECT_ID",
+    "SCENECART_OUTER_PROTECTION_ORIGIN",
+    "SCENECART_OUTER_PROTECTION_AUDIT_RECEIPT"
+  ].some((key) => Boolean(environment[key]?.trim()));
+  return environment.SCENECART_ALLOW_UNPROTECTED_SINGLE_USER_PRODUCTION === "true" &&
+    environment.SCENECART_OUTER_PROTECTION_VERIFIED === "false" &&
+    environment.SCENECART_ACCESS_MODE === "single_user" &&
+    environment.SCENECART_PRODUCT_MODE === "production" &&
+    environment.VERCEL_ENV === "production" &&
+    !staleOuterProtectionProof &&
+    appOrigin === "https://scenecart-ai.vercel.app" &&
+    productionOrigin === appOrigin;
+}
+
 export async function verifyRuntime(baseUrl, {
   timeoutMs = DEFAULT_TIMEOUT_MS,
   secret = "",
@@ -254,25 +277,39 @@ export async function verifyRuntime(baseUrl, {
   fetchImpl = fetch
 } = {}) {
   const checks = [];
+  const unprotectedRiskAccepted = acceptsUnprotectedSingleUserProduction(environment);
   try {
     const anonymous = await verifyAnonymousProtectionChallenge(baseUrl, {
       timeoutMs,
       environment,
       fetchImpl
     });
-    checks.push(result(
-      "outer_protection_anonymous_probe",
-      "匿名请求外层拦截",
-      anonymous.challenged ? "pass" : "fail",
-      anonymous.challenged
-        ? `未携带 Automation Bypass 的请求被 Vercel 外层保护拦截（HTTP ${anonymous.status}）`
-        : `未携带 Automation Bypass 的请求未出现 Vercel 保护挑战（HTTP ${anonymous.status}）`,
-      "停止发布并核对 Vercel All Deployments Protection；不能把固定 owner 匿名暴露到公网"
-    ));
+    if (unprotectedRiskAccepted) {
+      const publiclyReachable = !anonymous.challenged && anonymous.status === 200;
+      checks.push(result(
+        "unprotected_anonymous_probe",
+        "公开固定 owner 风险实测",
+        publiclyReachable ? "pass" : "fail",
+        publiclyReachable
+          ? "匿名健康请求未被 Vercel 拦截并返回 200；公网访问风险与已接受配置一致"
+          : `匿名健康请求状态与公开风险接受模式不一致（HTTP ${anonymous.status}）`,
+        "核对固定域名、Hobby 保护范围与公开风险接受配置"
+      ));
+    } else {
+      checks.push(result(
+        "outer_protection_anonymous_probe",
+        "匿名请求外层拦截",
+        anonymous.challenged ? "pass" : "fail",
+        anonymous.challenged
+          ? `未携带 Automation Bypass 的请求被 Vercel 外层保护拦截（HTTP ${anonymous.status}）`
+          : `未携带 Automation Bypass 的请求未出现 Vercel 保护挑战（HTTP ${anonymous.status}）`,
+        "停止发布并核对 Vercel All Deployments Protection；不能把固定 owner 匿名暴露到公网"
+      ));
+    }
   } catch (error) {
     checks.push(result(
-      "outer_protection_anonymous_probe",
-      "匿名请求外层拦截",
+      unprotectedRiskAccepted ? "unprotected_anonymous_probe" : "outer_protection_anonymous_probe",
+      unprotectedRiskAccepted ? "公开固定 owner 风险实测" : "匿名请求外层拦截",
       "fail",
       error?.name === "AbortError" ? "匿名保护探针超时" : error?.message ?? error,
       "确认验证机可以访问部署 URL，并重新执行无凭据探针"
@@ -282,6 +319,7 @@ export async function verifyRuntime(baseUrl, {
   try {
     const health = await fetchJson(`${baseUrl}/api/runtime/health`, {
       timeoutMs,
+      useVercelProtectionBypass: !unprotectedRiskAccepted,
       environment,
       fetchImpl
     });
@@ -342,21 +380,33 @@ export async function verifyRuntime(baseUrl, {
     const readiness = await fetchJson(`${baseUrl}/api/internal/runtime-readiness`, {
       timeoutMs,
       authorization: `Bearer ${secret.trim()}`,
+      useVercelProtectionBypass: !unprotectedRiskAccepted,
       environment,
       fetchImpl
     });
     const failedRequired = Array.isArray(readiness.payload?.checks)
       ? readiness.payload.checks.filter((item) => item.required && item.status !== "pass")
       : [];
-    const ready = readiness.ok && readiness.payload?.ready_for_production === true;
+    const exposureContract = !unprotectedRiskAccepted || (
+      readiness.payload?.single_user_exposure_mode === "unprotected_risk_accepted" &&
+      readiness.payload?.outer_protection_verified === false &&
+      readiness.payload?.unprotected_risk_accepted === true
+    );
+    const ready = readiness.ok &&
+      readiness.payload?.ready_for_production === true &&
+      exposureContract;
     checks.push(result(
       "runtime_readiness",
       "线上发布就绪",
       ready ? "pass" : "fail",
       ready
-        ? "数据库、认证、恢复心跳、HTTPS、模型和执行架构均满足正式要求"
+        ? unprotectedRiskAccepted
+          ? "数据库、固定 owner、模型和执行架构满足要求；readiness 如实标记公网单用户风险已接受"
+          : "数据库、认证、恢复心跳、HTTPS、模型和执行架构均满足正式要求"
         : readiness.ok
-          ? `${failedRequired.length} 项必需检查未通过：${failedRequired.map((item) => item.label).join("、") || "返回状态不完整"}`
+          ? !exposureContract
+            ? "readiness 未如实返回 unprotected_risk_accepted 风险状态"
+            : `${failedRequired.length} 项必需检查未通过：${failedRequired.map((item) => item.label).join("、") || "返回状态不完整"}`
           : `HTTP ${readiness.status}: ${readiness.payload?.error ?? readiness.text ?? "内部探针失败"}`,
       "查看内部 readiness 返回的 remediation，修复后重新验证"
     ));

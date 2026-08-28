@@ -12,6 +12,25 @@ export interface OuterProtectionInspection {
   issues: string[];
 }
 
+export type SingleUserExposureMode =
+  | "local_development"
+  | "protected"
+  | "unprotected_risk_accepted"
+  | "invalid";
+
+export interface UnprotectedSingleUserProductionInspection {
+  valid: boolean;
+  issues: string[];
+}
+
+export interface SingleUserExposureInspection {
+  mode: SingleUserExposureMode;
+  valid: boolean;
+  outerProtection: OuterProtectionInspection | null;
+  unprotectedProduction: UnprotectedSingleUserProductionInspection | null;
+  issues: string[];
+}
+
 function normalizedHttpsOrigin(value: string | undefined) {
   if (!value?.trim()) return null;
   try {
@@ -108,6 +127,99 @@ export function inspectOuterProtectionConfiguration(
     verifiedAt,
     valid: issues.length === 0,
     issues
+  };
+}
+
+/**
+ * Validates the explicit, server-only acknowledgement that a fixed owner is
+ * intentionally exposed on an unprotected Vercel Production domain. This is
+ * not protection and must never make the outer-protection inspection valid.
+ */
+export function inspectUnprotectedSingleUserProductionAcceptance(): UnprotectedSingleUserProductionInspection {
+  const issues: string[] = [];
+  const canonicalFormalOrigin = "https://scenecart-ai.vercel.app";
+  const staleOuterProtectionProof = [
+    "SCENECART_OUTER_PROTECTION_SCOPE",
+    "SCENECART_OUTER_PROTECTION_VERIFIED_AT",
+    "SCENECART_OUTER_PROTECTION_PROJECT_ID",
+    "SCENECART_OUTER_PROTECTION_ORIGIN",
+    "SCENECART_OUTER_PROTECTION_AUDIT_RECEIPT"
+  ].filter((key) => process.env[key]?.trim());
+  if (process.env.SCENECART_ALLOW_UNPROTECTED_SINGLE_USER_PRODUCTION !== "true") {
+    issues.push("缺少公开固定单用户 Production 的知情风险接受声明");
+  }
+  if (process.env.VERCEL_ENV !== "production") {
+    issues.push("公开固定单用户风险接受只允许用于 Vercel Production");
+  }
+  if (process.env.SCENECART_PRODUCT_MODE !== "production") {
+    issues.push("公开固定单用户风险接受要求正式产品模式");
+  }
+  if (process.env.SCENECART_ACCESS_MODE !== "single_user") {
+    issues.push("公开固定单用户风险接受要求 single_user 访问模式");
+  }
+  if (process.env.SCENECART_OUTER_PROTECTION_VERIFIED !== "false") {
+    issues.push("公开固定单用户模式必须明确声明外层保护未验证");
+  }
+  if (staleOuterProtectionProof.length > 0) {
+    issues.push("公开固定单用户模式不得保留过期的外层保护证明");
+  }
+
+  const appOrigins = configuredAppOrigins();
+  const productionHost = process.env.VERCEL_PROJECT_PRODUCTION_URL?.trim() ?? "";
+  const runtimeProductionOrigin = productionHost
+    ? normalizedHttpsOrigin(`https://${productionHost}`)
+    : null;
+  if (
+    appOrigins.length !== 1 ||
+    !runtimeProductionOrigin ||
+    appOrigins[0] !== runtimeProductionOrigin ||
+    appOrigins[0] !== canonicalFormalOrigin
+  ) {
+    issues.push("公开固定单用户 APP_ORIGIN 必须精确匹配 scenecart-ai 的固定 Production 域名");
+  }
+
+  return { valid: issues.length === 0, issues };
+}
+
+export function inspectSingleUserExposureConfiguration(): SingleUserExposureInspection {
+  if (isLocalSingleUserDevelopment()) {
+    return {
+      mode: "local_development",
+      valid: true,
+      outerProtection: null,
+      unprotectedProduction: null,
+      issues: []
+    };
+  }
+
+  const outerProtection = inspectOuterProtectionConfiguration();
+  if (outerProtection.valid) {
+    return {
+      mode: "protected",
+      valid: true,
+      outerProtection,
+      unprotectedProduction: null,
+      issues: []
+    };
+  }
+
+  const unprotectedProduction = inspectUnprotectedSingleUserProductionAcceptance();
+  if (unprotectedProduction.valid) {
+    return {
+      mode: "unprotected_risk_accepted",
+      valid: true,
+      outerProtection,
+      unprotectedProduction,
+      issues: []
+    };
+  }
+
+  return {
+    mode: "invalid",
+    valid: false,
+    outerProtection,
+    unprotectedProduction,
+    issues: [...outerProtection.issues, ...unprotectedProduction.issues]
   };
 }
 

@@ -1,7 +1,6 @@
 import { ApiRouteError } from "@/lib/api/responses";
 import {
-  inspectOuterProtectionConfiguration,
-  isLocalSingleUserDevelopment
+  inspectSingleUserExposureConfiguration
 } from "@/lib/auth/outer-protection";
 import { getRuntimeRepository } from "@/lib/runtime";
 
@@ -25,15 +24,13 @@ export function isSingleUserAccessMode() {
 
 export function configuredSingleUserId() {
   if (!isSingleUserAccessMode()) return null;
-  if (!isLocalSingleUserDevelopment()) {
-    const outerProtection = inspectOuterProtectionConfiguration();
-    if (!outerProtection.valid) {
-      throw new ApiRouteError(
-        `固定单用户访问的外层保护配置无效：${outerProtection.issues.join("；")}`,
-        503,
-        "single_user_outer_protection_required"
-      );
-    }
+  const exposure = inspectSingleUserExposureConfiguration();
+  if (!exposure.valid) {
+    throw new ApiRouteError(
+      `固定单用户访问边界配置无效：${exposure.issues.join("；")}`,
+      503,
+      "single_user_access_boundary_required"
+    );
   }
   const userId = process.env.SCENECART_SINGLE_USER_ID?.trim() ?? "";
   if (!UUID_PATTERN.test(userId)) {

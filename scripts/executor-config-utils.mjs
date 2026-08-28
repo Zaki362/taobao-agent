@@ -1,13 +1,18 @@
 import {
+  DEFAULT_SCENECART_VERCEL_PROTECTION_MODE,
   DEFAULT_SCENECART_PROTECTED_ORIGIN,
   isProtectedVercelOrigin,
-  normalizeProtectedOrigin
+  normalizeProtectedOrigin,
+  vercelProtectionMode
 } from "./vercel-protection-bypass.mjs";
 
-const CORE_MANAGED_KEYS = [
+const MANAGED_KEYS = [
   "TAOBAO_EXECUTION_BACKEND",
   "SCENECART_API_URL",
-  "SCENECART_DEVICE_TOKEN"
+  "SCENECART_DEVICE_TOKEN",
+  "SCENECART_VERCEL_PROTECTION_MODE",
+  "SCENECART_VERCEL_PROTECTED_ORIGIN",
+  "SCENECART_VERCEL_PROTECTION_BYPASS_SECRET"
 ];
 
 function envKey(line) {
@@ -84,13 +89,26 @@ export function preferredVercelProtectedOrigin(
   return "";
 }
 
-export function executorNeedsVercelProtection(apiUrl, protectedOriginValue = "") {
+export function preferredVercelProtectionMode(content, environmentValue = "") {
+  return vercelProtectionMode({
+    SCENECART_VERCEL_PROTECTION_MODE: environmentValue.trim() ||
+      readEnvValue(content, "SCENECART_VERCEL_PROTECTION_MODE").trim() ||
+      DEFAULT_SCENECART_VERCEL_PROTECTION_MODE
+  });
+}
+
+export function executorNeedsVercelProtection(
+  apiUrl,
+  protectedOriginValue = "",
+  protectionModeValue = DEFAULT_SCENECART_VERCEL_PROTECTION_MODE
+) {
   const normalizedApiUrl = normalizeExecutorApiUrl(apiUrl);
   const configuredOrigin = normalizeProtectedOrigin(
     protectedOriginValue.trim() || DEFAULT_SCENECART_PROTECTED_ORIGIN
   );
   return isProtectedVercelOrigin(normalizedApiUrl, {
-    SCENECART_VERCEL_PROTECTED_ORIGIN: configuredOrigin
+    SCENECART_VERCEL_PROTECTED_ORIGIN: configuredOrigin,
+    SCENECART_VERCEL_PROTECTION_MODE: protectionModeValue
   });
 }
 
@@ -159,46 +177,50 @@ export function validateVercelProtectionBypassSecret(value) {
 
 export function updateExecutorEnv(content, values) {
   const apiUrl = normalizeExecutorApiUrl(values.apiUrl);
+  const protectionMode = preferredVercelProtectionMode(
+    content,
+    values.protectionMode?.trim() || ""
+  );
   const updates = {
     TAOBAO_EXECUTION_BACKEND: "local_executor",
     SCENECART_API_URL: apiUrl,
-    SCENECART_DEVICE_TOKEN: validateExecutorDeviceToken(values.deviceToken)
+    SCENECART_DEVICE_TOKEN: validateExecutorDeviceToken(values.deviceToken),
+    SCENECART_VERCEL_PROTECTION_MODE: protectionMode
   };
   const protectedOriginValue = values.protectedOrigin?.trim() ||
     readEnvValue(content, "SCENECART_VERCEL_PROTECTED_ORIGIN").trim();
   const effectiveProtectedOrigin = protectedOriginValue
     ? normalizeProtectedOrigin(protectedOriginValue)
     : DEFAULT_SCENECART_PROTECTED_ORIGIN;
-  const protectionRequired = executorNeedsVercelProtection(apiUrl, effectiveProtectedOrigin);
+  const protectionRequired = executorNeedsVercelProtection(
+    apiUrl,
+    effectiveProtectedOrigin,
+    protectionMode
+  );
   if (protectionRequired) {
     const bypassSecret = values.bypassSecret?.trim() ||
       readEnvValue(content, "SCENECART_VERCEL_PROTECTION_BYPASS_SECRET").trim();
     updates.SCENECART_VERCEL_PROTECTED_ORIGIN = effectiveProtectedOrigin;
     updates.SCENECART_VERCEL_PROTECTION_BYPASS_SECRET =
       validateVercelProtectionBypassSecret(bypassSecret);
+  } else if (protectionMode === "unprotected") {
+    updates.SCENECART_VERCEL_PROTECTED_ORIGIN = DEFAULT_SCENECART_PROTECTED_ORIGIN;
   } else if (values.protectedOrigin?.trim()) {
     updates.SCENECART_VERCEL_PROTECTED_ORIGIN = effectiveProtectedOrigin;
   }
 
-  const managedKeys = [...CORE_MANAGED_KEYS, ...Object.keys(updates).filter(
-    (key) => !CORE_MANAGED_KEYS.includes(key)
-  )];
-
   const seen = new Set();
-  const lines = content.split(/\r?\n/).filter((line, index, source) => {
-    if (index === source.length - 1 && line === "") return false;
+  const lines = content.split(/\r?\n/).flatMap((line, index, source) => {
+    if (index === source.length - 1 && line === "") return [];
     const key = envKey(line);
-    if (!key || !managedKeys.includes(key)) return true;
-    if (seen.has(key)) return false;
+    if (!key || !MANAGED_KEYS.includes(key)) return [line];
+    if (seen.has(key)) return [];
     seen.add(key);
-    return true;
-  }).map((line) => {
-    const key = envKey(line);
-    if (!key || !(key in updates)) return line;
-    return `${key}=${encodeEnvValue(updates[key])}`;
+    if (!(key in updates)) return [];
+    return [`${key}=${encodeEnvValue(updates[key])}`];
   });
 
-  const missing = managedKeys.filter((key) => !seen.has(key));
+  const missing = Object.keys(updates).filter((key) => !seen.has(key));
   if (missing.length > 0) {
     if (lines.length > 0 && lines.at(-1)?.trim()) lines.push("");
     lines.push("# SceneCart local executor");

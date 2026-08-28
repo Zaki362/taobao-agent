@@ -21,8 +21,10 @@ const originalProtectionScope = process.env.SCENECART_OUTER_PROTECTION_SCOPE;
 const originalProtectionVerifiedAt = process.env.SCENECART_OUTER_PROTECTION_VERIFIED_AT;
 const originalProtectionProjectId = process.env.SCENECART_OUTER_PROTECTION_PROJECT_ID;
 const originalProtectionOrigin = process.env.SCENECART_OUTER_PROTECTION_ORIGIN;
+const originalProtectionAuditReceipt = process.env.SCENECART_OUTER_PROTECTION_AUDIT_RECEIPT;
 const originalVercelProjectId = process.env.VERCEL_PROJECT_ID;
 const originalVercelProductionUrl = process.env.VERCEL_PROJECT_PRODUCTION_URL;
+const originalUnprotectedRiskAccepted = process.env.SCENECART_ALLOW_UNPROTECTED_SINGLE_USER_PRODUCTION;
 
 beforeEach(() => {
   resetLocalRuntimeForTests();
@@ -38,8 +40,10 @@ beforeEach(() => {
   delete process.env.SCENECART_OUTER_PROTECTION_VERIFIED_AT;
   delete process.env.SCENECART_OUTER_PROTECTION_PROJECT_ID;
   delete process.env.SCENECART_OUTER_PROTECTION_ORIGIN;
+  delete process.env.SCENECART_OUTER_PROTECTION_AUDIT_RECEIPT;
   delete process.env.VERCEL_PROJECT_ID;
   delete process.env.VERCEL_PROJECT_PRODUCTION_URL;
+  delete process.env.SCENECART_ALLOW_UNPROTECTED_SINGLE_USER_PRODUCTION;
 });
 
 afterEach(() => {
@@ -79,10 +83,14 @@ afterEach(() => {
   else process.env.SCENECART_OUTER_PROTECTION_PROJECT_ID = originalProtectionProjectId;
   if (originalProtectionOrigin === undefined) delete process.env.SCENECART_OUTER_PROTECTION_ORIGIN;
   else process.env.SCENECART_OUTER_PROTECTION_ORIGIN = originalProtectionOrigin;
+  if (originalProtectionAuditReceipt === undefined) delete process.env.SCENECART_OUTER_PROTECTION_AUDIT_RECEIPT;
+  else process.env.SCENECART_OUTER_PROTECTION_AUDIT_RECEIPT = originalProtectionAuditReceipt;
   if (originalVercelProjectId === undefined) delete process.env.VERCEL_PROJECT_ID;
   else process.env.VERCEL_PROJECT_ID = originalVercelProjectId;
   if (originalVercelProductionUrl === undefined) delete process.env.VERCEL_PROJECT_PRODUCTION_URL;
   else process.env.VERCEL_PROJECT_PRODUCTION_URL = originalVercelProductionUrl;
+  if (originalUnprotectedRiskAccepted === undefined) delete process.env.SCENECART_ALLOW_UNPROTECTED_SINGLE_USER_PRODUCTION;
+  else process.env.SCENECART_ALLOW_UNPROTECTED_SINGLE_USER_PRODUCTION = originalUnprotectedRiskAccepted;
 });
 
 describe("production readiness", () => {
@@ -118,6 +126,31 @@ describe("production readiness", () => {
       detail: expect.stringContaining("固定 owner")
     });
     expect(readiness.checks.find((item) => item.id === "outer_protection")?.status).toBe("pass");
+  });
+
+  it("reports unprotected Production risk acceptance without pretending outer protection is verified", async () => {
+    process.env.SCENECART_ACCESS_MODE = "single_user";
+    process.env.SCENECART_SINGLE_USER_ID = "11111111-1111-4111-8111-111111111111";
+    process.env.SCENECART_PRODUCT_MODE = "production";
+    process.env.VERCEL_ENV = "production";
+    process.env.APP_ORIGIN = "https://scenecart-ai.vercel.app";
+    process.env.VERCEL_PROJECT_PRODUCTION_URL = "scenecart-ai.vercel.app";
+    process.env.SCENECART_ALLOW_UNPROTECTED_SINGLE_USER_PRODUCTION = "true";
+    process.env.SCENECART_OUTER_PROTECTION_VERIFIED = "false";
+
+    const readiness = await inspectRuntimeReadiness();
+    const checks = new Map(readiness.checks.map((item) => [item.id, item]));
+
+    expect(readiness.single_user_exposure_mode).toBe("unprotected_risk_accepted");
+    expect(readiness.outer_protection_verified).toBe(false);
+    expect(readiness.unprotected_risk_accepted).toBe(true);
+    expect(checks.get("single_user_exposure_policy")).toMatchObject({ status: "pass", required: true });
+    expect(checks.get("outer_protection")).toMatchObject({
+      status: "warn",
+      required: false,
+      detail: expect.stringContaining("知道固定域名的人")
+    });
+    expect(JSON.stringify(readiness)).not.toContain("11111111-1111-4111-8111-111111111111");
   });
 
   it("treats null-owner activity in any required runtime table as a hard integrity failure", () => {

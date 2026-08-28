@@ -21,22 +21,25 @@
 
 正式产品只供一个 owner 使用。`SCENECART_SINGLE_USER_ID` 指向正式数据库中已经存在的唯一 owner，并且只能保存在服务端环境；不得使用 `NEXT_PUBLIC_` 前缀、写入前端、日志、仓库或 Demo。数据库凭据、DeepSeek Key、Cron Secret、Vercel Protection Bypass Secret 和设备 Token 同样只能存在于各自的服务端或本机 Worker。
 
-SceneCart 不再显示登录、注册或创建账号入口。通过 Vercel 外层验证后直接进入产品；`/login` 回到首页，注册页面或普通登录/注册 API 不再提供公众账号能力。固定 owner 不能是 anonymous、public-demo 或临时身份。
+SceneCart 不再显示登录、注册或创建账号入口。进入正式产品后直接绑定服务端固定 owner；`/login` 回到首页，注册页面或普通登录/注册 API 不再提供公众账号能力。固定 owner 不能是 anonymous、public-demo 或临时身份。
 
-## Vercel 外层保护门禁
+## 正式产品暴露策略门禁
 
-固定 owner 模式只有在固定 Production 域名已经受到 Vercel **All Deployments Protection**、并经过无凭据与已授权浏览器实际验证后才允许发布。受保护 Preview 可以用于验收，但 Preview 通过不代表 Production 获得保护，也不等于 Production 发布授权。
+固定 owner 的远程运行默认 fail closed，只有以下两种互斥策略之一完整有效时才允许启动：
 
-当前团队使用 Vercel Hobby。其 Standard Protection 可保护 Preview / 自动生成部署地址，但不保护固定 Production 域名。因此当前必须停止 `scenecart-ai` Production 发布：不得把固定 owner 以匿名公网方式暴露，也不得仅靠环境变量声明绕过门禁。只有升级到支持 All Deployments Protection 的方案、完成实际保护验证并取得独立 Production 授权后，才可发布正式固定域名。公开 Demo 的 Production 发布同样需要独立授权，但不需要访问保护。
+1. **protected**：Vercel 外层保护范围、核验时间、项目 ID、正式 origin 与当前部署完全一致；固定 Production 还必须使用 **All Deployments Protection** 并经过无凭据与已授权浏览器实际验证。
+2. **unprotected_risk_accepted**：仅允许 canonical `https://scenecart-ai.vercel.app` 的 Vercel Production 使用；必须同时设置 `SCENECART_ALLOW_UNPROTECTED_SINGLE_USER_PRODUCTION=true` 与 `SCENECART_OUTER_PROTECTION_VERIFIED=false`，不得残留保护范围、核验时间、项目 ID、保护 origin 或审计回执，并且必须取得用户明确知情接受公开固定 owner 风险的独立 Production 授权。
 
-## Worker 双凭据
+受保护 Preview 可以用于验收，但 Preview 通过不代表 Production 获得保护，也不等于 Production 发布授权。当前团队使用 Vercel Hobby，其 Standard Protection 可保护 Preview / 自动生成部署地址，但不保护固定 Production 域名；当前正式 Production 因此采用第二种风险接受模式。知道固定域名的人可以直接进入同一个固定 owner 产品，readiness 必须如实返回 `single_user_exposure_mode=unprotected_risk_accepted`、`outer_protection_verified=false` 与 `unprotected_risk_accepted=true`，不能把风险开关包装成保护。升级到支持 All Deployments Protection 的方案并完成实际验证后，应切回第一种策略。公开 Demo 的 Production 发布同样需要独立授权，但不需要访问保护。
 
-Vercel 外层保护与 SceneCart 设备鉴权是两个独立边界。远程 Worker 请求必须同时携带：
+## Worker 机器鉴权
+
+Vercel 外层保护与 SceneCart 设备鉴权是两个独立边界。连接受保护 origin 时，远程 Worker 请求必须同时携带：
 
 1. `SCENECART_VERCEL_PROTECTED_ORIGIN` 与 `SCENECART_VERCEL_PROTECTION_BYPASS_SECRET`，只用于穿过 Vercel Protection；
 2. `SCENECART_DEVICE_TOKEN`（或云端专用设备 Token），只用于 SceneCart Worker API 鉴权。
 
-只有 Bypass 没有设备 Token 时，仍不得注册心跳、领取任务或回传结果；只有设备 Token 没有 Bypass 时，请求应被 Vercel 外层拦截。三个值只保存在 Worker 所在机器的 `0600` 本地环境文件或系统密钥存储中。日志必须脱敏，跨源重定向必须 fail closed。Cron、Webhook、readiness 与后台恢复调用也要单独配置并验证穿透方式。
+只有 Bypass 没有设备 Token 时，仍不得注册心跳、领取任务或回传结果；只有设备 Token 没有 Bypass 时，请求应被 Vercel 外层拦截。无保护的 `unprotected_risk_accepted` Production 不配置 Vercel Protected Origin 或 Bypass，但 SceneCart 设备 Bearer Token 仍是必需鉴权，缺失或失效时必须拒绝 Worker API。所有凭据只保存在 Worker 所在机器的 `0600` 本地环境文件或系统密钥存储中。日志必须脱敏，跨源重定向必须 fail closed。Cron、Webhook、readiness 与后台恢复调用也要按实际暴露策略配置，并始终保留各自的 SceneCart Bearer Secret。
 
 ## Demo 冻结边界
 

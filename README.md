@@ -72,7 +72,7 @@ SceneCart AI 是一个正在按正式产品架构推进的“场景化购物 Age
 
 线上长期保留两个职责明确的固定域名：正式产品使用 `https://scenecart-ai.vercel.app/`，公开体验使用 `https://scenecart-public-demo.vercel.app/`。正式站 `/demo` 重定向到公开 Demo 根路径；公开 Demo 的 `/` 是唯一正式入口，旧 `/demo` 只做兼容重定向，自动演示使用 `/?autoplay=1`。公开 Demo 不继承正式站身份，也不连接正式数据库、DeepSeek、正式 `/api/*`、淘宝账户或本地执行器。
 
-正式产品通过 Vercel 外层保护后直接进入，不再显示 SceneCart 登录、注册或创建账号入口。当前 Vercel Hobby 的 Standard Protection 只能保护 Preview，不能保护固定 Production 域名，因此固定 owner 的正式 Production 当前必须停止；只有升级到支持 All Deployments Protection 的方案并完成实际验证后才允许发布。
+正式产品直接绑定服务端固定 owner，不再显示 SceneCart 登录、注册或创建账号入口。远程运行默认 fail closed：优先使用经过实际核验的 Vercel 外层保护；当前 Hobby 固定 Production 域名没有该保护，因此只在用户明确知情接受“知道域名的人可进入同一个固定 owner 产品”的风险、启用严格的服务端风险开关并取得独立 Production 授权后发布。readiness 会如实报告 `unprotected_risk_accepted`，不会把该状态伪装成外层保护已验证。
 
 区别只在数据与执行层：新车主场景使用 2026-08-08 的脱敏历史快照，其余已开放场景使用明确标注的本地冻结样本；这些样本不代表实时淘宝商品。Demo 不要求登录，也不会调用模型、数据库、淘宝 MCP、真实购物车、订单或支付能力。访问者可以按正式产品流程手动修改预算、查看规划、展开备选、加入演示清单和移除商品；右上角“启动自动演示”会用可见鼠标逐步点击同一批真实控件，播放中点击页面任意位置会暂停，点击“继续演示”会从中断步骤恢复。
 
@@ -201,7 +201,10 @@ DATABASE_SSL_REJECT_UNAUTHORIZED=true
 AUTH_REQUIRED=false
 SCENECART_ACCESS_MODE=single_user
 SCENECART_SINGLE_USER_ID=server-only-existing-owner-id
+SCENECART_ALLOW_UNPROTECTED_SINGLE_USER_PRODUCTION=true
+SCENECART_OUTER_PROTECTION_VERIFIED=false
 APP_ORIGIN=https://scenecart-ai.vercel.app
+SCENECART_PUBLIC_DEMO_URL=https://scenecart-public-demo.vercel.app
 NEXT_PUBLIC_SCENECART_PUBLIC_DEMO_URL=https://scenecart-public-demo.vercel.app
 SCENECART_API_URL=http://127.0.0.1:3000
 SCENECART_DEMO_CLOUD_URL=https://your-scenecart.example.com
@@ -226,9 +229,11 @@ SCENECART_CRON_SECRET=
 - `RUNTIME_STORE=postgres`：启用 PostgreSQL 用户、Session、任务与事件持久化；`local` 只适合开发和自动化测试。
 - `SCENECART_LOCAL_RUNTIME_PERSIST`：本地开发默认为 `true`，把设备令牌摘要、登录会话和任务队列原子写入被 Git 忽略的 `.data/runtime/local-runtime.json`，完整重启后无需重新注册设备；自动化测试会显式关闭。正式环境仍必须使用 PostgreSQL。
 - `DATABASE_URL`：PostgreSQL 连接串。配置后先运行 `npm run db:migrate`。
-- `SCENECART_ACCESS_MODE=single_user`：正式产品固定使用；配合既有 `app_users` 的服务端 `SCENECART_SINGLE_USER_ID`，不显示应用登录页，Session、设备和任务全部绑定该 owner。Production 只有在固定域名已启用并人工验证 All Deployments Protection 时才可发布；当前 Hobby 不满足，必须停止。
+- `SCENECART_ACCESS_MODE=single_user`：正式产品固定使用；配合既有 `app_users` 的服务端 `SCENECART_SINGLE_USER_ID`，不显示应用登录页，Session、设备和任务全部绑定该 owner。远程运行还必须满足一种明确的暴露策略：经核验的 Vercel 外层保护，或仅针对 canonical Production 的显式风险接受模式。
+- `SCENECART_ALLOW_UNPROTECTED_SINGLE_USER_PRODUCTION=true`：仅供服务端在用户已经知情接受风险、固定域名精确为 `https://scenecart-ai.vercel.app`、`VERCEL_ENV=production` 且 `SCENECART_OUTER_PROTECTION_VERIFIED=false` 时启用。它不是保护措施，不得使用 `NEXT_PUBLIC_` 前缀；保护范围、核验时间、项目 ID、origin 与审计回执等旧保护证明必须保持未配置。
+- `SCENECART_OUTER_PROTECTION_VERIFIED`：受保护环境只有完成真实核验后才可设为 `true`。当前无保护 Hobby Production 必须明确为 `false`，readiness 会以 `unprotected_risk_accepted` 报告风险接受状态。
 - `APP_ORIGIN`：正式产品允许发起写请求的网页 Origin；多个地址使用逗号分隔。
-- `NEXT_PUBLIC_SCENECART_PUBLIC_DEMO_URL`：正式站“观看 Demo”入口使用的独立公开 Demo HTTPS origin。留空时安全回退到 `https://scenecart-public-demo.vercel.app`；正式站 `/demo` 会重定向到 Demo 根路径，可用 `?autoplay=1` 自动播放。
+- `SCENECART_PUBLIC_DEMO_URL` / `NEXT_PUBLIC_SCENECART_PUBLIC_DEMO_URL`：正式站服务端重定向与“观看 Demo”入口使用的独立公开 Demo HTTPS origin。留空时安全回退到 `https://scenecart-public-demo.vercel.app`；正式站 `/demo` 会重定向到 Demo 根路径，可用 `?autoplay=1` 自动播放。
 - `SCENECART_RELEASE_VERIFY_URL`：可选的正式发布探测地址；`npm run release:verify` 未显式传 `--url` 时优先使用它，否则使用 `APP_ORIGIN` 的第一个地址。
 - `SCENECART_DEMO_CLOUD_URL`：可选的云端面试网页根地址；`npm run demo:cloud` 未传 `--url` 时优先读取它。该命令只接受非本地 HTTPS 地址。
 - `SCENECART_CLOUD_DEVICE_TOKEN`：只保存在面试电脑 `.env.local` 的云端设备令牌；与纯本地 `SCENECART_DEVICE_TOKEN` 分离，不能上传 Vercel。
@@ -376,12 +381,12 @@ npm run start
 实例启动并收到恢复 Worker 心跳后，用一条命令完成静态配置、数据库、health 与只读 readiness 验证：
 
 ```bash
-SCENECART_RELEASE_VERIFY_URL=https://受保护的内部验收地址 npm run release:verify
+SCENECART_RELEASE_VERIFY_URL=https://当前正式验收地址 npm run release:verify
 ```
 
 先通过受控服务端运维流程为固定 owner 预置设备 Token，再在运行淘宝桌面版且已开启官方 HTTP MCP 的机器启动：
 
-在当前 Hobby 仅能保护 Preview 的阶段，先由 `executor:provision` 安全签发设备，再把**受保护的内部 Preview**及双凭据写入被 Git 忽略的 `.env.local`；不得把这里的地址替换为尚未受到 All Deployments Protection 的固定 Production 域名：
+连接**受保护的内部 Preview**时，先由 `executor:provision` 安全签发设备，再把 Preview 及双凭据写入被 Git 忽略的 `.env.local`：
 
 ```dotenv
 SCENECART_API_URL=https://受保护的内部验收地址
@@ -400,7 +405,9 @@ npm run executor:doctor
 npm run worker:local
 ```
 
-推荐用 `SCENECART_API_URL=https://受保护的内部验收地址 npm run executor:configure` 在交互式终端中隐藏写入精确受保护 origin、Vercel Bypass 和预置设备 Token；它不会回显凭据或覆盖 DeepSeek 等无关环境变量。`worker:local` 会先校验外层保护、SceneCart 设备鉴权及其能力，再以 `mcp_unavailable` 状态等待淘宝桌面版官方 MCP 通过无副作用的工具检查；只有两层鉴权和工具就绪后才领取任务。升级套餐、实际验证 All Deployments Protection 并单独获批正式 Production 后，才可把两个地址改为固定域名。
+推荐用 `SCENECART_API_URL=https://受保护的内部验收地址 npm run executor:configure` 在交互式终端中隐藏写入精确受保护 origin、Vercel Bypass 和预置设备 Token；它不会回显凭据或覆盖 DeepSeek 等无关环境变量。受保护 origin 下，`worker:local` 会同时校验 Vercel Bypass 与 SceneCart 设备鉴权，只有两层鉴权和淘宝工具就绪后才领取任务。
+
+当前明确接受风险的无保护 Hobby Production 使用固定 `SCENECART_API_URL=https://scenecart-ai.vercel.app`，不配置 `SCENECART_VERCEL_PROTECTED_ORIGIN` 或 `SCENECART_VERCEL_PROTECTION_BYPASS_SECRET`。这只取消穿过 Vercel 外层保护所需的 Bypass；本机 `SCENECART_DEVICE_TOKEN` 仍然必需，缺失或失效时 Worker 不得注册心跳、领取任务或回传结果。无论哪种暴露策略，Worker 都会以 `mcp_unavailable` 状态等待淘宝桌面版官方 MCP 通过无副作用的工具检查。
 
 ## 当前实现边界
 

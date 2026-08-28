@@ -13,8 +13,11 @@ const originalProtectionScope = process.env.SCENECART_OUTER_PROTECTION_SCOPE;
 const originalProtectionVerifiedAt = process.env.SCENECART_OUTER_PROTECTION_VERIFIED_AT;
 const originalProtectionProjectId = process.env.SCENECART_OUTER_PROTECTION_PROJECT_ID;
 const originalProtectionOrigin = process.env.SCENECART_OUTER_PROTECTION_ORIGIN;
+const originalProtectionAuditReceipt = process.env.SCENECART_OUTER_PROTECTION_AUDIT_RECEIPT;
 const originalVercelProjectId = process.env.VERCEL_PROJECT_ID;
 const originalVercelProductionUrl = process.env.VERCEL_PROJECT_PRODUCTION_URL;
+const originalProductMode = process.env.SCENECART_PRODUCT_MODE;
+const originalUnprotectedRiskAccepted = process.env.SCENECART_ALLOW_UNPROTECTED_SINGLE_USER_PRODUCTION;
 
 function restore(name: "AUTH_REQUIRED" | "APP_ORIGIN", value: string | undefined) {
   if (value === undefined) delete process.env[name];
@@ -35,6 +38,19 @@ describe("API mutation origin protection", () => {
   beforeEach(() => {
     process.env.AUTH_REQUIRED = "true";
     process.env.APP_ORIGIN = "https://scenecart.example.com";
+    delete process.env.SCENECART_ACCESS_MODE;
+    delete process.env.VERCEL_ENV;
+    delete process.env.VERCEL_URL;
+    delete process.env.SCENECART_OUTER_PROTECTION_VERIFIED;
+    delete process.env.SCENECART_OUTER_PROTECTION_SCOPE;
+    delete process.env.SCENECART_OUTER_PROTECTION_VERIFIED_AT;
+    delete process.env.SCENECART_OUTER_PROTECTION_PROJECT_ID;
+    delete process.env.SCENECART_OUTER_PROTECTION_ORIGIN;
+    delete process.env.SCENECART_OUTER_PROTECTION_AUDIT_RECEIPT;
+    delete process.env.VERCEL_PROJECT_ID;
+    delete process.env.VERCEL_PROJECT_PRODUCTION_URL;
+    delete process.env.SCENECART_PRODUCT_MODE;
+    delete process.env.SCENECART_ALLOW_UNPROTECTED_SINGLE_USER_PRODUCTION;
   });
 
   afterAll(() => {
@@ -56,10 +72,16 @@ describe("API mutation origin protection", () => {
     else process.env.SCENECART_OUTER_PROTECTION_PROJECT_ID = originalProtectionProjectId;
     if (originalProtectionOrigin === undefined) delete process.env.SCENECART_OUTER_PROTECTION_ORIGIN;
     else process.env.SCENECART_OUTER_PROTECTION_ORIGIN = originalProtectionOrigin;
+    if (originalProtectionAuditReceipt === undefined) delete process.env.SCENECART_OUTER_PROTECTION_AUDIT_RECEIPT;
+    else process.env.SCENECART_OUTER_PROTECTION_AUDIT_RECEIPT = originalProtectionAuditReceipt;
     if (originalVercelProjectId === undefined) delete process.env.VERCEL_PROJECT_ID;
     else process.env.VERCEL_PROJECT_ID = originalVercelProjectId;
     if (originalVercelProductionUrl === undefined) delete process.env.VERCEL_PROJECT_PRODUCTION_URL;
     else process.env.VERCEL_PROJECT_PRODUCTION_URL = originalVercelProductionUrl;
+    if (originalProductMode === undefined) delete process.env.SCENECART_PRODUCT_MODE;
+    else process.env.SCENECART_PRODUCT_MODE = originalProductMode;
+    if (originalUnprotectedRiskAccepted === undefined) delete process.env.SCENECART_ALLOW_UNPROTECTED_SINGLE_USER_PRODUCTION;
+    else process.env.SCENECART_ALLOW_UNPROTECTED_SINGLE_USER_PRODUCTION = originalUnprotectedRiskAccepted;
   });
 
   it("does not let an arbitrary Bearer value bypass Origin checks for a session request", async () => {
@@ -150,7 +172,7 @@ describe("API mutation origin protection", () => {
 
     expect(response.status).toBe(503);
     await expect(response.json()).resolves.toMatchObject({
-      code: "single_user_outer_protection_required"
+      code: "single_user_access_boundary_required"
     });
   });
 
@@ -165,7 +187,27 @@ describe("API mutation origin protection", () => {
 
     expect(response.status).toBe(503);
     await expect(response.json()).resolves.toMatchObject({
-      code: "single_user_outer_protection_required"
+      code: "single_user_access_boundary_required"
     });
+  });
+
+  it("allows same-origin and Bearer machine mutations under explicit unprotected Production risk acceptance", () => {
+    process.env.SCENECART_ACCESS_MODE = "single_user";
+    process.env.VERCEL_ENV = "production";
+    process.env.SCENECART_PRODUCT_MODE = "production";
+    process.env.APP_ORIGIN = "https://scenecart-ai.vercel.app";
+    process.env.VERCEL_PROJECT_PRODUCTION_URL = "scenecart-ai.vercel.app";
+    process.env.SCENECART_ALLOW_UNPROTECTED_SINGLE_USER_PRODUCTION = "true";
+    process.env.SCENECART_OUTER_PROTECTION_VERIFIED = "false";
+
+    const browserResponse = middleware(mutationRequest({
+      origin: "https://scenecart-ai.vercel.app"
+    }));
+    const workerResponse = middleware(mutationRequest({
+      authorization: "Bearer machine-token"
+    }, "/api/executor/heartbeat"));
+
+    expect(browserResponse.headers.get("x-middleware-next")).toBe("1");
+    expect(workerResponse.headers.get("x-middleware-next")).toBe("1");
   });
 });

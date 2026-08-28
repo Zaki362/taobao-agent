@@ -220,6 +220,79 @@ describe("local executor Vercel protection boundary", () => {
     expect(authenticated.status).toBe(200);
   });
 
+  it("uses explicit unprotected transport only for the fixed formal origin without weakening Bearer auth", async () => {
+    const formalOrigin = "https://scenecart-ai.vercel.app";
+    const unprotectedEnvironment = {
+      SCENECART_VERCEL_PROTECTION_MODE: "unprotected",
+      SCENECART_VERCEL_PROTECTED_ORIGIN: formalOrigin,
+      SCENECART_VERCEL_PROTECTION_BYPASS_SECRET: bypassSecret,
+      SCENECART_DEVICE_TOKEN: deviceToken,
+      SCENECART_CRON_SECRET: cronSecret
+    };
+    const calls: Array<{
+      url: string;
+      authorization: string | null;
+      bypass: string | null;
+      redirect?: RequestRedirect;
+    }> = [];
+    const bearerServer = (async (input: string | URL | Request, init?: RequestInit) => {
+      const headers = new Headers(init?.headers);
+      calls.push({
+        url: String(input),
+        authorization: headers.get("authorization"),
+        bypass: headers.get("x-vercel-protection-bypass"),
+        redirect: init?.redirect
+      });
+      const pathname = new URL(String(input)).pathname;
+      const expected = pathname.startsWith("/api/executor/")
+        ? `Bearer ${deviceToken}`
+        : `Bearer ${cronSecret}`;
+      return new Response(JSON.stringify({ ok: headers.get("authorization") === expected }), {
+        status: headers.get("authorization") === expected ? 200 : 401,
+        headers: { "Content-Type": "application/json" }
+      });
+    }) as typeof fetch;
+
+    expect(vercelProtectionBypassHeaders(
+      `${formalOrigin}/api/executor/heartbeat`,
+      unprotectedEnvironment
+    )).toEqual({});
+
+    const workerResponse = await vercelProtectedFetch(
+      `${formalOrigin}/api/executor/heartbeat`,
+      { method: "POST", headers: { Authorization: `Bearer ${deviceToken}` } },
+      { environment: unprotectedEnvironment, fetchImpl: bearerServer }
+    );
+    const workerWithoutBearer = await vercelProtectedFetch(
+      `${formalOrigin}/api/executor/heartbeat`,
+      { method: "POST" },
+      { environment: unprotectedEnvironment, fetchImpl: bearerServer }
+    );
+    const cronResponse = await vercelProtectedFetch(
+      `${formalOrigin}/api/internal/workflow-recovery?limit=5`,
+      { headers: { Authorization: `Bearer ${cronSecret}` } },
+      { environment: unprotectedEnvironment, fetchImpl: bearerServer }
+    );
+
+    expect(workerResponse.status).toBe(200);
+    expect(workerWithoutBearer.status).toBe(401);
+    expect(cronResponse.status).toBe(200);
+    expect(calls).toHaveLength(3);
+    expect(calls.every((call) => call.bypass === null)).toBe(true);
+    expect(calls.every((call) => call.redirect === "manual")).toBe(true);
+    expect(calls[0]?.authorization).toBe(`Bearer ${deviceToken}`);
+    expect(calls[2]?.authorization).toBe(`Bearer ${cronSecret}`);
+
+    expect(() => vercelProtectionBypassHeaders(
+      "https://scenecart-ai.vercel.app.evil.test/api/executor/heartbeat",
+      unprotectedEnvironment
+    )).toThrow("只能请求 https://scenecart-ai.vercel.app");
+    expect(() => vercelProtectionBypassHeaders(`${formalOrigin}/api/executor/heartbeat`, {
+      ...unprotectedEnvironment,
+      SCENECART_VERCEL_PROTECTED_ORIGIN: "https://preview.example.com"
+    })).toThrow("只允许固定正式 origin");
+  });
+
   it("classifies an outer-protection rejection and redacts every machine secret", async () => {
     const alwaysChallenges = (async () => new Response(
       `<html>Vercel Authentication Required ${bypassSecret} ${deviceToken} ${cronSecret}</html>`,
@@ -302,8 +375,10 @@ describe("local executor Vercel protection boundary", () => {
     ]);
     expect(executorSource).toContain("isVercelProtectionError(error)");
     expect(executorSource).toContain("new FatalExecutorApiError(");
+    expect(executorSource).toContain("Authorization: `Bearer ${deviceToken}`");
     expect(doctorSource).toContain("vercelProtectedFetch");
     expect(recoverySource).toContain("fatalAuthenticationError = error");
+    expect(recoverySource).toContain("Authorization: `Bearer ${secret}`");
     expect(recoverySource).toContain("if (fatalAuthenticationError) process.exitCode = 1");
   });
 });

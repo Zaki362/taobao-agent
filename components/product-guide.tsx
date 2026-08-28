@@ -126,7 +126,7 @@ const architectureLayers: Array<{ icon: LucideIcon; title: string; detail: strin
 
 const comparisonRows = [
   ["主要用途", "个人真实体验与购物执行", "项目展示与公开流程体验"],
-  ["访问", "Vercel 外层保护，通过后直接绑定固定 owner", "完全公开，无需登录"],
+  ["访问", "固定域名直接进入并绑定固定 owner；当前 Production 未启用 Vercel 外层保护", "完全公开，无需登录"],
   ["需求与规划", "DeepSeek + 安全规则", "冻结样本流程"],
   ["商品数据", "本地执行器连接淘宝工具", "脱敏历史快照或固定样本"],
   ["价格与库存", "以当次真实搜索为准", "不代表实时价格和库存"],
@@ -393,7 +393,7 @@ function GuidePanel({ sectionId, mode }: { sectionId: GuideSectionId; mode: Prod
           <ShieldCheck className="h-4 w-4 shrink-0" aria-hidden="true" />
           <p>{mode === "demo"
             ? "当前是公开 Demo。你可以体验完整产品流程，但其中商品与价格不代表实时淘宝数据。"
-            : "当前是受 Vercel 外层保护的正式产品。通过验证后会直接绑定服务端配置的固定 owner；真实搜索和加购仍需要本地执行器在线。"}</p>
+            : "当前是正式单用户产品，会直接绑定服务端配置的固定 owner；当前 Production 未启用 Vercel 外层保护，知道固定域名的人可以访问。真实搜索和加购仍需要本地执行器在线。"}</p>
         </div>
       </section>
     );
@@ -544,7 +544,7 @@ export function ProductGuideDialog({ mode, open, onOpenChange }: { mode: Product
               ))}
             </nav>
             <div className="product-guide-mode-cards" aria-label="当前运行版本">
-              <div className={!isDemo ? "product-guide-mode-active" : undefined}><strong>正式产品</strong><span>Vercel 保护、固定 owner 与真实任务环境</span></div>
+              <div className={!isDemo ? "product-guide-mode-active" : undefined}><strong>正式产品</strong><span>固定 owner 与真实任务环境；当前 Production 未启用外层保护</span></div>
               <div className={isDemo ? "product-guide-mode-active" : undefined}><strong>公开 Demo</strong><span>冻结数据体验版</span></div>
             </div>
           </aside>

@@ -57,7 +57,9 @@ function formalOrigins(value) {
 }
 
 const publicDemoOrigin = normalizeHttpsOrigin(
-  process.env.NEXT_PUBLIC_SCENECART_PUBLIC_DEMO_URL ?? "https://scenecart-public-demo.vercel.app"
+  process.env.SCENECART_PUBLIC_DEMO_URL ??
+  process.env.NEXT_PUBLIC_SCENECART_PUBLIC_DEMO_URL ??
+  "https://scenecart-public-demo.vercel.app"
 );
 const demoOriginSeparated = Boolean(publicDemoOrigin)
   && !formalOrigins(process.env.APP_ORIGIN).includes(publicDemoOrigin);
@@ -95,6 +97,24 @@ const outerProtectionConfigurationReady =
   formalOrigins(process.env.APP_ORIGIN).length === 1 &&
   formalOrigins(process.env.APP_ORIGIN)[0] === declaredProtectionOrigin &&
   currentVercelProductionOrigin === declaredProtectionOrigin;
+const formalAppOrigins = formalOrigins(process.env.APP_ORIGIN);
+const staleOuterProtectionProof = [
+  "SCENECART_OUTER_PROTECTION_SCOPE",
+  "SCENECART_OUTER_PROTECTION_VERIFIED_AT",
+  "SCENECART_OUTER_PROTECTION_PROJECT_ID",
+  "SCENECART_OUTER_PROTECTION_ORIGIN",
+  "SCENECART_OUTER_PROTECTION_AUDIT_RECEIPT"
+].some((key) => Boolean(process.env[key]?.trim()));
+const unprotectedProductionRiskAccepted =
+  process.env.SCENECART_ACCESS_MODE === "single_user" &&
+  process.env.VERCEL_ENV === "production" &&
+  process.env.SCENECART_PRODUCT_MODE === "production" &&
+  process.env.SCENECART_ALLOW_UNPROTECTED_SINGLE_USER_PRODUCTION === "true" &&
+  process.env.SCENECART_OUTER_PROTECTION_VERIFIED === "false" &&
+  !staleOuterProtectionProof &&
+  formalAppOrigins.length === 1 &&
+  formalAppOrigins[0] === "https://scenecart-ai.vercel.app" &&
+  currentVercelProductionOrigin === formalAppOrigins[0];
 
 function readLiveProtectionReceipt() {
   const receiptPath = process.env.SCENECART_OUTER_PROTECTION_AUDIT_RECEIPT?.trim();
@@ -138,7 +158,18 @@ const interactiveAuthenticationClosed =
   !registerRouteSource.includes("readJsonObject");
 
 function check(id, label, pass, detail, remediation) {
-  return { id, label, status: pass ? "pass" : "fail", detail, remediation: pass ? undefined : remediation };
+  return { id, label, status: pass ? "pass" : "fail", required: true, detail, remediation: pass ? undefined : remediation };
+}
+
+function statusCheck(id, label, status, required, detail, remediation) {
+  return {
+    id,
+    label,
+    status,
+    required,
+    detail,
+    remediation: status === "pass" ? undefined : remediation
+  };
 }
 
 const checks = [
@@ -189,20 +220,37 @@ const checks = [
     "永久关闭 /login 与登录/注册 POST，并运行 auth 回归测试"
   ),
   check(
+    "single_user_exposure_policy",
+    "固定单用户 Production 暴露策略",
+    (outerProtectionConfigurationReady && liveProtectionReceipt.valid) || unprotectedProductionRiskAccepted,
+    unprotectedProductionRiskAccepted
+      ? "未启用 Vercel 外层保护；已通过 server-only 开关明确接受固定 owner 公开访问风险"
+      : outerProtectionConfigurationReady && liveProtectionReceipt.valid
+        ? "外层保护配置与 live 人工核验均已通过"
+        : "既没有完整的外层保护证明，也没有有效的公开访问风险接受配置",
+    "配置并核验外层保护，或仅在知情接受风险时启用严格的公开单用户 Production 开关"
+  ),
+  statusCheck(
     "outer_protection_configuration",
     "外层保护服务端证明",
-    outerProtectionConfigurationReady,
-    outerProtectionConfigurationReady
+    unprotectedProductionRiskAccepted ? "warn" : outerProtectionConfigurationReady ? "pass" : "fail",
+    !unprotectedProductionRiskAccepted,
+    unprotectedProductionRiskAccepted
+      ? "外层保护明确未验证；当前按用户知情接受的公网固定 owner 模式发布"
+      : outerProtectionConfigurationReady
       ? "保护声明、全部署范围、核验时间、项目 ID 与正式 origin 相符；该声明本身不等于线上已验证"
       : "外层保护声明、作用域、时间、项目 ID 或正式 origin 不完整",
-    "现场核验 Vercel 保护后配置 server-only 证明；Production 必须使用 all_deployments"
+    "升级并启用 All Deployments Protection 可消除公开访问风险"
   ),
-  check(
+  statusCheck(
     "outer_protection_live_audit",
     "外层保护 live 人工核验",
-    liveProtectionReceipt.valid,
-    liveProtectionReceipt.detail,
-    "提供 24 小时内独立回执文件，记录 Vercel 设置、匿名页面/API 挑战、owner 成功访问及应用登录关闭；不能只设置环境变量"
+    unprotectedProductionRiskAccepted ? "warn" : liveProtectionReceipt.valid ? "pass" : "fail",
+    !unprotectedProductionRiskAccepted,
+    unprotectedProductionRiskAccepted
+      ? "Hobby Production 固定域名未受保护；无需伪造保护 live 回执"
+      : liveProtectionReceipt.detail,
+    "提供 24 小时内独立回执文件，或明确采用公开风险接受模式"
   ),
   check(
     "workflow_recovery",
@@ -225,7 +273,7 @@ const checks = [
     "独立公开 Demo 域名",
     demoOriginSeparated,
     demoOriginSeparated ? "公开 Demo 与正式产品保持独立 origin" : "公开 Demo 地址无效或与正式产品 APP_ORIGIN 相同",
-    "将 NEXT_PUBLIC_SCENECART_PUBLIC_DEMO_URL 设置为独立 HTTPS origin，不能复用 APP_ORIGIN"
+    "将 SCENECART_PUBLIC_DEMO_URL 与 NEXT_PUBLIC_SCENECART_PUBLIC_DEMO_URL 设置为独立 HTTPS origin，不能复用 APP_ORIGIN"
   ),
   check(
     "executor_backend",
@@ -266,9 +314,16 @@ const checks = [
   )
 ];
 
-const ready = checks.every((item) => item.status === "pass");
+const ready = checks.every((item) => !item.required || item.status === "pass");
 const report = {
   ready_for_release: ready,
+  single_user_exposure_mode: unprotectedProductionRiskAccepted
+    ? "unprotected_risk_accepted"
+    : outerProtectionConfigurationReady && liveProtectionReceipt.valid
+      ? "protected"
+      : "invalid",
+  outer_protection_verified: outerProtectionConfigurationReady && liveProtectionReceipt.valid,
+  unprotected_risk_accepted: unprotectedProductionRiskAccepted,
   checks,
   generated_at: new Date().toISOString()
 };

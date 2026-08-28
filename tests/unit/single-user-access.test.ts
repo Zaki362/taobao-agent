@@ -21,6 +21,7 @@ import { getRequestIdentity, requireAuthenticatedIdentity } from "@/lib/auth/req
 import { GET as readAuthenticationState } from "@/app/api/auth/me/route";
 import { POST as closedLogin } from "@/app/api/auth/login/route";
 import { POST as closedRegistration } from "@/app/api/auth/register/route";
+import { inspectSingleUserExposureConfiguration } from "@/lib/auth/outer-protection";
 
 const OWNER_ID = "11111111-1111-4111-8111-111111111111";
 const original = {
@@ -35,6 +36,8 @@ const original = {
   protectionVerifiedAt: process.env.SCENECART_OUTER_PROTECTION_VERIFIED_AT,
   protectionProjectId: process.env.SCENECART_OUTER_PROTECTION_PROJECT_ID,
   protectionOrigin: process.env.SCENECART_OUTER_PROTECTION_ORIGIN,
+  protectionAuditReceipt: process.env.SCENECART_OUTER_PROTECTION_AUDIT_RECEIPT,
+  unprotectedRiskAccepted: process.env.SCENECART_ALLOW_UNPROTECTED_SINGLE_USER_PRODUCTION,
   vercelProjectId: process.env.VERCEL_PROJECT_ID,
   vercelProductionUrl: process.env.VERCEL_PROJECT_PRODUCTION_URL
 };
@@ -59,6 +62,7 @@ function configureOuterProtection(scope: "preview" | "all_deployments" = "previe
 beforeEach(() => {
   process.env.SCENECART_ACCESS_MODE = "single_user";
   process.env.SCENECART_SINGLE_USER_ID = OWNER_ID;
+  delete process.env.SCENECART_ALLOW_UNPROTECTED_SINGLE_USER_PRODUCTION;
   process.env.VERCEL_ENV = "preview";
   configureOuterProtection();
   findUserById.mockReset().mockResolvedValue({
@@ -84,6 +88,8 @@ afterEach(() => {
   restore("protectionVerifiedAt", "SCENECART_OUTER_PROTECTION_VERIFIED_AT");
   restore("protectionProjectId", "SCENECART_OUTER_PROTECTION_PROJECT_ID");
   restore("protectionOrigin", "SCENECART_OUTER_PROTECTION_ORIGIN");
+  restore("protectionAuditReceipt", "SCENECART_OUTER_PROTECTION_AUDIT_RECEIPT");
+  restore("unprotectedRiskAccepted", "SCENECART_ALLOW_UNPROTECTED_SINGLE_USER_PRODUCTION");
   restore("vercelProjectId", "VERCEL_PROJECT_ID");
   restore("vercelProductionUrl", "VERCEL_PROJECT_PRODUCTION_URL");
 });
@@ -138,6 +144,57 @@ describe("single-user Preview access", () => {
 
     process.env.SCENECART_OUTER_PROTECTION_SCOPE = "preview";
     expect(() => configuredSingleUserId()).toThrow("Production 必须保护所有部署");
+  });
+
+  it("allows the canonical unprotected Production only after explicit server-side risk acceptance", () => {
+    process.env.VERCEL_ENV = "production";
+    process.env.SCENECART_PRODUCT_MODE = "production";
+    process.env.APP_ORIGIN = "https://scenecart-ai.vercel.app";
+    process.env.VERCEL_PROJECT_PRODUCTION_URL = "scenecart-ai.vercel.app";
+    process.env.SCENECART_ALLOW_UNPROTECTED_SINGLE_USER_PRODUCTION = "true";
+    process.env.SCENECART_OUTER_PROTECTION_VERIFIED = "false";
+    delete process.env.SCENECART_OUTER_PROTECTION_SCOPE;
+    delete process.env.SCENECART_OUTER_PROTECTION_VERIFIED_AT;
+    delete process.env.SCENECART_OUTER_PROTECTION_PROJECT_ID;
+    delete process.env.SCENECART_OUTER_PROTECTION_ORIGIN;
+    delete process.env.SCENECART_OUTER_PROTECTION_AUDIT_RECEIPT;
+
+    expect(configuredSingleUserId()).toBe(OWNER_ID);
+    expect(inspectSingleUserExposureConfiguration()).toMatchObject({
+      mode: "unprotected_risk_accepted",
+      valid: true,
+      outerProtection: { valid: false }
+    });
+
+    process.env.APP_ORIGIN = "https://wrong-project.vercel.app";
+    expect(() => configuredSingleUserId()).toThrow("必须精确匹配 scenecart-ai");
+  });
+
+  it("does not accept an unprotected Production flag while claiming protection was verified", () => {
+    process.env.VERCEL_ENV = "production";
+    process.env.SCENECART_PRODUCT_MODE = "production";
+    process.env.APP_ORIGIN = "https://scenecart-ai.vercel.app";
+    process.env.VERCEL_PROJECT_PRODUCTION_URL = "scenecart-ai.vercel.app";
+    process.env.SCENECART_ALLOW_UNPROTECTED_SINGLE_USER_PRODUCTION = "true";
+    process.env.SCENECART_OUTER_PROTECTION_VERIFIED = "true";
+
+    expect(() => configuredSingleUserId()).toThrow("必须明确声明外层保护未验证");
+  });
+
+  it("rejects stale outer-protection proof in unprotected Production mode", () => {
+    process.env.VERCEL_ENV = "production";
+    process.env.SCENECART_PRODUCT_MODE = "production";
+    process.env.APP_ORIGIN = "https://scenecart-ai.vercel.app";
+    process.env.VERCEL_PROJECT_PRODUCTION_URL = "scenecart-ai.vercel.app";
+    process.env.SCENECART_ALLOW_UNPROTECTED_SINGLE_USER_PRODUCTION = "true";
+    process.env.SCENECART_OUTER_PROTECTION_VERIFIED = "false";
+    delete process.env.SCENECART_OUTER_PROTECTION_SCOPE;
+    delete process.env.SCENECART_OUTER_PROTECTION_VERIFIED_AT;
+    delete process.env.SCENECART_OUTER_PROTECTION_PROJECT_ID;
+    delete process.env.SCENECART_OUTER_PROTECTION_ORIGIN;
+    process.env.SCENECART_OUTER_PROTECTION_AUDIT_RECEIPT = "/tmp/stale-proof.json";
+
+    expect(() => configuredSingleUserId()).toThrow("不得保留过期的外层保护证明");
   });
 
   it("rejects an unprotected non-Vercel production runtime", () => {

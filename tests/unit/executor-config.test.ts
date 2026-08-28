@@ -8,6 +8,7 @@ const {
   executorNeedsVercelProtection,
   normalizeExecutorApiUrl,
   preferredExecutorApiUrl,
+  preferredVercelProtectionMode,
   preferredVercelProtectedOrigin,
   readEnvValue,
   updateExecutorEnv,
@@ -30,13 +31,19 @@ const {
     environmentValue?: string,
     apiUrl?: string
   ) => string;
-  executorNeedsVercelProtection: (apiUrl: string, protectedOrigin?: string) => boolean;
+  preferredVercelProtectionMode: (content: string, environmentValue?: string) => string;
+  executorNeedsVercelProtection: (
+    apiUrl: string,
+    protectedOrigin?: string,
+    protectionMode?: string
+  ) => boolean;
   readEnvValue: (content: string, key: string) => string;
   updateExecutorEnv: (
     content: string,
     values: {
       apiUrl: string;
       deviceToken: string;
+      protectionMode?: string;
       protectedOrigin?: string;
       bypassSecret?: string;
     }
@@ -137,6 +144,9 @@ describe("local executor configuration", () => {
       .toThrow("长度不正确");
     expect(() => validateVercelProtectionBypassSecret(`${bypassSecret}\nleak`))
       .toThrow("空白或控制字符");
+    expect(preferredVercelProtectionMode("", "")).toBe("protected");
+    expect(() => preferredVercelProtectionMode("", "disabled"))
+      .toThrow("只能是 protected 或 unprotected");
   });
 
   it("persists protected-origin credentials without exposing or duplicating them", () => {
@@ -177,5 +187,44 @@ describe("local executor configuration", () => {
       "",
       "https://preview.example.com"
     )).toBe("https://preview.example.com");
+  });
+
+  it("allows explicit unprotected transport only for the exact formal origin", () => {
+    const existing = [
+      "SCENECART_VERCEL_PROTECTION_MODE=protected",
+      "SCENECART_VERCEL_PROTECTED_ORIGIN=https://scenecart-ai.vercel.app",
+      `SCENECART_VERCEL_PROTECTION_BYPASS_SECRET=${bypassSecret}`,
+      "UNRELATED_SECRET=keep-me",
+      ""
+    ].join("\n");
+    const updated = updateExecutorEnv(existing, {
+      apiUrl: "https://scenecart-ai.vercel.app",
+      deviceToken: token,
+      protectionMode: "unprotected"
+    });
+
+    expect(readEnvValue(updated, "SCENECART_VERCEL_PROTECTION_MODE"))
+      .toBe("unprotected");
+    expect(readEnvValue(updated, "SCENECART_VERCEL_PROTECTED_ORIGIN"))
+      .toBe("https://scenecart-ai.vercel.app");
+    expect(readEnvValue(updated, "SCENECART_VERCEL_PROTECTION_BYPASS_SECRET"))
+      .toBe("");
+    expect(readEnvValue(updated, "SCENECART_DEVICE_TOKEN")).toBe(token);
+    expect(updated).toContain("UNRELATED_SECRET=keep-me");
+    expect(executorNeedsVercelProtection(
+      "https://scenecart-ai.vercel.app/api/executor/heartbeat",
+      "https://scenecart-ai.vercel.app",
+      "unprotected"
+    )).toBe(false);
+    expect(() => executorNeedsVercelProtection(
+      "https://scenecart-ai.vercel.app.evil.test/api/executor/heartbeat",
+      "https://scenecart-ai.vercel.app",
+      "unprotected"
+    )).toThrow("只能请求 https://scenecart-ai.vercel.app");
+    expect(() => executorNeedsVercelProtection(
+      "https://preview.example.com/api/executor/heartbeat",
+      "https://preview.example.com",
+      "unprotected"
+    )).toThrow("只允许固定正式 origin");
   });
 });

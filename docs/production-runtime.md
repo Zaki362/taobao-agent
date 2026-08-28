@@ -6,7 +6,7 @@
 
 正式路径把云端产品与用户本机淘宝能力拆成两个安全边界：
 
-1. Next.js 服务在 Vercel 外层保护之后把请求绑定到服务端固定 owner，并负责 Session、Agent 决策、任务入队和 SSE；SceneCart 不再提供普通用户登录或注册。
+1. Next.js 服务按已验证的正式暴露策略把请求绑定到服务端固定 owner，并负责 Session、Agent 决策、任务入队和 SSE；SceneCart 不再提供普通用户登录或注册。暴露策略可以是经核验的 Vercel 外层保护，或仅针对 canonical Production、由用户明确知情接受的无保护风险模式。
 2. PostgreSQL 保存用户、购物会话、执行设备、任务、租约和事件。
 3. owner 本机 `local-executor` 使用预置设备令牌领取属于固定 owner 的任务；凭据不由网页签发。
 4. 本地执行器优先通过淘宝桌面版官方 Streamable HTTP MCP 调用搜索与加购工具，并只把结构化商品、淘宝链接和执行结果回填服务端；不经过 Qoder。HTTP MCP 对只读搜索误报内测限制或传输中断时，可降级到桌面版自带的官方 CLI；加购不使用该兜底。
@@ -44,6 +44,9 @@ DATABASE_POOL_SIZE=10
 AUTH_REQUIRED=false
 SCENECART_ACCESS_MODE=single_user
 SCENECART_SINGLE_USER_ID=server-only-existing-owner-id
+# 当前 Hobby 固定 Production 未启用外层保护；仅在明确知情授权后使用
+SCENECART_ALLOW_UNPROTECTED_SINGLE_USER_PRODUCTION=true
+SCENECART_OUTER_PROTECTION_VERIFIED=false
 AUTH_SESSION_TTL_DAYS=30
 SCENECART_CRON_SECRET=at-least-32-random-characters
 SCENECART_RECOVERY_STALE_MS=180000
@@ -53,9 +56,11 @@ DEEPSEEK_CHAT_MODEL=deepseek-chat
 DEEPSEEK_REASONER_MODEL=deepseek-reasoner
 ```
 
-正式模式采用 fail-closed 运行契约：`SCENECART_SINGLE_USER_ID` 必须指向 PostgreSQL 中已存在的唯一 owner，不能是 anonymous 或 public-demo；缺失 owner、未启用 PostgreSQL、外层保护声明无效或 Origin 不安全时拒绝运行，不会回退本地存储或公共身份。owner ID、数据库凭据和模型密钥不返回浏览器。
+正式模式采用 fail-closed 运行契约：`SCENECART_SINGLE_USER_ID` 必须指向 PostgreSQL 中已存在的唯一 owner，不能是 anonymous 或 public-demo；缺失 owner、未启用 PostgreSQL、正式暴露策略无效或 Origin 不安全时拒绝运行，不会回退本地存储或公共身份。owner ID、数据库凭据和模型密钥不返回浏览器。
 
-受 Vercel Deployment Protection 保护、且只供 owner 使用的 Preview 使用同一 `single_user` 合同。网页跳过 SceneCart 登录，但所有 Session、设备和任务仍绑定固定 owner；旧 Cookie 不能切换身份。当前 Hobby Standard Protection 只覆盖 Preview，不覆盖固定 Production 域名，因此正式 Production 必须停止。只有升级并实际验证 All Deployments Protection 后才能发布，且仍需独立 Production 授权。
+受 Vercel Deployment Protection 保护、且只供 owner 使用的 Preview 使用同一 `single_user` 合同。网页跳过 SceneCart 登录，但所有 Session、设备和任务仍绑定固定 owner；旧 Cookie 不能切换身份。Preview 通过不代表 Production 获得保护或授权。
+
+当前 Hobby Standard Protection 只覆盖 Preview，不覆盖固定 Production 域名。固定 Production 只有在用户明确接受“知道域名的人可进入同一个固定 owner 产品”的风险、精确设置 `SCENECART_ALLOW_UNPROTECTED_SINGLE_USER_PRODUCTION=true` 与 `SCENECART_OUTER_PROTECTION_VERIFIED=false`、清除所有残留保护证明并取得独立 Production 授权后才可运行。readiness 必须把它标为 `unprotected_risk_accepted` 而非 protected；升级并实际验证 All Deployments Protection 后应切回 protected 策略。
 
 数据库迁移必须在独立 release 阶段运行 `npm run db:migrate && npm run db:check`；应用构建不会修改数据库。迁移器持有 transaction-level advisory lock，因此并发发布会串行核对迁移及 checksum。
 
@@ -95,11 +100,11 @@ npm run start
 1. 在 owner 的 Worker 机器或其他受控运维终端加载 `SCENECART_PRODUCT_MODE=production`、`SCENECART_ACCESS_MODE=single_user`、正式 PostgreSQL、固定 owner 与证书校验开启的 TLS 配置。
 2. 先停止正在读取该 Token 的 Worker，再运行 `npm run executor:provision -- --capabilities module_search,add_to_cart`。命令校验 owner 存在后在同一事务中创建设备，把明文 Token 原子写入本机权限为 `0600` 的 `.env.local`；数据库只保存摘要，终端不显示 Token、owner 或数据库地址。
 3. 轮换使用 `npm run executor:provision -- --rotate <设备UUID>`；只能轮换属于固定 owner 且未撤销的设备，默认保留原设备名与能力。若要改变能力必须同时显式传入 `--capabilities`。确认提交失败时会恢复旧本机 Token；若数据库在 COMMIT 响应时断线，命令会销毁原连接并用新连接重新读取摘要。连核验也不可用时会保留新 Token、输出非秘密的 device ID 和恢复指令并 fail closed：恢复连接后，设备存在就按该 ID 再轮换，不存在就重新签发；期间不得启动 Worker。这避免了猜测提交状态后静默制造凭据错配。
-4. 使用 `npm run executor:configure` 补齐精确 API 地址与 Vercel Bypass，随后运行 Doctor。正式网页不提供注册或 Token 签发。
+4. 使用 `npm run executor:configure` 补齐精确 API 地址；只有目标启用 Vercel Protection 时才补充 Bypass，随后运行 Doctor。正式网页不提供注册或 Token 签发。
 
 服务端只保存令牌的 SHA-256 摘要。设备令牌不应提交 Git、写入前端代码、浏览器或发送给模型。
 
-`executor:provision` 会直接写入本机 Token；随后运行 `npm run executor:configure` 时可保留该值，只补齐精确 API 地址与隐藏的 Vercel Bypass。两个命令都会保留 `.env.local` 中的其他配置并维持权限 `0600`。`executor:doctor` 与 `worker:local` 会自动读取该文件；常驻正式设备也可把相同 Secret 放入系统密钥存储或进程管理器。
+`executor:provision` 会直接写入本机 Token；随后运行 `npm run executor:configure` 时可保留该值，补齐精确 API 地址，并仅在受保护 origin 下隐藏写入 Vercel Bypass。两个命令都会保留 `.env.local` 中的其他配置并维持权限 `0600`。`executor:doctor` 与 `worker:local` 会自动读取该文件；常驻正式设备也可把相同 Secret 放入系统密钥存储或进程管理器。
 
 开发模式的 `RUNTIME_STORE=local` 默认会把设备令牌摘要、登录会话、任务队列和事件原子写入 `.data/runtime/local-runtime.json`，因此重启 Next.js 后已签发 Token 仍然有效。文件权限固定为当前用户可读写，且只保存 Token 摘要、不保存原始 Token；可用 `SCENECART_LOCAL_RUNTIME_PERSIST=false` 创建一次性测试运行时。该能力只改善本地开发体验，正式部署仍必须使用 PostgreSQL。
 
@@ -113,7 +118,7 @@ npm run start
 npm run executor:configure
 ```
 
-命令会要求确认 SceneCart API 地址并隐藏输入设备令牌。若必须手动配置，则将以下内容保存到项目根目录的 `.env.local`：
+命令会要求确认 SceneCart API 地址并隐藏输入设备令牌。若必须手动配置，受保护 origin 将以下内容保存到项目根目录的 `.env.local`：
 
 ```dotenv
 TAOBAO_EXECUTION_BACKEND=local_executor
@@ -132,7 +137,9 @@ EXECUTOR_TAOBAO_READINESS_BACKOFF_BASE_MS=2000
 EXECUTOR_TAOBAO_READINESS_BACKOFF_MAX_MS=30000
 ```
 
-Vercel Bypass 和 SceneCart 设备 Token 必须同时存在：前者只穿过外层保护，后者才授权设备 API。Worker 对受保护 origin 使用手动重定向策略，任何 3xx 或跨源跳转都 fail closed，防止把任一凭据带到其他 origin。完整凭据不得进入日志。Cron、Webhook、readiness 与后台恢复任务也必须分别验证外层 Bypass 和其内部 Bearer 鉴权。
+受保护 origin 下，Vercel Bypass 和 SceneCart 设备 Token 必须同时存在：前者只穿过外层保护，后者才授权设备 API。Worker 使用手动重定向策略，任何 3xx 或跨源跳转都 fail closed，防止把任一凭据带到其他 origin。完整凭据不得进入日志。Cron、Webhook、readiness 与后台恢复任务也必须分别验证外层 Bypass 和其内部 Bearer 鉴权。
+
+当前 `unprotected_risk_accepted` Production 只配置固定 `SCENECART_API_URL` 与 `SCENECART_DEVICE_TOKEN`，不配置 Protected Origin 或 Bypass。它无需穿过 Vercel 挑战，但设备 Bearer 仍然必需；缺失或失效时，Worker 不得注册心跳、领取任务或回传结果。Cron、readiness 与后台恢复任务也继续要求各自的 SceneCart Bearer Secret。
 
 再执行：
 
@@ -245,17 +252,19 @@ pending -> leased -> running -> completed
 
 应用已经对“有任务但无执行器”、队列等待过久、任务失败率、DeepSeek fallback 和 Guardrail 拒绝率生成会话级告警。正式环境仍应增加进程守护（systemd、launchd 或容器 supervisor），并把这些告警接入外部监控与通知渠道。
 
-`/api/runtime/readiness` 除 DeepSeek 配置和真实运行证据外，还必须检查 production、PostgreSQL、固定 owner 存在、`single_user` 合同有效、外层保护人工验证以及 Worker 配置；响应不得泄漏 owner 或任何凭据。当前 Hobby 无法保护固定 Production 域名，因此即使其余项正常也不能发布正式 Production。
+`/api/runtime/readiness` 除 DeepSeek 配置和真实运行证据外，还必须检查 production、PostgreSQL、固定 owner 存在、`single_user` 合同有效、明确的单用户暴露策略以及 Worker 配置；响应不得泄漏 owner 或任何凭据。protected 模式要求外层保护人工验证；当前 Hobby Production 的风险接受模式必须如实报告 `single_user_exposure_mode=unprotected_risk_accepted`、`outer_protection_verified=false` 与 `unprotected_risk_accepted=true`。
 
 自托管环境运行 `npm run worker:recovery`，默认每 30 秒处理最多 5 个可恢复会话；云平台可每分钟调用一次内部恢复端点。PostgreSQL 会通过活动工作流部分索引定位扫描范围，先排除仍有健康运行 Job 的会话，再按最旧更新时间选出真正需要补偿的候选，避免普通会话数量超过 100 或健康任务长期占位造成扫描饥饿。单个异常 Session 的恢复失败会被隔离并计入 `failed`，不会阻塞同批其他会话。每次扫描会 UPSERT `runtime_service_heartbeats`；readiness 和执行台默认在 180 秒无新心跳后报告失联。两种方式都不会调用淘宝，只处理服务端持久状态。可用 `SCENECART_RECOVERY_INTERVAL_MS` 调整常驻 Worker 间隔，最小 10 秒；用 `SCENECART_RECOVERY_STALE_MS` 调整失联阈值。
 
-面试使用 Vercel Hobby 且没有外部分钟级调度时，可以从运行淘宝桌面版的电脑临时启动完整本机侧：
+面试使用 Vercel Hobby 且没有外部分钟级调度时，可以从运行淘宝桌面版的电脑临时启动完整本机侧。受保护 Preview 可继续使用 `demo:cloud`；当前无保护风险模式直接指向固定 Production，不配置 Vercel Protected Origin 或 Bypass，并分别启动设备 Worker 与恢复 Worker：
 
 ```bash
-npm run demo:cloud -- --url https://你的正式域名
+SCENECART_API_URL=https://scenecart-ai.vercel.app npm run executor:doctor
+npm run worker:local
+npm run worker:recovery
 ```
 
-启动器会先检查云端 production/PostgreSQL 契约和本机淘宝能力，再监督 `worker:local` 与 `worker:recovery`。仅淘宝 MCP 未就绪时，它会按 2 秒起、最多 30 秒的指数退避持续探测，提示打开、解锁和登录淘宝桌面版，恢复后自动继续启动；Worker 随后只建立启动待命，历史搜索需回网页点击“继续搜索”。云端 API、设备令牌、执行器协议和恢复密钥错误不重试。`--check` 是一次快速探测，不会无限等待 MCP。启动器只用于面试预热到结束的短时窗口；不是生产守护进程，也不替代数据库 migration。若外部恢复调度已就绪，可显式加 `--skip-recovery`，避免重复的恢复心跳。
+受保护 Preview 的 `demo:cloud` 启动器会先检查云端 production/PostgreSQL 契约和本机淘宝能力，再监督 `worker:local` 与 `worker:recovery`。仅淘宝 MCP 未就绪时，它会按 2 秒起、最多 30 秒的指数退避持续探测，提示打开、解锁和登录淘宝桌面版，恢复后自动继续启动；Worker 随后只建立启动待命，历史搜索需回网页点击“继续搜索”。云端 API、设备令牌、执行器协议和恢复密钥错误不重试。`--check` 是一次快速探测，不会无限等待 MCP。无论采用哪种启动方式，它都只用于面试预热到结束的短时窗口，不是生产守护进程，也不替代数据库 migration；外部恢复调度已就绪时不要重复启动本机恢复 Worker。
 
 仓库 `.github/workflows/quality.yml` 已提供 PostgreSQL 16 集成验证、migration 检查、advisory lock 竞争测试、单元测试、生产构建和端到端测试。正式发布应将该 workflow 设为主分支必需检查。
 
@@ -268,4 +277,4 @@ npm run check
 npm run release:audit
 ```
 
-E2E 使用随机固定 owner 和预置设备 Token 验证无 SceneCart 登录的 `single_user` 访问、规划、持久任务、SSE、推荐回填与异步加购；测试不会触发真实淘宝账号动作。远程 Worker 验收还必须分别证明：无 Bypass 被外层阻止、仅 Bypass 无设备 Token 被 SceneCart 阻止、双凭据下可以心跳、领取和回填，且失效恢复不泄漏凭据。
+E2E 使用随机固定 owner 和预置设备 Token 验证无 SceneCart 登录的 `single_user` 访问、规划、持久任务、SSE、推荐回填与异步加购；测试不会触发真实淘宝账号动作。受保护远程 Worker 验收还必须分别证明：无 Bypass 被外层阻止、仅 Bypass 无设备 Token 被 SceneCart 阻止、双凭据下可以心跳、领取和回填；无保护风险模式则必须证明无需 Bypass 但缺少设备 Bearer 仍被 SceneCart 阻止。两种模式的失效恢复都不得泄漏凭据。

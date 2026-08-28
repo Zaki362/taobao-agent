@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { AUTH_COOKIE_NAME } from "@/lib/auth/constants";
-import { inspectOuterProtectionConfiguration } from "@/lib/auth/outer-protection";
+import { inspectSingleUserExposureConfiguration } from "@/lib/auth/outer-protection";
 
 const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
 const MACHINE_AUTHENTICATED_PATHS = new Set([
@@ -38,15 +38,15 @@ function expectedOrigins(request: NextRequest) {
     : new Set([request.nextUrl.origin]);
 }
 
-function singleUserOuterProtectionFailure() {
+function singleUserAccessBoundaryFailure() {
   if (process.env.SCENECART_ACCESS_MODE !== "single_user") return null;
   if (process.env.VERCEL_ENV !== "preview" && process.env.VERCEL_ENV !== "production") return null;
-  const inspection = inspectOuterProtectionConfiguration();
+  const inspection = inspectSingleUserExposureConfiguration();
   if (inspection.valid) return null;
   return NextResponse.json(
     {
-      error: "固定单用户访问的外层保护尚未通过服务端校验",
-      code: "single_user_outer_protection_required"
+      error: "固定单用户访问边界尚未通过服务端校验",
+      code: "single_user_access_boundary_required"
     },
     { status: 503 }
   );
@@ -59,8 +59,8 @@ export function middleware(request: NextRequest) {
   // callers. Vercel's bypass header gets a request through the outer gate; it
   // must not let a Worker skip SceneCart's independently verified runtime
   // protection contract.
-  const outerProtectionFailure = singleUserOuterProtectionFailure();
-  if (outerProtectionFailure) return outerProtectionFailure;
+  const accessBoundaryFailure = singleUserAccessBoundaryFailure();
+  if (accessBoundaryFailure) return accessBoundaryFailure;
 
   const bearerAuthorization = request.headers.get("authorization")?.match(/^Bearer\s+\S+$/i);
   // Machine clients authenticate with Bearer tokens and do not use the browser

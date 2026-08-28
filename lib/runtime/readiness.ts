@@ -4,8 +4,7 @@ import {
   inspectConfiguredSingleUserOwner
 } from "@/lib/auth/access-mode";
 import {
-  inspectOuterProtectionConfiguration,
-  isLocalSingleUserDevelopment
+  inspectSingleUserExposureConfiguration
 } from "@/lib/auth/outer-protection";
 import { isAuthenticationRequired, shouldUseSecureAuthCookie } from "@/lib/auth/request";
 import { query } from "@/lib/runtime/database";
@@ -97,10 +96,11 @@ export async function inspectRuntimeReadiness(userId?: string) {
   const configuredExecutor = getConfiguredExecutionBackend();
   const authConfigured = process.env.AUTH_REQUIRED === "true";
   const accessMode = getSceneCartAccessMode();
-  const localSingleUserDevelopment = accessMode === "single_user" && isLocalSingleUserDevelopment();
-  const outerProtection = localSingleUserDevelopment
-    ? null
-    : inspectOuterProtectionConfiguration();
+  const singleUserExposure = accessMode === "single_user"
+    ? inspectSingleUserExposureConfiguration()
+    : null;
+  const localSingleUserDevelopment = singleUserExposure?.mode === "local_development";
+  const outerProtection = singleUserExposure?.outerProtection ?? null;
   let authRequired = false;
   let authRequirementError = "";
   if (accessMode !== "single_user") {
@@ -225,9 +225,7 @@ export async function inspectRuntimeReadiness(userId?: string) {
     ));
   }
 
-  const singleUserPolicyReady = accessMode === "single_user" && (
-    localSingleUserDevelopment || outerProtection?.valid === true
-  );
+  const singleUserPolicyReady = accessMode === "single_user" && singleUserExposure?.valid === true;
 
   checks.push(check(
     "access_mode",
@@ -250,16 +248,36 @@ export async function inspectRuntimeReadiness(userId?: string) {
   ));
 
   checks.push(check(
-    "outer_protection",
-    "人工核验的外层访问保护",
+    "single_user_exposure_policy",
+    "固定单用户暴露策略",
     singleUserPolicyReady ? "pass" : "fail",
     true,
+    singleUserExposure?.mode === "unprotected_risk_accepted"
+      ? "已明确接受固定 owner 在无 Vercel 外层保护的 Production 域名公开访问风险"
+      : singleUserExposure?.mode === "protected"
+        ? "固定 owner 仅通过经核验的 Vercel 外层保护访问"
+        : localSingleUserDevelopment
+          ? "仅限本机 loopback 开发访问"
+          : `固定单用户暴露策略无效：${singleUserExposure?.issues.join("；") || "未配置"}`,
+    "配置经核验的 Vercel 外层保护，或仅在知情接受风险后启用公开单用户 Production 开关"
+  ));
+
+  const outerProtectionStatus: ReadinessStatus = singleUserExposure?.mode === "unprotected_risk_accepted"
+    ? "warn"
+    : (localSingleUserDevelopment || outerProtection?.valid) ? "pass" : "fail";
+  checks.push(check(
+    "outer_protection",
+    "Vercel 外层访问保护",
+    outerProtectionStatus,
+    singleUserExposure?.mode !== "unprotected_risk_accepted",
     localSingleUserDevelopment
       ? "仅限本地开发；远程 Preview/Production 仍必须提供人工核验声明"
+      : singleUserExposure?.mode === "unprotected_risk_accepted"
+        ? "未验证 Vercel 外层保护；知道固定域名的人可以直接进入同一个固定 owner 产品，风险已由用户明确接受"
       : outerProtection?.valid
         ? "服务端保护声明、范围、时间、项目 ID 与正式 origin 相符；发布前仍须提交独立 live 核验回执"
         : `外层保护证明不完整：${outerProtection?.issues.join("；") || "未检测到 Vercel 保护环境"}`,
-    "在 Vercel 现场验证外层保护后配置 server-only 证明，并在 release audit 提供独立 live 回执"
+    "升级并启用 Vercel All Deployments Protection 可消除此公开访问风险"
   ));
 
   checks.push(check(
@@ -279,7 +297,7 @@ export async function inspectRuntimeReadiness(userId?: string) {
           ? "正式模式已强制账号隔离，但 AUTH_REQUIRED 尚未显式配置"
           : "当前允许匿名使用",
     accessMode === "single_user"
-      ? "补齐固定 owner 与经人工验证的 Vercel 外层保护证明"
+      ? "补齐固定 owner 与有效的服务端暴露策略"
       : "正式环境设置 AUTH_REQUIRED=true"
   ));
   const workflowRecoveryStatus: ReadinessStatus = !workflowRecoveryConfigured
@@ -474,10 +492,13 @@ export async function inspectRuntimeReadiness(userId?: string) {
   }
 
   const operationalConfigurationReady = checks.every((item) => !item.required || item.status === "pass");
-  const readyForProduction = operationalConfigurationReady &&
-    accessMode === "single_user" &&
+  const protectedProduction = singleUserExposure?.mode === "protected" &&
     outerProtection?.environment === "production" &&
     outerProtection.scope === "all_deployments";
+  const unprotectedProductionRiskAccepted = singleUserExposure?.mode === "unprotected_risk_accepted";
+  const readyForProduction = operationalConfigurationReady &&
+    accessMode === "single_user" &&
+    (protectedProduction || unprotectedProductionRiskAccepted);
   const executorReady =
     executorCapabilities.capabilities.module_search.available &&
     executorCapabilities.capabilities.add_to_cart.available;
@@ -488,6 +509,9 @@ export async function inspectRuntimeReadiness(userId?: string) {
     mcp_debug_enabled: isMcpDebugEnabled(),
     configured_executor_backend: configuredExecutor,
     effective_executor_backend: executor,
+    single_user_exposure_mode: singleUserExposure?.mode ?? "invalid",
+    outer_protection_verified: outerProtection?.valid === true,
+    unprotected_risk_accepted: unprotectedProductionRiskAccepted,
     ready_for_production: readyForProduction,
     operational_for_shopping: operationalConfigurationReady && executorReady,
     executor_capabilities: executorCapabilities,

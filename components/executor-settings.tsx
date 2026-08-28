@@ -76,7 +76,7 @@ function capabilityLabel(capability: string) {
 
 function requireActiveProductAccess(response: Response) {
   if (response.status !== 401) return;
-  throw new Error("正式产品访问未通过；请重新完成 Vercel 访问验证，并检查固定 owner 配置");
+  throw new Error("正式产品访问未通过；请检查固定 owner、访问模式和部署环境配置");
 }
 
 export function ExecutorSettings() {
@@ -435,7 +435,7 @@ export function ExecutorSettings() {
           {devices.length === 0 ? <p className="text-sm text-muted-foreground">还没有已注册设备。</p> : null}
           {singleUserMode ? (
             <div className="rounded-[18px] border border-amber-200 bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-900">
-              为避免执行器密钥进入浏览器，正式单用户模式已关闭网页注册。设备 Bearer Token 与 Vercel Protection Bypass 只保存在本机 Worker 环境中。
+              为避免执行器密钥进入浏览器，正式单用户模式已关闭网页注册。设备 Bearer Token 只保存在本机 Worker 环境中；仅当目标启用 Vercel Protection 时才需要 Bypass，且它也只保存在本机。
             </div>
           ) : (
             <>

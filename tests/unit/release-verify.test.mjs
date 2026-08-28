@@ -30,6 +30,7 @@ describe("release verification", () => {
       VERCEL_PROJECT_ID: "project_scenecart",
       VERCEL_PROJECT_PRODUCTION_URL: "scenecart.example.com",
       SCENECART_OUTER_PROTECTION_VERIFIED: "true",
+      SCENECART_ALLOW_UNPROTECTED_SINGLE_USER_PRODUCTION: "false",
       SCENECART_OUTER_PROTECTION_SCOPE: "all_deployments",
       SCENECART_OUTER_PROTECTION_VERIFIED_AT: new Date().toISOString(),
       SCENECART_OUTER_PROTECTION_PROJECT_ID: "project_scenecart",
@@ -37,6 +38,7 @@ describe("release verification", () => {
       SCENECART_CRON_SECRET: "release-recovery-secret-with-at-least-32-characters",
       APP_ORIGIN: "https://scenecart.example.com",
       NEXT_PUBLIC_SCENECART_PUBLIC_DEMO_URL: "https://demo.example.com",
+      SCENECART_PUBLIC_DEMO_URL: "https://demo.example.com",
       TAOBAO_EXECUTION_BACKEND: "local_executor",
       HOSTED_WORKER_TOKEN: "",
       SCENECART_ENABLE_MCP_DEBUG: "false",
@@ -83,6 +85,57 @@ describe("release verification", () => {
     } finally {
       fs.rmSync(directory, { recursive: true, force: true });
     }
+  });
+
+  it("accepts the canonical public Production only with explicit risk acknowledgement and no fake protection claim", () => {
+    const root = path.resolve(import.meta.dirname, "../..");
+    const result = spawnSync(process.execPath, [path.join(root, "scripts/release-audit.mjs"), "--json"], {
+      cwd: root,
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        SCENECART_PRODUCT_MODE: "production",
+        ALLOW_DEMO_CART_FALLBACK: "false",
+        RUNTIME_STORE: "postgres",
+        DATABASE_URL: "postgresql://example.invalid/scenecart",
+        DATABASE_SSL: "true",
+        DATABASE_SSL_REJECT_UNAUTHORIZED: "true",
+        SCENECART_ACCESS_MODE: "single_user",
+        SCENECART_SINGLE_USER_ID: "11111111-1111-4111-8111-111111111111",
+        VERCEL_ENV: "production",
+        VERCEL_PROJECT_PRODUCTION_URL: "scenecart-ai.vercel.app",
+        SCENECART_ALLOW_UNPROTECTED_SINGLE_USER_PRODUCTION: "true",
+        SCENECART_OUTER_PROTECTION_VERIFIED: "false",
+        SCENECART_OUTER_PROTECTION_SCOPE: "",
+        SCENECART_OUTER_PROTECTION_VERIFIED_AT: "",
+        SCENECART_OUTER_PROTECTION_PROJECT_ID: "",
+        SCENECART_OUTER_PROTECTION_ORIGIN: "",
+        SCENECART_OUTER_PROTECTION_AUDIT_RECEIPT: "",
+        SCENECART_CRON_SECRET: "release-recovery-secret-with-at-least-32-characters",
+        APP_ORIGIN: "https://scenecart-ai.vercel.app",
+        SCENECART_PUBLIC_DEMO_URL: "https://scenecart-public-demo.vercel.app",
+        NEXT_PUBLIC_SCENECART_PUBLIC_DEMO_URL: "https://scenecart-public-demo.vercel.app",
+        TAOBAO_EXECUTION_BACKEND: "local_executor",
+        HOSTED_WORKER_TOKEN: "",
+        SCENECART_ENABLE_MCP_DEBUG: "false",
+        DEEPSEEK_API_KEY: "release-test-key",
+        DEEPSEEK_DISABLED: "false",
+        TAOBAO_MCP_MODE: ""
+      }
+    });
+    const report = JSON.parse(result.stdout);
+
+    expect(result.status).toBe(0);
+    expect(report).toMatchObject({
+      ready_for_release: true,
+      single_user_exposure_mode: "unprotected_risk_accepted",
+      outer_protection_verified: false,
+      unprotected_risk_accepted: true
+    });
+    expect(report.checks.find((item) => item.id === "outer_protection_configuration"))
+      .toMatchObject({ status: "warn", required: false });
+    expect(report.checks.find((item) => item.id === "outer_protection_live_audit"))
+      .toMatchObject({ status: "warn", required: false });
   });
 
   it("normalizes only credential-free HTTP origins", () => {
@@ -189,6 +242,62 @@ describe("release verification", () => {
     ]);
     expect(JSON.stringify(report)).not.toContain(secret);
     expect(JSON.stringify(report)).not.toContain(bypassSecret);
+  });
+
+  it("verifies public reachability and truthful readiness in accepted unprotected Production mode", async () => {
+    const calls = [];
+    const secret = "release-verification-secret-at-least-32-characters";
+    const environment = {
+      ...process.env,
+      SCENECART_ALLOW_UNPROTECTED_SINGLE_USER_PRODUCTION: "true",
+      SCENECART_OUTER_PROTECTION_VERIFIED: "false",
+      SCENECART_ACCESS_MODE: "single_user",
+      SCENECART_PRODUCT_MODE: "production",
+      VERCEL_ENV: "production",
+      APP_ORIGIN: "https://scenecart-ai.vercel.app",
+      VERCEL_PROJECT_PRODUCTION_URL: "scenecart-ai.vercel.app",
+      SCENECART_OUTER_PROTECTION_SCOPE: "",
+      SCENECART_OUTER_PROTECTION_VERIFIED_AT: "",
+      SCENECART_OUTER_PROTECTION_PROJECT_ID: "",
+      SCENECART_OUTER_PROTECTION_ORIGIN: "",
+      SCENECART_OUTER_PROTECTION_AUDIT_RECEIPT: ""
+    };
+    const fetchImpl = async (url, init) => {
+      calls.push({ url, authorization: new Headers(init.headers).get("authorization") });
+      if (url.endsWith("/api/runtime/health")) {
+        return new Response(JSON.stringify({
+          status: "healthy",
+          product_mode: "production",
+          demo_cart_fallback: false,
+          runtime_store: "postgres",
+          configured_executor_backend: "local_executor",
+          effective_executor_backend: "local_executor"
+        }), { status: 200 });
+      }
+      return new Response(JSON.stringify({
+        ready_for_production: true,
+        single_user_exposure_mode: "unprotected_risk_accepted",
+        outer_protection_verified: false,
+        unprotected_risk_accepted: true,
+        checks: []
+      }), { status: 200 });
+    };
+
+    const report = await verifyRuntime("https://scenecart-ai.vercel.app", {
+      secret,
+      environment,
+      fetchImpl
+    });
+
+    expect(report.checks.map((item) => item.status)).toEqual(["pass", "pass", "pass", "pass"]);
+    expect(report.checks[0].id).toBe("unprotected_anonymous_probe");
+    expect(report.readiness).toMatchObject({
+      single_user_exposure_mode: "unprotected_risk_accepted",
+      outer_protection_verified: false,
+      unprotected_risk_accepted: true
+    });
+    expect(JSON.stringify(report)).not.toContain(secret);
+    expect(calls).toHaveLength(3);
   });
 
   it("fails closed when health is unreachable or the internal secret is absent", async () => {

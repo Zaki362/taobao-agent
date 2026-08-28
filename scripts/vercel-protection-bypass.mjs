@@ -2,6 +2,9 @@ import process from "node:process";
 
 export const DEFAULT_SCENECART_PROTECTED_ORIGIN = "https://scenecart-ai.vercel.app";
 export const VERCEL_PROTECTION_BYPASS_HEADER = "x-vercel-protection-bypass";
+export const DEFAULT_SCENECART_VERCEL_PROTECTION_MODE = "protected";
+
+const VERCEL_PROTECTION_MODES = new Set(["protected", "unprotected"]);
 
 const LOCAL_HOSTNAMES = new Set(["localhost", "127.0.0.1", "::1"]);
 const SECRET_ENV_KEYS = [
@@ -60,15 +63,53 @@ export function protectedOrigin(environment = process.env) {
   );
 }
 
+export function vercelProtectionMode(environment = process.env) {
+  const mode = (
+    environment.SCENECART_VERCEL_PROTECTION_MODE ||
+    DEFAULT_SCENECART_VERCEL_PROTECTION_MODE
+  ).trim();
+  if (!VERCEL_PROTECTION_MODES.has(mode)) {
+    throw new VercelProtectionConfigurationError(
+      "SCENECART_VERCEL_PROTECTION_MODE 只能是 protected 或 unprotected"
+    );
+  }
+  return mode;
+}
+
 export function isLocalSceneCartUrl(input) {
   const parsed = requestUrl(input);
   return LOCAL_HOSTNAMES.has(parsed.hostname);
 }
 
-export function isProtectedVercelOrigin(input, environment = process.env) {
+function sceneCartMachineTransport(input, environment = process.env) {
   const parsed = requestUrl(input);
-  if (LOCAL_HOSTNAMES.has(parsed.hostname)) return false;
-  return parsed.origin === protectedOrigin(environment);
+  const mode = vercelProtectionMode(environment);
+  if (mode === "unprotected") {
+    const origin = protectedOrigin(environment);
+    if (origin !== DEFAULT_SCENECART_PROTECTED_ORIGIN) {
+      throw new VercelProtectionConfigurationError(
+        "unprotected 传输模式只允许固定正式 origin https://scenecart-ai.vercel.app"
+      );
+    }
+    if (parsed.origin !== DEFAULT_SCENECART_PROTECTED_ORIGIN) {
+      throw new VercelProtectionConfigurationError(
+        "unprotected 传输模式只能请求 https://scenecart-ai.vercel.app"
+      );
+    }
+    return { managed: true, protected: false, mode };
+  }
+
+  if (LOCAL_HOSTNAMES.has(parsed.hostname)) {
+    return { managed: false, protected: false, mode: "local" };
+  }
+
+  const origin = protectedOrigin(environment);
+  const managed = parsed.origin === origin;
+  return { managed, protected: managed, mode };
+}
+
+export function isProtectedVercelOrigin(input, environment = process.env) {
+  return sceneCartMachineTransport(input, environment).protected;
 }
 
 export function vercelProtectionBypassHeaders(input, environment = process.env) {
@@ -111,14 +152,17 @@ export async function throwIfVercelProtectionFailed(
   response,
   { input, environment = process.env } = {}
 ) {
-  if (!input || !isProtectedVercelOrigin(input, environment)) return;
+  if (!input) return;
+  const transport = sceneCartMachineTransport(input, environment);
+  if (!transport.managed) return;
   if (![301, 302, 303, 307, 308, 401, 403].includes(response.status)) return;
   if ([301, 302, 303, 307, 308].includes(response.status)) {
     throw new VercelProtectionError(
-      "受保护的 SceneCart 机器请求返回重定向；为防止凭据跨 origin 泄露，请求已停止",
+      "SceneCart 机器请求返回重定向；为防止凭据跨 origin 泄露，请求已停止",
       { status: response.status, code: "vercel_protection_redirect_blocked" }
     );
   }
+  if (!transport.protected) return;
   const body = await response.clone().text().catch(() => "");
   if (!isVercelProtectionChallenge(response, { input, body, environment })) return;
   throw new VercelProtectionError(
@@ -132,10 +176,10 @@ export async function vercelProtectedFetch(
   init = {},
   { environment = process.env, fetchImpl = fetch } = {}
 ) {
-  const protectedRequest = isProtectedVercelOrigin(input, environment);
+  const transport = sceneCartMachineTransport(input, environment);
   const response = await fetchImpl(input, {
     ...init,
-    ...(protectedRequest ? { redirect: "manual" } : {}),
+    ...(transport.managed ? { redirect: "manual" } : {}),
     headers: protectedRequestHeaders(input, init.headers, environment)
   });
   await throwIfVercelProtectionFailed(response, { input, environment });

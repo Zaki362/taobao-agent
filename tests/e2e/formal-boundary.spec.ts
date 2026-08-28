@@ -104,14 +104,13 @@ test("formal fixed-owner navigation has no interactive login and opens the indep
   const productGuideButton = page.getByRole("button", { name: "产品说明" });
   await productGuideButton.click();
   await expect(page.getByRole("dialog", { name: "SceneCart AI 产品说明" })).toBeVisible();
-  await expect(page.getByText("Vercel 外层保护，通过后直接绑定固定 owner", { exact: true })).toHaveCount(0);
+  const formalAccessCopy =
+    "固定域名直接进入并绑定固定 owner；当前 Production 未启用 Vercel 外层保护";
+  await expect(page.getByText(formalAccessCopy, { exact: true })).toHaveCount(0);
   await page.getByRole("button", { name: "正式产品与 Demo" }).click();
-  const fixedOwnerProtectionCopy = page.getByText(
-    "Vercel 外层保护，通过后直接绑定固定 owner",
-    { exact: true }
-  );
-  await expect(fixedOwnerProtectionCopy).toHaveCount(2);
-  await expect(fixedOwnerProtectionCopy.last()).toBeVisible();
+  const fixedOwnerAccessCopy = page.getByText(formalAccessCopy, { exact: true });
+  await expect(fixedOwnerAccessCopy).toHaveCount(2);
+  await expect(fixedOwnerAccessCopy.last()).toBeVisible();
   await page.keyboard.press("Escape");
   await expect(page.getByRole("dialog", { name: "SceneCart AI 产品说明" })).toBeHidden();
   await expect(productGuideButton).toBeFocused();

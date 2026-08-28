@@ -17,6 +17,7 @@ const original = {
   protectionVerifiedAt: process.env.SCENECART_OUTER_PROTECTION_VERIFIED_AT,
   protectionProjectId: process.env.SCENECART_OUTER_PROTECTION_PROJECT_ID,
   protectionOrigin: process.env.SCENECART_OUTER_PROTECTION_ORIGIN,
+  unprotectedRiskAccepted: process.env.SCENECART_ALLOW_UNPROTECTED_SINGLE_USER_PRODUCTION,
   vercelProjectId: process.env.VERCEL_PROJECT_ID,
   vercelProductionUrl: process.env.VERCEL_PROJECT_PRODUCTION_URL
 };
@@ -42,6 +43,7 @@ afterEach(() => {
     restore("protectionVerifiedAt", "SCENECART_OUTER_PROTECTION_VERIFIED_AT");
     restore("protectionProjectId", "SCENECART_OUTER_PROTECTION_PROJECT_ID");
     restore("protectionOrigin", "SCENECART_OUTER_PROTECTION_ORIGIN");
+    restore("unprotectedRiskAccepted", "SCENECART_ALLOW_UNPROTECTED_SINGLE_USER_PRODUCTION");
     restore("vercelProjectId", "VERCEL_PROJECT_ID");
     restore("vercelProductionUrl", "VERCEL_PROJECT_PRODUCTION_URL");
 });
@@ -54,7 +56,7 @@ describe("formal runtime safety", () => {
     expect(isAuthenticationRequired()).toBe(true);
   });
 
-  it("allows a fixed-owner access mode only outside Vercel Production", () => {
+  it("allows a fixed-owner access mode on a protected Vercel Preview", () => {
     process.env.SCENECART_PRODUCT_MODE = "production";
     process.env.SCENECART_ACCESS_MODE = "single_user";
     process.env.SCENECART_SINGLE_USER_ID = "11111111-1111-4111-8111-111111111111";
@@ -76,7 +78,20 @@ describe("formal runtime safety", () => {
     process.env.SCENECART_SINGLE_USER_ID = "11111111-1111-4111-8111-111111111111";
     process.env.VERCEL_ENV = "production";
 
-    expect(() => isAuthenticationRequired()).toThrow("外层保护配置无效");
+    expect(() => isAuthenticationRequired()).toThrow("访问边界配置无效");
+  });
+
+  it("allows canonical unprotected Vercel Production only after explicit risk acceptance", () => {
+    process.env.SCENECART_PRODUCT_MODE = "production";
+    process.env.SCENECART_ACCESS_MODE = "single_user";
+    process.env.SCENECART_SINGLE_USER_ID = "11111111-1111-4111-8111-111111111111";
+    process.env.VERCEL_ENV = "production";
+    process.env.APP_ORIGIN = "https://scenecart-ai.vercel.app";
+    process.env.VERCEL_PROJECT_PRODUCTION_URL = "scenecart-ai.vercel.app";
+    process.env.SCENECART_ALLOW_UNPROTECTED_SINGLE_USER_PRODUCTION = "true";
+    process.env.SCENECART_OUTER_PROTECTION_VERIFIED = "false";
+
+    expect(isAuthenticationRequired()).toBe(false);
   });
 
   it("refuses to use the local repository in formal product mode", () => {

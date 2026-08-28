@@ -95,7 +95,7 @@ npm run test:integration
 
 ## 4. 面试前一小时：本机运行预检
 
-如果本次展示采用“受保护 Vercel Preview + Neon PostgreSQL + 本机淘宝 Worker”，不要运行本地网页。当前 Hobby 无法保护固定 Production 域名，所以不得用固定 Production owner 做这条演示。先确保 Preview 完成 migration、固定 owner 和 Vercel 外层保护验证；再在受控终端加载正式 PostgreSQL/TLS/固定 owner 配置，为当前电脑签发设备 Token。首次配置依次运行：
+如果本次展示采用“受保护 Vercel Preview + Neon PostgreSQL + 本机淘宝 Worker”，不要运行本地网页。先确保 Preview 完成 migration、固定 owner 和 Vercel 外层保护验证；再在受控终端加载正式 PostgreSQL/TLS/固定 owner 配置，为当前电脑签发设备 Token。首次配置依次运行：
 
 ```bash
 npm run executor:provision -- --capabilities module_search,add_to_cart
@@ -106,6 +106,8 @@ npm run demo:cloud -- --url https://受保护的内部验收地址
 ```
 
 `executor:provision` 先把 SceneCart 设备 Token 安全写入本机；`executor:configure` 再隐藏保存精确的 `SCENECART_VERCEL_PROTECTED_ORIGIN` 和 `SCENECART_VERCEL_PROTECTION_BYPASS_SECRET`，`demo:cloud:configure` 将已签发设备 Token 复制到云端演示配置。Bypass 只穿过 Vercel Protection，不能替代设备鉴权；缺任一凭据都必须失败。它们只保存在本机 `0600` 环境文件，不进入日志、仓库、浏览器或公开 Demo。淘宝桌面版尚未就绪时启动器会退避探测，恢复后再继续；它不是部署命令，也不能代替 migration 和保护验证。
+
+当前明确接受风险的无保护 Hobby Production 也可用于本人现场演示，但必须如实理解：知道固定域名的人可以直接进入同一个固定 owner 产品。此模式把 `SCENECART_API_URL` 指向 `https://scenecart-ai.vercel.app`，不配置 `SCENECART_VERCEL_PROTECTED_ORIGIN` 或 `SCENECART_VERCEL_PROTECTION_BYPASS_SECRET`；先运行 `executor:doctor`，再启动 `worker:local`，需要本机恢复调度时另开终端运行 `worker:recovery`。没有 Vercel Bypass 不会削弱 SceneCart 设备鉴权，设备 Bearer Token 缺失或失效时仍不得心跳、领取或回填任务。
 
 下方 4.1–4.3 是纯本地网页演示路径。云端演示仍需执行 Doctor，但不需要再运行 `npm run dev`。
 
