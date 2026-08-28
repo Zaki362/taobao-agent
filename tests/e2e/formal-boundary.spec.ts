@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { appOrigin } from "./single-user-fixture";
 
 async function expectNavigationFitsViewport(page: import("@playwright/test").Page, selector: string) {
   const geometry = await page.locator(selector).evaluate((navigation) => ({
@@ -41,26 +42,45 @@ test("formal compatibility routes point to the public Demo and in-place guide", 
   expect(guideResponse.headers().location).toBe("/?guide=1");
 });
 
-test("formal login and authenticated navigation open the independent public Demo", async ({ page }) => {
+test("formal fixed-owner navigation has no interactive login and opens the independent public Demo", async ({ page }) => {
   const expectedUrl = "https://scenecart-public-demo.vercel.app/?autoplay=1";
 
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/login");
-  const loginDemoLink = page.getByRole("link", { name: /^观看 Demo 自动演示/ });
-  await expect(loginDemoLink).toBeVisible();
-  await expect(loginDemoLink).toHaveAttribute("href", expectedUrl);
-  await expect(loginDemoLink).toHaveAttribute("target", "_blank");
-  await expect(loginDemoLink).toHaveAttribute("rel", "noopener noreferrer");
+  await expect(page).toHaveURL(/\/$/);
+  await expect(page.getByLabel("邮箱")).toHaveCount(0);
+  await expect(page.getByLabel("密码")).toHaveCount(0);
   await expectNavigationFitsViewport(page, ".landing-nav");
 
-  const registered = await page.request.post("/api/auth/register", {
-    headers: { Origin: "http://127.0.0.1:3100" },
-    data: {
-      email: `demo-entry-${Date.now()}@example.com`,
-      password: "e2e-secure-password"
-    }
+  const login = await page.request.post("/api/auth/login", {
+    headers: { Origin: appOrigin },
+    data: { email: "disabled@example.com", password: "not-used" }
   });
-  expect(registered.status(), await registered.text()).toBe(201);
+  const loginPayload = await login.json();
+  expect(login.status(), JSON.stringify(loginPayload)).toBe(410);
+  expect(loginPayload).toMatchObject({ code: "interactive_authentication_disabled" });
+
+  const registered = await page.request.post("/api/auth/register", {
+    headers: { Origin: appOrigin },
+    data: { email: "disabled@example.com", password: "not-used" }
+  });
+  const registeredPayload = await registered.json();
+  expect(registered.status(), JSON.stringify(registeredPayload)).toBe(410);
+  expect(registeredPayload).toMatchObject({ code: "interactive_authentication_disabled" });
+
+  const registerPage = await page.request.get("/register", { maxRedirects: 0 });
+  expect([404, 410]).toContain(registerPage.status());
+
+  const authStateResponse = await page.request.get("/api/auth/me");
+  const authState = await authStateResponse.json() as Record<string, unknown>;
+  expect(authStateResponse.ok(), JSON.stringify(authState)).toBe(true);
+  expect(authState).toMatchObject({
+    authenticated: true,
+    access_mode: "single_user",
+    persistence_scope: "single_user"
+  });
+  expect(authState).not.toHaveProperty("user");
+  expect(authState).not.toHaveProperty("owner_id");
 
   await page.goto("/");
   await expect(page.getByRole("heading", { name: "把一句需求，变成买得明白的方案" })).toBeVisible();
@@ -71,6 +91,13 @@ test("formal login and authenticated navigation open the independent public Demo
   await expect(productDemoLink).toHaveAttribute("rel", "noopener noreferrer");
   await expectNavigationFitsViewport(page, ".landing-nav");
 
+  await page.goto("/settings/executor");
+  await expect(page).toHaveURL(/\/settings\/executor$/);
+  await expect(page.getByText("正式单用户模式已关闭网页注册", { exact: false })).toBeVisible();
+  await expect(page.getByRole("button", { name: "注册当前设备" })).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "保存一次性设备令牌" })).toHaveCount(0);
+
+  await page.goto("/");
   await page.locator('[data-demo-target="scene:example:new-car:0"]').click();
   const requirementInput = page.getByRole("textbox", { name: "描述你的购物场景" });
   const requirementBeforeGuide = await requirementInput.inputValue();
@@ -79,7 +106,12 @@ test("formal login and authenticated navigation open the independent public Demo
   await expect(page.getByRole("dialog", { name: "SceneCart AI 产品说明" })).toBeVisible();
   await expect(page.getByText("Vercel 外层保护，通过后直接绑定固定 owner", { exact: true })).toHaveCount(0);
   await page.getByRole("button", { name: "正式产品与 Demo" }).click();
-  await expect(page.getByText("Vercel 外层保护，通过后直接绑定固定 owner", { exact: true })).toBeVisible();
+  const fixedOwnerProtectionCopy = page.getByText(
+    "Vercel 外层保护，通过后直接绑定固定 owner",
+    { exact: true }
+  );
+  await expect(fixedOwnerProtectionCopy).toHaveCount(2);
+  await expect(fixedOwnerProtectionCopy.last()).toBeVisible();
   await page.keyboard.press("Escape");
   await expect(page.getByRole("dialog", { name: "SceneCart AI 产品说明" })).toBeHidden();
   await expect(productGuideButton).toBeFocused();

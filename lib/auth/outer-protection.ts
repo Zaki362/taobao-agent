@@ -113,8 +113,21 @@ export function inspectOuterProtectionConfiguration(
 
 export function isLocalSingleUserDevelopment() {
   const vercelEnvironment = process.env.VERCEL_ENV?.trim();
-  return (
-    (!vercelEnvironment || vercelEnvironment === "development") &&
-    process.env.NODE_ENV !== "production"
-  );
+  if (vercelEnvironment && vercelEnvironment !== "development") return false;
+
+  const configuredOrigins = (process.env.APP_ORIGIN ?? "")
+    .split(",")
+    .map((origin) => origin.trim())
+    .filter(Boolean);
+  if (configuredOrigins.length !== 1) return false;
+
+  try {
+    const origin = new URL(configuredOrigins[0]);
+    const loopbackHost = origin.hostname === "localhost" ||
+      origin.hostname === "127.0.0.1" ||
+      origin.hostname === "[::1]";
+    return loopbackHost && !origin.username && !origin.password;
+  } catch {
+    return false;
+  }
 }

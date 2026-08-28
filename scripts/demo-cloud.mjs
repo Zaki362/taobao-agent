@@ -20,6 +20,10 @@ import {
   MCP_READINESS_EXIT_CODE,
   mcpReadinessBackoffMs
 } from "./local-executor-readiness.mjs";
+import {
+  safeMachineErrorMessage,
+  vercelProtectedFetch
+} from "./vercel-protection-bypass.mjs";
 
 const ROOT = process.cwd();
 const NODE_22_REEXEC_FLAG = "SCENECART_DEMO_CLOUD_NODE22_REEXEC";
@@ -47,18 +51,31 @@ function help() {
 `);
 }
 
-async function fetchJson(url, options = {}) {
-  const response = await fetch(url, {
+export async function fetchCloudJson(url, {
+  environment = process.env,
+  fetchImpl = fetch,
+  ...options
+} = {}) {
+  const response = await vercelProtectedFetch(url, {
     ...options,
     cache: "no-store",
     signal: options.signal ?? AbortSignal.timeout(15_000)
+  }, {
+    environment,
+    fetchImpl
   });
   const payload = await response.json().catch(() => ({}));
   return { response, payload };
 }
 
-async function checkCloudRuntime(apiBaseUrl) {
-  const { response, payload } = await fetchJson(`${apiBaseUrl}/api/runtime/health`);
+export async function checkCloudRuntime(
+  apiBaseUrl,
+  { environment = process.env, fetchImpl = fetch } = {}
+) {
+  const { response, payload } = await fetchCloudJson(
+    `${apiBaseUrl}/api/runtime/health`,
+    { environment, fetchImpl }
+  );
   if (!response.ok) {
     throw new Error(payload.error || `云端健康检查返回 HTTP ${response.status}`);
   }
@@ -71,15 +88,24 @@ async function checkCloudRuntime(apiBaseUrl) {
   );
 }
 
-async function checkRecoveryAccess(apiBaseUrl, secret) {
+export async function checkRecoveryAccess(
+  apiBaseUrl,
+  secret,
+  { environment = process.env, fetchImpl = fetch } = {}
+) {
   if (secret.length < 32) {
     throw new Error(
       "SCENECART_CRON_SECRET 未配置或不足 32 字符；Hobby 面试演示需要本机维持恢复心跳"
     );
   }
-  const { response, payload } = await fetchJson(`${apiBaseUrl}/api/internal/runtime-readiness`, {
-    headers: { Authorization: `Bearer ${secret}` }
-  });
+  const { response, payload } = await fetchCloudJson(
+    `${apiBaseUrl}/api/internal/runtime-readiness`,
+    {
+      environment,
+      fetchImpl,
+      headers: { Authorization: `Bearer ${secret}` }
+    }
+  );
   if (!response.ok) {
     throw new Error(payload.error || `恢复密钥验证返回 HTTP ${response.status}`);
   }
@@ -269,7 +295,7 @@ export async function startCloudDemo(args = process.argv.slice(2)) {
   const configuredCloudToken = environment.SCENECART_CLOUD_DEVICE_TOKEN?.trim() ?? "";
   if (!configuredCloudToken) {
     throw new Error(
-      "SCENECART_CLOUD_DEVICE_TOKEN 未配置；请先在云端设置页注册设备，再运行 npm run demo:cloud:configure"
+      "SCENECART_CLOUD_DEVICE_TOKEN 未配置；请使用正式 owner 已预置的设备令牌运行 npm run demo:cloud:configure"
     );
   }
   const deviceToken = validateExecutorDeviceToken(configuredCloudToken);
@@ -279,18 +305,19 @@ export async function startCloudDemo(args = process.argv.slice(2)) {
     ...environment,
     TAOBAO_EXECUTION_BACKEND: "local_executor",
     SCENECART_API_URL: apiBaseUrl,
+    SCENECART_VERCEL_PROTECTED_ORIGIN: apiBaseUrl,
     SCENECART_DEVICE_TOKEN: deviceToken,
     SCENECART_CRON_SECRET: recoverySecret
   };
 
   process.stdout.write("[demo:cloud] 正在预热云端真实淘宝演示链路...\n");
-  await checkCloudRuntime(apiBaseUrl);
+  await checkCloudRuntime(apiBaseUrl, { environment: childEnvironment });
   if (options.skipRecovery) {
     process.stdout.write(
       "WARN  recovery_access: 已跳过本机恢复 Worker；仅在外部分钟级调度已经运行时使用此选项\n"
     );
   } else {
-    await checkRecoveryAccess(apiBaseUrl, recoverySecret);
+    await checkRecoveryAccess(apiBaseUrl, recoverySecret, { environment: childEnvironment });
   }
   await waitForDoctor(childEnvironment, { checkOnly: options.checkOnly });
 
@@ -346,7 +373,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     .then((relaunched) => relaunched ? undefined : startCloudDemo())
     .catch((error) => {
       process.stderr.write(
-        `[demo:cloud] ${sanitizeCloudDemoMessage(error instanceof Error ? error.message : error)}\n`
+        `[demo:cloud] ${sanitizeCloudDemoMessage(safeMachineErrorMessage(error))}\n`
       );
       process.exitCode = 1;
     });

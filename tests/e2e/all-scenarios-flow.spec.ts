@@ -1,9 +1,13 @@
 import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
 import { getScenarioConfig } from "../../lib/scenarios";
 import type { ScenarioId } from "../../lib/session/types";
-import protocol from "../../lib/runtime/executor-protocol.json";
+import {
+  executorHeaders,
+  moduleOnlyDevice,
+  singleUserStorageKey,
+  singleUserStorageOwner
+} from "./single-user-fixture";
 
-const appOrigin = "http://127.0.0.1:3100";
 const recommendationTypes = ["稳妥推荐", "性价比推荐", "升级推荐"] as const;
 
 type ScenarioCase = {
@@ -48,14 +52,6 @@ const scenarioCases: ScenarioCase[] = [
   { id: "dorm-move-in", exampleIndex: 0 },
   { id: "moving-setup", exampleIndex: 1 }
 ];
-
-function executorHeaders(token: string) {
-  return {
-    Authorization: `Bearer ${token}`,
-    "X-SceneCart-Executor-Protocol": protocol.version,
-    Origin: appOrigin
-  };
-}
 
 function verifiedSearchResultFor(job: ExecutorJob, itemType: string, scenarioName: string) {
   const moduleId = String(job.payload.module_id);
@@ -141,28 +137,13 @@ function detailEvidenceFor(
       };
 }
 
-async function registerFixtureExecutor(page: Page, scenarioId: ScenarioId) {
-  const email = `${scenarioId}-${Date.now()}@example.com`;
-  const registered = await page.request.post("/api/auth/register", {
-    headers: { Origin: appOrigin },
-    data: { email, password: "e2e-secure-password" }
-  });
-  expect(registered.status(), await registered.text()).toBe(201);
-
-  const deviceResponse = await page.request.post("/api/executor/devices", {
-    headers: { Origin: appOrigin },
-    data: {
-      name: `${getScenarioConfig(scenarioId).name} E2E fixture executor`,
-      capabilities: ["module_search"]
-    }
-  });
-  expect(deviceResponse.status(), await deviceResponse.text()).toBe(201);
-  const { device_token: deviceToken } = await deviceResponse.json() as { device_token: string };
+async function activateFixtureExecutor(page: Page, scenarioId: ScenarioId) {
+  const deviceToken = moduleOnlyDevice.token;
   const heartbeat = await page.request.post("/api/executor/heartbeat", {
     headers: executorHeaders(deviceToken),
     data: { executor_state: "online" }
   });
-  expect(heartbeat.ok(), await heartbeat.text()).toBe(true);
+  expect(heartbeat.ok(), `${getScenarioConfig(scenarioId).name}: ${await heartbeat.text()}`).toBe(true);
   return deviceToken;
 }
 
@@ -197,7 +178,7 @@ async function runScenarioExecutor(
       continue;
     }
 
-    // These tests never grant or exercise the real add-to-cart capability.
+    // These scenario flows never create or exercise a real add-to-cart job.
     expect(job.job_type).not.toBe("add_to_cart");
 
     if (job.job_type === "product_detail") {
@@ -268,7 +249,7 @@ for (const scenarioCase of scenarioCases) {
   const scenario = getScenarioConfig(scenarioCase.id);
 
   test(`${scenario.id} reaches scenario-specific recommendations through the durable fixture executor`, async ({ page }) => {
-    const deviceToken = await registerFixtureExecutor(page, scenario.id);
+    const deviceToken = await activateFixtureExecutor(page, scenario.id);
     let stopExecutor = false;
     const observations: ExecutorObservations = {
       jobs: [],
@@ -304,6 +285,11 @@ for (const scenarioCase of scenarioCases) {
         return String((JSON.parse(raw) as { state?: { sessionId?: string } }).state?.sessionId ?? "");
       });
       expect(sessionId).not.toBe("");
+      const persistence = await page.evaluate((expectedKey) => {
+        const raw = window.localStorage.getItem(expectedKey);
+        return raw ? JSON.parse(raw) as { owner?: string } : null;
+      }, singleUserStorageKey);
+      expect(persistence?.owner).toBe(singleUserStorageOwner);
 
       const plannedResponse = await page.request.get(`/api/session/state?session_id=${sessionId}`);
       expect(plannedResponse.ok(), await plannedResponse.text()).toBe(true);

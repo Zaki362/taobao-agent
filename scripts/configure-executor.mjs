@@ -4,12 +4,19 @@ import process from "node:process";
 import readline from "node:readline/promises";
 import {
   discoverExecutorApiUrl,
+  executorNeedsVercelProtection,
   normalizeExecutorApiUrl,
   preferredExecutorApiUrl,
+  preferredVercelProtectedOrigin,
   readEnvValue,
   updateExecutorEnv,
-  validateExecutorDeviceToken
+  validateExecutorDeviceToken,
+  validateVercelProtectionBypassSecret
 } from "./executor-config-utils.mjs";
+import {
+  normalizeProtectedOrigin,
+  safeMachineErrorMessage
+} from "./vercel-protection-bypass.mjs";
 
 const target = path.join(process.cwd(), ".env.local");
 
@@ -84,7 +91,7 @@ async function writeAtomically(content) {
 
 async function main() {
   if (process.argv.includes("--help")) {
-    console.log("在交互式终端中安全配置 SceneCart 本地执行器；设备令牌不会回显或进入 shell history。");
+    console.log("在交互式终端中安全配置 SceneCart 本地执行器；设备令牌和 Vercel Bypass Secret 均不会回显或进入 shell history。");
     return;
   }
 
@@ -95,10 +102,28 @@ async function main() {
   const currentToken = readEnvValue(existing, "SCENECART_DEVICE_TOKEN");
   const input = readline.createInterface({ input: process.stdin, output: process.stdout });
   let apiUrl;
+  let protectedOrigin = "";
   try {
     apiUrl = normalizeExecutorApiUrl(
       (await input.question(`SceneCart API 地址 [${currentApiUrl}]: `)).trim() || currentApiUrl
     );
+    const suggestedProtectedOrigin = preferredVercelProtectedOrigin(
+      existing,
+      process.env.SCENECART_VERCEL_PROTECTED_ORIGIN ?? "",
+      apiUrl
+    );
+    const parsedApiUrl = new URL(apiUrl);
+    const remoteHttps = parsedApiUrl.protocol === "https:" &&
+      !["localhost", "127.0.0.1", "::1"].includes(parsedApiUrl.hostname);
+    if (remoteHttps) {
+      const prompt = suggestedProtectedOrigin
+        ? `Vercel 受保护 origin [${suggestedProtectedOrigin}]: `
+        : "Vercel 受保护 origin（未启用外层保护则留空）: ";
+      const originInput = (await input.question(prompt)).trim();
+      protectedOrigin = originInput
+        ? normalizeProtectedOrigin(originInput)
+        : suggestedProtectedOrigin;
+    }
   } finally {
     input.close();
   }
@@ -110,18 +135,44 @@ async function main() {
   );
   const deviceToken = tokenInput.trim() ? validateExecutorDeviceToken(tokenInput) : currentToken;
   if (!deviceToken) {
-    throw new Error("尚未配置设备令牌，请先在 /settings/executor 注册设备");
+    throw new Error("尚未配置设备令牌；单用户模式请使用正式 owner 已预置的设备令牌");
   }
 
-  await writeAtomically(updateExecutorEnv(existing, { apiUrl, deviceToken }));
+  let bypassSecret = "";
+  const protectionRequired = protectedOrigin
+    ? executorNeedsVercelProtection(apiUrl, protectedOrigin)
+    : executorNeedsVercelProtection(apiUrl);
+  if (protectionRequired) {
+    const currentBypassSecret =
+      process.env.SCENECART_VERCEL_PROTECTION_BYPASS_SECRET?.trim() ||
+      readEnvValue(existing, "SCENECART_VERCEL_PROTECTION_BYPASS_SECRET").trim();
+    const bypassInput = await hiddenQuestion(
+      currentBypassSecret
+        ? "Vercel Automation Bypass Secret（留空保留当前值，输入不会回显）: "
+        : "Vercel Automation Bypass Secret（输入不会回显）: "
+    );
+    bypassSecret = validateVercelProtectionBypassSecret(
+      bypassInput.trim() || currentBypassSecret
+    );
+  }
+
+  await writeAtomically(updateExecutorEnv(existing, {
+    apiUrl,
+    deviceToken,
+    ...(protectedOrigin ? { protectedOrigin } : {}),
+    ...(bypassSecret ? { bypassSecret } : {})
+  }));
   console.log(`配置已安全写入 ${target}`);
   console.log(`API: ${apiUrl}`);
   console.log("淘宝执行通道：桌面版官方本地 HTTP MCP（无需 Qoder）");
   console.log("设备令牌：已保存但不显示");
+  if (protectionRequired) {
+    console.log("Vercel Automation Bypass：已保存但不显示；Worker 子进程将从本机环境读取");
+  }
   console.log("下一步运行：npm run executor:doctor");
 }
 
 main().catch((error) => {
-  console.error(`配置失败：${error instanceof Error ? error.message : String(error)}`);
+  console.error(`配置失败：${safeMachineErrorMessage(error)}`);
   process.exitCode = 1;
 });

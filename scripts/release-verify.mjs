@@ -3,6 +3,11 @@ import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
+import {
+  isVercelProtectionChallenge,
+  redactSceneCartSecrets,
+  vercelProtectedFetch
+} from "./vercel-protection-bypass.mjs";
 
 const ROOT = process.cwd();
 const DEFAULT_TIMEOUT_MS = 15_000;
@@ -26,7 +31,7 @@ function loadEnvFile(relativePath) {
 }
 
 export function sanitizeReleaseDetail(value) {
-  const normalized = String(value ?? "")
+  const normalized = redactSceneCartSecrets(value)
     .replace(/sk-[A-Za-z0-9_-]{12,}/g, "[redacted-api-key]")
     .replace(/Bearer\s+[A-Za-z0-9._~+/=-]{12,}/gi, "Bearer [redacted]")
     .replace(/postgres(?:ql)?:\/\/[^\s'"`]+/gi, "[redacted-database-url]")
@@ -186,15 +191,23 @@ async function runDatabaseCheck() {
   );
 }
 
-async function fetchJson(url, { timeoutMs, authorization, fetchImpl = fetch } = {}) {
+async function fetchJson(url, {
+  timeoutMs,
+  authorization,
+  environment = process.env,
+  fetchImpl = fetch
+} = {}) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs ?? DEFAULT_TIMEOUT_MS);
   try {
-    const response = await fetchImpl(url, {
+    const response = await vercelProtectedFetch(url, {
       method: "GET",
       cache: "no-store",
       headers: authorization ? { Authorization: authorization } : undefined,
       signal: controller.signal
+    }, {
+      environment,
+      fetchImpl
     });
     const text = await response.text();
     let payload = null;
@@ -209,14 +222,69 @@ async function fetchJson(url, { timeoutMs, authorization, fetchImpl = fetch } = 
   }
 }
 
+async function verifyAnonymousProtectionChallenge(baseUrl, {
+  timeoutMs = DEFAULT_TIMEOUT_MS,
+  environment = process.env,
+  fetchImpl = fetch
+} = {}) {
+  const input = `${baseUrl}/api/runtime/health`;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetchImpl(input, {
+      method: "GET",
+      cache: "no-store",
+      redirect: "manual",
+      signal: controller.signal
+    });
+    const body = await response.clone().text().catch(() => "");
+    return {
+      challenged: isVercelProtectionChallenge(response, { input, body, environment }),
+      status: response.status
+    };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 export async function verifyRuntime(baseUrl, {
   timeoutMs = DEFAULT_TIMEOUT_MS,
   secret = "",
+  environment = process.env,
   fetchImpl = fetch
 } = {}) {
   const checks = [];
   try {
-    const health = await fetchJson(`${baseUrl}/api/runtime/health`, { timeoutMs, fetchImpl });
+    const anonymous = await verifyAnonymousProtectionChallenge(baseUrl, {
+      timeoutMs,
+      environment,
+      fetchImpl
+    });
+    checks.push(result(
+      "outer_protection_anonymous_probe",
+      "匿名请求外层拦截",
+      anonymous.challenged ? "pass" : "fail",
+      anonymous.challenged
+        ? `未携带 Automation Bypass 的请求被 Vercel 外层保护拦截（HTTP ${anonymous.status}）`
+        : `未携带 Automation Bypass 的请求未出现 Vercel 保护挑战（HTTP ${anonymous.status}）`,
+      "停止发布并核对 Vercel All Deployments Protection；不能把固定 owner 匿名暴露到公网"
+    ));
+  } catch (error) {
+    checks.push(result(
+      "outer_protection_anonymous_probe",
+      "匿名请求外层拦截",
+      "fail",
+      error?.name === "AbortError" ? "匿名保护探针超时" : error?.message ?? error,
+      "确认验证机可以访问部署 URL，并重新执行无凭据探针"
+    ));
+  }
+
+  try {
+    const health = await fetchJson(`${baseUrl}/api/runtime/health`, {
+      timeoutMs,
+      environment,
+      fetchImpl
+    });
     const healthy = health.ok && health.payload?.status === "healthy";
     checks.push(result(
       "runtime_health",
@@ -274,6 +342,7 @@ export async function verifyRuntime(baseUrl, {
     const readiness = await fetchJson(`${baseUrl}/api/internal/runtime-readiness`, {
       timeoutMs,
       authorization: `Bearer ${secret.trim()}`,
+      environment,
       fetchImpl
     });
     const failedRequired = Array.isArray(readiness.payload?.checks)
@@ -335,7 +404,8 @@ export async function buildReleaseVerification(options = {}) {
       ));
       runtime = await verifyRuntime(baseUrl, {
         timeoutMs: options.timeoutMs,
-        secret: process.env.SCENECART_CRON_SECRET ?? ""
+        secret: process.env.SCENECART_CRON_SECRET ?? "",
+        environment: process.env
       });
       checks.push(...runtime.checks);
     }

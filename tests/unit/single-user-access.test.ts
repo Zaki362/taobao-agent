@@ -146,6 +146,17 @@ describe("single-user Preview access", () => {
     expect(() => configuredSingleUserId()).toThrow("VERCEL_ENV 必须是 preview 或 production");
   });
 
+  it("allows a local next-start preview only when APP_ORIGIN is exact loopback", () => {
+    delete process.env.VERCEL_ENV;
+    Reflect.set(process.env, "NODE_ENV", "production");
+    process.env.APP_ORIGIN = "http://127.0.0.1:3100";
+
+    expect(configuredSingleUserId()).toBe(OWNER_ID);
+
+    process.env.APP_ORIGIN = "https://scenecart.example.com";
+    expect(() => configuredSingleUserId()).toThrow("VERCEL_ENV 必须是 preview 或 production");
+  });
+
   it("disables interactive login and registration endpoints", () => {
     expect(() => assertInteractiveAuthenticationEnabled()).toThrow("不开放账号登录或注册");
     try {

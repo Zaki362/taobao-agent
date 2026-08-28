@@ -1,13 +1,12 @@
 import { expect, test, type APIRequestContext, type Request } from "@playwright/test";
-import protocol from "../../lib/runtime/executor-protocol.json";
-
-const appOrigin = "http://127.0.0.1:3100";
-
-const executorHeaders = (token: string) => ({
-  Authorization: `Bearer ${token}`,
-  "X-SceneCart-Executor-Protocol": protocol.version,
-  Origin: appOrigin
-});
+import {
+  appOrigin,
+  executorHeaders,
+  fullCapabilityDevice,
+  moduleOnlyDevice,
+  singleUserStorageKey,
+  singleUserStorageOwner
+} from "./single-user-fixture";
 
 type ExecutorJob = {
   id: string;
@@ -96,19 +95,16 @@ async function resolveDetailFollowUp(api: APIRequestContext, headers: Record<str
 }
 
 test("Taobao login loss pauses the page and resumes the same durable job atomically", async ({ page }) => {
-  const email = `auth-resume-${Date.now()}@example.com`;
-  const register = await page.request.post("/api/auth/register", {
+  // A preceding capability-audit test may temporarily grant cart access to the
+  // search-only device. Restore this test's boundary so cart availability is
+  // determined solely by the full-capability device under authentication loss.
+  const resetModuleCapabilities = await page.request.patch("/api/executor/devices", {
     headers: { Origin: appOrigin },
-    data: { email, password: "e2e-secure-password" }
+    data: { device_id: moduleOnlyDevice.id, capabilities: ["module_search"] }
   });
-  expect(register.status(), await register.text()).toBe(201);
+  expect(resetModuleCapabilities.ok(), await resetModuleCapabilities.text()).toBe(true);
 
-  const deviceResponse = await page.request.post("/api/executor/devices", {
-    headers: { Origin: appOrigin },
-    data: { name: "认证恢复 E2E 执行器", capabilities: ["module_search", "add_to_cart"] }
-  });
-  expect(deviceResponse.status(), await deviceResponse.text()).toBe(201);
-  const { device_token: deviceToken } = await deviceResponse.json() as { device_token: string };
+  const deviceToken = fullCapabilityDevice.token;
   const headers = executorHeaders(deviceToken);
   expect((await page.request.post("/api/executor/heartbeat", {
     headers,
@@ -183,13 +179,19 @@ test("Taobao login loss pauses the page and resumes the same durable job atomica
   expect(Object.values(pausedState.module_candidates).flat().length).toBeGreaterThan(0);
 
   const authResponse = await page.request.get("/api/auth/me");
-  const authState = await authResponse.json() as { user?: { id?: string } };
-  expect(authState.user?.id).toBeTruthy();
-  await page.addInitScript(({ rawInput, sessionId, pausedState, userId }) => {
-    const owner = `user:${userId}`;
-    window.localStorage.setItem(`scenecart-dashboard-state:v2:${encodeURIComponent(owner)}`, JSON.stringify({
+  const authState = await authResponse.json() as Record<string, unknown>;
+  expect(authResponse.ok(), JSON.stringify(authState)).toBe(true);
+  expect(authState).toMatchObject({
+    authenticated: true,
+    access_mode: "single_user",
+    persistence_scope: "single_user"
+  });
+  expect(authState).not.toHaveProperty("user");
+  expect(authState).not.toHaveProperty("owner_id");
+  await page.addInitScript(({ rawInput, sessionId, pausedState, storageKey, storageOwner }) => {
+    window.localStorage.setItem(storageKey, JSON.stringify({
       version: 2,
-      owner,
+      owner: storageOwner,
       savedAt: Date.now(),
       state: {
         stage: "searching",
@@ -205,8 +207,20 @@ test("Taobao login loss pauses the page and resumes the same durable job atomica
         searchSummary: []
       }
     }));
-  }, { rawInput, sessionId, pausedState, userId: authState.user!.id! });
+  }, {
+    rawInput,
+    sessionId,
+    pausedState,
+    storageKey: singleUserStorageKey,
+    storageOwner: singleUserStorageOwner
+  });
   await page.goto("/?resume=1");
+
+  const persistedOwner = await page.evaluate((storageKey) => {
+    const raw = window.localStorage.getItem(storageKey);
+    return raw ? (JSON.parse(raw) as { owner?: string }).owner : null;
+  }, singleUserStorageKey);
+  expect(persistedOwner).toBe(singleUserStorageOwner);
 
   await expect(page.getByRole("heading", { name: "淘宝登录已失效，真实搜索已安全暂停" })).toBeVisible();
   await expect(page.getByRole("button", { name: "重新登录后继续搜索" })).toBeVisible();

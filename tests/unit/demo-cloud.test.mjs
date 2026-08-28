@@ -10,7 +10,12 @@ import {
   sanitizeCloudDemoMessage,
   validateCloudRuntime
 } from "../../scripts/demo-cloud-utils.mjs";
-import { waitForDoctor } from "../../scripts/demo-cloud.mjs";
+import {
+  checkCloudRuntime,
+  checkRecoveryAccess,
+  fetchCloudJson,
+  waitForDoctor
+} from "../../scripts/demo-cloud.mjs";
 import { MCP_READINESS_EXIT_CODE } from "../../scripts/local-executor-readiness.mjs";
 
 describe("cloud interview demo launcher", () => {
@@ -55,6 +60,75 @@ describe("cloud interview demo launcher", () => {
       .toContain("RUNTIME_STORE 不是 postgres");
     expect(validateCloudRuntime({ ...valid, executor_protocol_version: "4" }, "5")[0])
       .toMatch(/协议不一致/);
+  });
+
+  it("sends Vercel bypass without a SceneCart bearer for public health", async () => {
+    const calls = [];
+    const environment = {
+      SCENECART_VERCEL_PROTECTED_ORIGIN: "https://scenecart.example.com",
+      SCENECART_VERCEL_PROTECTION_BYPASS_SECRET: "bypass-secret-that-is-long-enough"
+    };
+    const fetchImpl = async (input, init) => {
+      calls.push({ input: String(input), init });
+      return new Response(JSON.stringify({ status: "healthy" }), {
+        status: 200,
+        headers: { "content-type": "application/json" }
+      });
+    };
+
+    await fetchCloudJson("https://scenecart.example.com/api/runtime/health", {
+      environment,
+      fetchImpl
+    });
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0].init.redirect).toBe("manual");
+    const headers = new Headers(calls[0].init.headers);
+    expect(headers.get("x-vercel-protection-bypass")).toBe(
+      "bypass-secret-that-is-long-enough"
+    );
+    expect(headers.has("authorization")).toBe(false);
+  });
+
+  it("requires both bypass and SceneCart recovery credentials for readiness", async () => {
+    const calls = [];
+    const environment = {
+      SCENECART_VERCEL_PROTECTED_ORIGIN: "https://scenecart.example.com",
+      SCENECART_VERCEL_PROTECTION_BYPASS_SECRET: "bypass-secret-that-is-long-enough"
+    };
+    const cronSecret = "cron-secret-that-is-at-least-thirty-two-characters";
+    const fetchImpl = async (input, init) => {
+      calls.push({ input: String(input), init });
+      return new Response(JSON.stringify({ ready_for_production: true }), {
+        status: 200,
+        headers: { "content-type": "application/json" }
+      });
+    };
+
+    await checkRecoveryAccess("https://scenecart.example.com", cronSecret, {
+      environment,
+      fetchImpl
+    });
+
+    const headers = new Headers(calls[0].init.headers);
+    expect(headers.get("x-vercel-protection-bypass")).toBe(
+      "bypass-secret-that-is-long-enough"
+    );
+    expect(headers.get("authorization")).toBe(`Bearer ${cronSecret}`);
+  });
+
+  it("fails before sending protected probes when bypass is missing", async () => {
+    let sent = false;
+    await expect(checkCloudRuntime("https://scenecart.example.com", {
+      environment: {
+        SCENECART_VERCEL_PROTECTED_ORIGIN: "https://scenecart.example.com"
+      },
+      fetchImpl: async () => {
+        sent = true;
+        return new Response("{}");
+      }
+    })).rejects.toThrow(/SCENECART_VERCEL_PROTECTION_BYPASS_SECRET/);
+    expect(sent).toBe(false);
   });
 
   it("redacts credentials from launcher errors", () => {

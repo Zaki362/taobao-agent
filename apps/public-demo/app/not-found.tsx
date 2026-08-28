@@ -10,7 +10,7 @@ export default function NotFoundPage() {
           公开体验版只提供完整 Demo 流程，不包含账户、设置或正式产品接口。
         </p>
         <Link
-          href="/demo"
+          href="/"
           className="mt-6 inline-flex h-11 items-center justify-center rounded-full bg-primary px-6 text-sm font-semibold text-primary-foreground transition hover:opacity-90"
         >
           返回公开体验

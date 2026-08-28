@@ -1,4 +1,10 @@
-const MANAGED_KEYS = [
+import {
+  DEFAULT_SCENECART_PROTECTED_ORIGIN,
+  isProtectedVercelOrigin,
+  normalizeProtectedOrigin
+} from "./vercel-protection-bypass.mjs";
+
+const CORE_MANAGED_KEYS = [
   "TAOBAO_EXECUTION_BACKEND",
   "SCENECART_API_URL",
   "SCENECART_DEVICE_TOKEN"
@@ -61,6 +67,33 @@ export function preferredExecutorApiUrl(content, environmentValue = "") {
   );
 }
 
+export function preferredVercelProtectedOrigin(
+  content,
+  environmentValue = "",
+  apiUrl = ""
+) {
+  const configured = environmentValue.trim() ||
+    readEnvValue(content, "SCENECART_VERCEL_PROTECTED_ORIGIN").trim();
+  if (configured) return normalizeProtectedOrigin(configured);
+  if (apiUrl) {
+    const normalizedApiUrl = normalizeExecutorApiUrl(apiUrl);
+    if (new URL(normalizedApiUrl).origin === DEFAULT_SCENECART_PROTECTED_ORIGIN) {
+      return DEFAULT_SCENECART_PROTECTED_ORIGIN;
+    }
+  }
+  return "";
+}
+
+export function executorNeedsVercelProtection(apiUrl, protectedOriginValue = "") {
+  const normalizedApiUrl = normalizeExecutorApiUrl(apiUrl);
+  const configuredOrigin = normalizeProtectedOrigin(
+    protectedOriginValue.trim() || DEFAULT_SCENECART_PROTECTED_ORIGIN
+  );
+  return isProtectedVercelOrigin(normalizedApiUrl, {
+    SCENECART_VERCEL_PROTECTED_ORIGIN: configuredOrigin
+  });
+}
+
 function isLocalExecutorUrl(value) {
   const parsed = new URL(value);
   return parsed.protocol === "http:" && ["127.0.0.1", "localhost", "::1"].includes(parsed.hostname);
@@ -113,18 +146,49 @@ export function validateExecutorDeviceToken(value) {
   return candidate;
 }
 
+export function validateVercelProtectionBypassSecret(value) {
+  const candidate = value.trim();
+  if (candidate.length < 16 || candidate.length > 512) {
+    throw new Error("Vercel Automation Bypass Secret 长度不正确");
+  }
+  if (/\s|[\u0000-\u001f\u007f]/.test(candidate)) {
+    throw new Error("Vercel Automation Bypass Secret 包含空白或控制字符");
+  }
+  return candidate;
+}
+
 export function updateExecutorEnv(content, values) {
+  const apiUrl = normalizeExecutorApiUrl(values.apiUrl);
   const updates = {
     TAOBAO_EXECUTION_BACKEND: "local_executor",
-    SCENECART_API_URL: normalizeExecutorApiUrl(values.apiUrl),
+    SCENECART_API_URL: apiUrl,
     SCENECART_DEVICE_TOKEN: validateExecutorDeviceToken(values.deviceToken)
   };
+  const protectedOriginValue = values.protectedOrigin?.trim() ||
+    readEnvValue(content, "SCENECART_VERCEL_PROTECTED_ORIGIN").trim();
+  const effectiveProtectedOrigin = protectedOriginValue
+    ? normalizeProtectedOrigin(protectedOriginValue)
+    : DEFAULT_SCENECART_PROTECTED_ORIGIN;
+  const protectionRequired = executorNeedsVercelProtection(apiUrl, effectiveProtectedOrigin);
+  if (protectionRequired) {
+    const bypassSecret = values.bypassSecret?.trim() ||
+      readEnvValue(content, "SCENECART_VERCEL_PROTECTION_BYPASS_SECRET").trim();
+    updates.SCENECART_VERCEL_PROTECTED_ORIGIN = effectiveProtectedOrigin;
+    updates.SCENECART_VERCEL_PROTECTION_BYPASS_SECRET =
+      validateVercelProtectionBypassSecret(bypassSecret);
+  } else if (values.protectedOrigin?.trim()) {
+    updates.SCENECART_VERCEL_PROTECTED_ORIGIN = effectiveProtectedOrigin;
+  }
+
+  const managedKeys = [...CORE_MANAGED_KEYS, ...Object.keys(updates).filter(
+    (key) => !CORE_MANAGED_KEYS.includes(key)
+  )];
 
   const seen = new Set();
   const lines = content.split(/\r?\n/).filter((line, index, source) => {
     if (index === source.length - 1 && line === "") return false;
     const key = envKey(line);
-    if (!key || !MANAGED_KEYS.includes(key)) return true;
+    if (!key || !managedKeys.includes(key)) return true;
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
@@ -134,7 +198,7 @@ export function updateExecutorEnv(content, values) {
     return `${key}=${encodeEnvValue(updates[key])}`;
   });
 
-  const missing = MANAGED_KEYS.filter((key) => !seen.has(key));
+  const missing = managedKeys.filter((key) => !seen.has(key));
   if (missing.length > 0) {
     if (lines.length > 0 && lines.at(-1)?.trim()) lines.push("");
     lines.push("# SceneCart local executor");

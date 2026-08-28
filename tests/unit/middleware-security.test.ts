@@ -21,8 +21,11 @@ function restore(name: "AUTH_REQUIRED" | "APP_ORIGIN", value: string | undefined
   else process.env[name] = value;
 }
 
-function mutationRequest(headers: Record<string, string>) {
-  return new NextRequest("https://scenecart.example.com/api/session/archive", {
+function mutationRequest(
+  headers: Record<string, string>,
+  pathname = "/api/session/archive"
+) {
+  return new NextRequest(`https://scenecart.example.com${pathname}`, {
     method: "POST",
     headers
   });
@@ -73,9 +76,27 @@ describe("API mutation origin protection", () => {
   it("keeps cookie-free Bearer machine requests independent from browser Origin checks", () => {
     const response = middleware(mutationRequest({
       authorization: "Bearer machine-token"
-    }));
+    }, "/api/executor/heartbeat"));
 
     expect(response.headers.get("x-middleware-next")).toBe("1");
+  });
+
+  it("does not let a fake Bearer bypass Origin checks on ordinary fixed-owner APIs", async () => {
+    const response = middleware(mutationRequest({
+      authorization: "Bearer not-a-device-token"
+    }, "/api/scene/plan"));
+
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toMatchObject({ code: "invalid_origin" });
+  });
+
+  it("does not treat browser device enrollment as a machine-authenticated endpoint", async () => {
+    const response = middleware(mutationRequest({
+      authorization: "Bearer not-a-device-token"
+    }, "/api/executor/devices"));
+
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toMatchObject({ code: "invalid_origin" });
   });
 
   it("allows a same-origin session mutation", () => {
@@ -125,6 +146,21 @@ describe("API mutation origin protection", () => {
 
     const response = middleware(mutationRequest({
       origin: "https://scenecart.example.com"
+    }));
+
+    expect(response.status).toBe(503);
+    await expect(response.json()).resolves.toMatchObject({
+      code: "single_user_outer_protection_required"
+    });
+  });
+
+  it("does not let a machine Bearer token bypass a missing outer-protection contract", async () => {
+    process.env.SCENECART_ACCESS_MODE = "single_user";
+    process.env.VERCEL_ENV = "preview";
+    delete process.env.SCENECART_OUTER_PROTECTION_VERIFIED;
+
+    const response = middleware(mutationRequest({
+      authorization: "Bearer valid-looking-device-token"
     }));
 
     expect(response.status).toBe(503);

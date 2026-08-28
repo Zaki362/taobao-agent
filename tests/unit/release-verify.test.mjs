@@ -130,8 +130,23 @@ describe("release verification", () => {
   it("verifies health and protected readiness without exposing the token", async () => {
     const calls = [];
     const secret = "release-verification-secret-at-least-32-characters";
+    const bypassSecret = "vercel-bypass-secret-for-release-verification";
+    const environment = {
+      ...process.env,
+      SCENECART_VERCEL_PROTECTED_ORIGIN: "https://scenecart.example.com",
+      SCENECART_VERCEL_PROTECTION_BYPASS_SECRET: bypassSecret
+    };
     const fetchImpl = async (url, init) => {
-      calls.push({ url, authorization: init.headers?.Authorization });
+      const headers = new Headers(init.headers);
+      const bypass = headers.get("x-vercel-protection-bypass");
+      const authorization = headers.get("authorization") ?? undefined;
+      calls.push({ url, authorization, bypass: Boolean(bypass) });
+      if (!bypass) {
+        return new Response("<html>Vercel Authentication Required</html>", {
+          status: 403,
+          headers: { "content-type": "text/html" }
+        });
+      }
       if (url.endsWith("/api/runtime/health")) {
         return new Response(JSON.stringify({
           status: "healthy",
@@ -150,21 +165,30 @@ describe("release verification", () => {
 
     const report = await verifyRuntime("https://scenecart.example.com", {
       secret,
+      environment,
       fetchImpl
     });
 
-    expect(report.checks.map((item) => item.status)).toEqual(["pass", "pass", "pass"]);
+    expect(report.checks.map((item) => item.status)).toEqual(["pass", "pass", "pass", "pass"]);
     expect(calls).toEqual([
       {
         url: "https://scenecart.example.com/api/runtime/health",
-        authorization: undefined
+        authorization: undefined,
+        bypass: false
+      },
+      {
+        url: "https://scenecart.example.com/api/runtime/health",
+        authorization: undefined,
+        bypass: true
       },
       {
         url: "https://scenecart.example.com/api/internal/runtime-readiness",
-        authorization: `Bearer ${secret}`
+        authorization: `Bearer ${secret}`,
+        bypass: true
       }
     ]);
     expect(JSON.stringify(report)).not.toContain(secret);
+    expect(JSON.stringify(report)).not.toContain(bypassSecret);
   });
 
   it("fails closed when health is unreachable or the internal secret is absent", async () => {
@@ -176,6 +200,7 @@ describe("release verification", () => {
     });
 
     expect(report.checks).toMatchObject([
+      { id: "outer_protection_anonymous_probe", status: "fail" },
       { id: "runtime_health", status: "fail" },
       { id: "runtime_contract", status: "fail" },
       { id: "runtime_readiness", status: "fail" }

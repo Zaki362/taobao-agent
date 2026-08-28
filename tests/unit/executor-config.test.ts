@@ -5,11 +5,14 @@ import * as executorConfig from "../../scripts/executor-config-utils.mjs";
 
 const {
   discoverExecutorApiUrl,
+  executorNeedsVercelProtection,
   normalizeExecutorApiUrl,
   preferredExecutorApiUrl,
+  preferredVercelProtectedOrigin,
   readEnvValue,
   updateExecutorEnv,
-  validateExecutorDeviceToken
+  validateExecutorDeviceToken,
+  validateVercelProtectionBypassSecret
 } = executorConfig as {
   discoverExecutorApiUrl: (
     preferredUrl: string,
@@ -22,15 +25,28 @@ const {
   ) => Promise<string>;
   normalizeExecutorApiUrl: (value: string) => string;
   preferredExecutorApiUrl: (content: string, environmentValue?: string) => string;
+  preferredVercelProtectedOrigin: (
+    content: string,
+    environmentValue?: string,
+    apiUrl?: string
+  ) => string;
+  executorNeedsVercelProtection: (apiUrl: string, protectedOrigin?: string) => boolean;
   readEnvValue: (content: string, key: string) => string;
   updateExecutorEnv: (
     content: string,
-    values: { apiUrl: string; deviceToken: string }
+    values: {
+      apiUrl: string;
+      deviceToken: string;
+      protectedOrigin?: string;
+      bypassSecret?: string;
+    }
   ) => string;
   validateExecutorDeviceToken: (value: string) => string;
+  validateVercelProtectionBypassSecret: (value: string) => string;
 };
 
 const token = "a".repeat(43);
+const bypassSecret = "bypass-secret-that-stays-on-this-machine-123";
 
 describe("local executor configuration", () => {
   it("validates executor URLs and opaque device tokens", () => {
@@ -107,5 +123,59 @@ describe("local executor configuration", () => {
     expect(updated).toContain("QODERCLI_PATH='/old path/qodercli'");
     expect(updated.match(/SCENECART_DEVICE_TOKEN=/g)).toHaveLength(1);
     expect(readEnvValue(updated, "SCENECART_DEVICE_TOKEN")).toBe(token);
+  });
+
+  it("recognizes only an exact protected origin and validates the local bypass secret", () => {
+    expect(executorNeedsVercelProtection("https://scenecart-ai.vercel.app/api"))
+      .toBe(true);
+    expect(executorNeedsVercelProtection("https://scenecart-ai.vercel.app.evil.test"))
+      .toBe(false);
+    expect(executorNeedsVercelProtection("http://127.0.0.1:3000"))
+      .toBe(false);
+    expect(validateVercelProtectionBypassSecret(bypassSecret)).toBe(bypassSecret);
+    expect(() => validateVercelProtectionBypassSecret("too-short"))
+      .toThrow("长度不正确");
+    expect(() => validateVercelProtectionBypassSecret(`${bypassSecret}\nleak`))
+      .toThrow("空白或控制字符");
+  });
+
+  it("persists protected-origin credentials without exposing or duplicating them", () => {
+    const existing = [
+      "SCENECART_VERCEL_PROTECTED_ORIGIN=https://old.example.com",
+      "SCENECART_VERCEL_PROTECTION_BYPASS_SECRET=old-secret-that-is-long-enough",
+      "SCENECART_VERCEL_PROTECTION_BYPASS_SECRET=duplicate-secret-that-is-long-enough",
+      "UNRELATED_SECRET=keep-me",
+      ""
+    ].join("\n");
+    const updated = updateExecutorEnv(existing, {
+      apiUrl: "https://scenecart-ai.vercel.app",
+      deviceToken: token,
+      protectedOrigin: "https://scenecart-ai.vercel.app",
+      bypassSecret
+    });
+
+    expect(readEnvValue(updated, "SCENECART_VERCEL_PROTECTED_ORIGIN"))
+      .toBe("https://scenecart-ai.vercel.app");
+    expect(readEnvValue(updated, "SCENECART_VERCEL_PROTECTION_BYPASS_SECRET"))
+      .toBe(bypassSecret);
+    expect(updated.match(/SCENECART_VERCEL_PROTECTION_BYPASS_SECRET=/g)).toHaveLength(1);
+    expect(updated).toContain("UNRELATED_SECRET=keep-me");
+  });
+
+  it("fails closed for the protected production origin without a saved bypass", () => {
+    expect(() => updateExecutorEnv("", {
+      apiUrl: "https://scenecart-ai.vercel.app",
+      deviceToken: token
+    })).toThrow("长度不正确");
+    expect(preferredVercelProtectedOrigin(
+      "",
+      "",
+      "https://scenecart-ai.vercel.app"
+    )).toBe("https://scenecart-ai.vercel.app");
+    expect(preferredVercelProtectedOrigin(
+      "SCENECART_VERCEL_PROTECTED_ORIGIN=https://preview.example.com\n",
+      "",
+      "https://preview.example.com"
+    )).toBe("https://preview.example.com");
   });
 });

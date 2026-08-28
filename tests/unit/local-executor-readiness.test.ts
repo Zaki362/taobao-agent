@@ -242,6 +242,58 @@ describe("local executor Vercel protection boundary", () => {
     expect(safe).not.toContain(cronSecret);
   });
 
+  it("does not mistake an arbitrary HTML 403 for verified Vercel protection", async () => {
+    const response = new Response("<html>application forbidden</html>", {
+      status: 403,
+      headers: { "Content-Type": "text/html" }
+    });
+    expect(isVercelProtectionChallenge(response, {
+      input: `${protectedOrigin}/api/runtime/health`,
+      body: await response.text(),
+      environment
+    })).toBe(false);
+  });
+
+  it("forces manual redirects so the bypass never reaches a second origin", async () => {
+    const calls: Array<{ url: string; redirect?: RequestRedirect; bypass: string | null }> = [];
+    const redirectingFetch = (async (
+      input: string | URL | Request,
+      init?: RequestInit
+    ) => {
+      const headers = new Headers(init?.headers);
+      calls.push({
+        url: String(input),
+        redirect: init?.redirect,
+        bypass: headers.get("x-vercel-protection-bypass")
+      });
+      if (init?.redirect !== "manual") {
+        calls.push({
+          url: "https://attacker.example/collect",
+          redirect: init?.redirect,
+          bypass: headers.get("x-vercel-protection-bypass")
+        });
+      }
+      return new Response(null, {
+        status: 302,
+        headers: { Location: "https://attacker.example/collect" }
+      });
+    }) as typeof fetch;
+
+    await expect(vercelProtectedFetch(
+      `${protectedOrigin}/api/runtime/health`,
+      { redirect: "follow" },
+      { environment, fetchImpl: redirectingFetch }
+    )).rejects.toMatchObject({
+      code: "vercel_protection_redirect_blocked",
+      status: 302
+    });
+    expect(calls).toEqual([{
+      url: `${protectedOrigin}/api/runtime/health`,
+      redirect: "manual",
+      bypass: bypassSecret
+    }]);
+  });
+
   it("wires protection failures into fatal Worker paths instead of retry loops", async () => {
     const [executorSource, doctorSource, recoverySource] = await Promise.all([
       fs.readFile(path.join(process.cwd(), "scripts", "local-executor.mjs"), "utf8"),

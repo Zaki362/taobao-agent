@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 
 const root = process.cwd();
 const nextCli = path.join(root, "node_modules", "next", "dist", "bin", "next");
@@ -80,6 +81,74 @@ function runNext(args, env, timeoutMs) {
   return runCommand(process.execPath, [nextCli, ...args], env, timeoutMs, true);
 }
 
+function requiredFixtureValue(env, name) {
+  const value = env[name]?.trim();
+  if (!value) throw new Error(`missing isolated E2E fixture setting: ${name}`);
+  return value;
+}
+
+function tokenDigest(token) {
+  return createHash("sha256").update(token).digest("hex");
+}
+
+async function seedSingleUserRuntime(env) {
+  const runtimeFile = path.resolve(root, requiredFixtureValue(env, "SCENECART_LOCAL_RUNTIME_PATH"));
+  const ownerId = requiredFixtureValue(env, "SCENECART_E2E_OWNER_ID");
+  const moduleDeviceId = requiredFixtureValue(env, "SCENECART_E2E_MODULE_DEVICE_ID");
+  const moduleDeviceToken = requiredFixtureValue(env, "SCENECART_E2E_MODULE_DEVICE_TOKEN");
+  const fullDeviceId = requiredFixtureValue(env, "SCENECART_E2E_FULL_DEVICE_ID");
+  const fullDeviceToken = requiredFixtureValue(env, "SCENECART_E2E_FULL_DEVICE_TOKEN");
+  const now = new Date().toISOString();
+  const device = (id, name, token, capabilities) => ({
+    id,
+    user_id: ownerId,
+    name,
+    token_hash: tokenDigest(token),
+    capabilities,
+    status: "offline",
+    created_at: now,
+    updated_at: now
+  });
+  const payload = {
+    version: 1,
+    users: [{
+      id: ownerId,
+      email: "single-user-e2e@invalid.local",
+      password_hash: "interactive-auth-disabled",
+      created_at: now,
+      updated_at: now
+    }],
+    auth_sessions: [],
+    devices: [
+      device(moduleDeviceId, "Playwright 搜索执行器", moduleDeviceToken, ["module_search"]),
+      device(fullDeviceId, "Playwright 搜索与加购执行器", fullDeviceToken, ["module_search", "add_to_cart"])
+    ],
+    jobs: [],
+    service_heartbeats: [],
+    events: [],
+    event_sequence: 0,
+    saved_at: now
+  };
+  const directory = path.dirname(runtimeFile);
+  const temporary = `${runtimeFile}.${process.pid}.tmp`;
+
+  await fs.mkdir(directory, { recursive: true, mode: 0o700 });
+  await fs.rm(temporary, { force: true });
+  try {
+    await fs.writeFile(temporary, JSON.stringify(payload), {
+      encoding: "utf8",
+      mode: 0o600,
+      flag: "wx"
+    });
+    await fs.chmod(temporary, 0o600);
+    await fs.rename(temporary, runtimeFile);
+    await fs.chmod(runtimeFile, 0o600);
+  } catch (error) {
+    await fs.rm(temporary, { force: true });
+    throw error;
+  }
+}
+
 async function snapshot(file) {
   return fs.readFile(file, "utf8").catch(() => null);
 }
@@ -129,6 +198,8 @@ async function main() {
   const distDir = path.resolve(root, env.NEXT_DIST_DIR);
   const originalNextEnv = await snapshot(nextEnvPath);
   const originalTsconfig = await snapshot(e2eTsconfigPath);
+
+  await seedSingleUserRuntime(env);
 
   try {
     await buildWithOneRetry(env, distDir);

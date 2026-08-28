@@ -3,6 +3,17 @@ import { AUTH_COOKIE_NAME } from "@/lib/auth/constants";
 import { inspectOuterProtectionConfiguration } from "@/lib/auth/outer-protection";
 
 const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
+const MACHINE_AUTHENTICATED_PATHS = new Set([
+  "/api/executor/heartbeat",
+  "/api/executor/startup",
+  "/api/internal/runtime-readiness",
+  "/api/internal/workflow-recovery"
+]);
+
+function isMachineAuthenticatedPath(pathname: string) {
+  return MACHINE_AUTHENTICATED_PATHS.has(pathname) ||
+    pathname.startsWith("/api/executor/jobs/");
+}
 
 function expectedOrigins(request: NextRequest) {
   const configured = (process.env.APP_ORIGIN ?? "")
@@ -43,17 +54,26 @@ function singleUserOuterProtectionFailure() {
 
 export function middleware(request: NextRequest) {
   if (SAFE_METHODS.has(request.method)) return NextResponse.next();
+
+  // The fixed-owner runtime itself must remain fail-closed even for machine
+  // callers. Vercel's bypass header gets a request through the outer gate; it
+  // must not let a Worker skip SceneCart's independently verified runtime
+  // protection contract.
+  const outerProtectionFailure = singleUserOuterProtectionFailure();
+  if (outerProtectionFailure) return outerProtectionFailure;
+
   const bearerAuthorization = request.headers.get("authorization")?.match(/^Bearer\s+\S+$/i);
   // Machine clients authenticate with Bearer tokens and do not use the browser
   // session. A request carrying the session cookie must still pass the Origin
   // check; otherwise an arbitrary Bearer value could disable CSRF protection
   // for cookie-authenticated API routes.
-  if (bearerAuthorization && !request.cookies.has(AUTH_COOKIE_NAME)) {
+  if (
+    bearerAuthorization &&
+    !request.cookies.has(AUTH_COOKIE_NAME) &&
+    isMachineAuthenticatedPath(request.nextUrl.pathname)
+  ) {
     return NextResponse.next();
   }
-
-  const outerProtectionFailure = singleUserOuterProtectionFailure();
-  if (outerProtectionFailure) return outerProtectionFailure;
 
   const enforceOrigin = process.env.NODE_ENV === "production" || process.env.AUTH_REQUIRED === "true";
   if (!enforceOrigin) return NextResponse.next();

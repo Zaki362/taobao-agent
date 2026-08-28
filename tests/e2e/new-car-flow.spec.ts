@@ -1,14 +1,15 @@
 import { expect, test, type APIRequestContext, type Page, type Request } from "@playwright/test";
 import protocol from "../../lib/runtime/executor-protocol.json";
+import {
+  appOrigin,
+  executorHeaders,
+  moduleOnlyDevice,
+  singleUserStorageKey,
+  singleUserStorageOwner
+} from "./single-user-fixture";
 
 const recommendationTypes = ["稳妥推荐", "性价比推荐", "升级推荐"] as const;
 const recoverySecret = "playwright-recovery-secret-with-at-least-32-characters";
-const appOrigin = "http://127.0.0.1:3100";
-const executorHeaders = (token: string) => ({
-  Authorization: `Bearer ${token}`,
-  "X-SceneCart-Executor-Protocol": protocol.version,
-  Origin: appOrigin
-});
 
 async function returnToLandingWithoutLocalSnapshot(page: Page) {
   await page.goto("/");
@@ -161,7 +162,7 @@ async function runExecutorUntilStopped(
   }
 }
 
-test("authenticated new-car workflow reaches recommendations through the durable executor", async ({ page }) => {
+test("fixed-owner new-car workflow reaches recommendations through the durable executor", async ({ page }) => {
   const blockedCrossSiteRequest = await page.request.post("/api/auth/login", {
     headers: { Origin: "https://malicious.example" },
     data: { email: "blocked@example.com", password: "blocked-password" }
@@ -169,12 +170,6 @@ test("authenticated new-car workflow reaches recommendations through the durable
   expect(blockedCrossSiteRequest.status()).toBe(403);
 
   await page.goto("/settings/executor");
-  await expect(page).toHaveURL(/\/login\?next=%2Fsettings%2Fexecutor$/);
-  await page.getByRole("button", { name: "还没有账号？创建账号" }).click();
-  const e2eEmail = `e2e-${Date.now()}@example.com`;
-  await page.getByLabel("邮箱").fill(e2eEmail);
-  await page.getByLabel("密码").fill("e2e-secure-password");
-  await page.getByRole("button", { name: "注册并登录" }).click();
   await expect(page).toHaveURL(/\/settings\/executor$/);
 
   const blockedRecovery = await page.request.get("/api/internal/workflow-recovery");
@@ -193,15 +188,11 @@ test("authenticated new-car workflow reaches recommendations through the durable
   expect(authorizedRecoveryPayload.recovered).toBeLessThanOrEqual(authorizedRecoveryPayload.scanned);
 
   const deviceResponse = await page.request.post("/api/executor/devices", {
-    headers: { Origin: "http://127.0.0.1:3100" },
+    headers: { Origin: appOrigin },
     data: { name: "Playwright 淘宝执行器", capabilities: ["module_search"] }
   });
-  expect(deviceResponse.status()).toBe(201);
-  const registeredDevice = await deviceResponse.json() as {
-    device_token: string;
-    device: { id: string };
-  };
-  const deviceToken = registeredDevice.device_token;
+  expect(deviceResponse.status(), await deviceResponse.text()).toBe(410);
+  const deviceToken = moduleOnlyDevice.token;
   const heartbeatResponse = await page.request.post("/api/executor/heartbeat", {
     headers: executorHeaders(deviceToken),
     data: {}
@@ -216,23 +207,16 @@ test("authenticated new-car workflow reaches recommendations through the durable
 
   await page.goto("/settings/executor");
   await expect(page.getByRole("heading", { name: "连接这台电脑上的淘宝执行器" })).toBeVisible();
-  await page.getByRole("button", { name: "注册当前设备" }).click();
-  await expect(page.getByRole("heading", { name: "保存一次性设备令牌" })).toBeVisible();
-  await expect(page.getByText(
-    "SCENECART_API_URL=http://127.0.0.1:3100 npm run executor:configure",
-    { exact: true }
-  )).toBeVisible();
-  await expect(page.getByText("输入过程不会回显，也不会把令牌写入 shell history", { exact: false })).toBeVisible();
+  await expect(page.getByText("正式单用户模式已关闭网页注册", { exact: false })).toBeVisible();
+  await expect(page.getByRole("button", { name: "注册当前设备" })).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "保存一次性设备令牌" })).toHaveCount(0);
   const freshLandingMcpStatusResponse = page.waitForResponse((response) =>
     response.request().method() === "GET" && new URL(response.url()).pathname === "/api/mcp/status"
   );
   await page.goto("/");
   expect((await freshLandingMcpStatusResponse).ok()).toBeTruthy();
-  await page.getByRole("button", { name: "账户菜单" }).click();
-  await expect(page.getByRole("menu", { name: "账户菜单" })).toBeVisible();
-  await expect(page.getByText(e2eEmail, { exact: true })).toBeVisible();
-  await expect(page.getByRole("menuitem", { name: "执行器设置" })).toBeVisible();
-  await expect(page.getByRole("menuitem", { name: "退出登录" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "账户菜单" })).toHaveCount(0);
+  await expect(page.getByRole("link", { name: "设置" })).toBeVisible();
 
   const outdatedHeartbeat = await page.request.post("/api/executor/heartbeat", {
     headers: {
@@ -264,7 +248,7 @@ test("authenticated new-car workflow reaches recommendations through the durable
   const capabilityUpdate = await page.request.patch("/api/executor/devices", {
     headers: { Origin: "http://127.0.0.1:3100" },
     data: {
-      device_id: registeredDevice.device.id,
+      device_id: moduleOnlyDevice.id,
       capabilities: ["module_search", "add_to_cart"]
     }
   });
@@ -318,6 +302,17 @@ test("authenticated new-car workflow reaches recommendations through the durable
       return String((JSON.parse(raw) as { state?: { sessionId?: string } }).state?.sessionId ?? "");
     });
     expect(persistedSessionId).not.toBe("");
+    const persistedBrowserState = await page.evaluate((expectedKey) => {
+      const raw = window.localStorage.getItem(expectedKey);
+      return {
+        matchingKeys: Object.keys(window.localStorage).filter((key) =>
+          key.startsWith("scenecart-dashboard-state:v2:")
+        ),
+        snapshot: raw ? JSON.parse(raw) as { owner?: string } : null
+      };
+    }, singleUserStorageKey);
+    expect(persistedBrowserState.matchingKeys).toEqual([singleUserStorageKey]);
+    expect(persistedBrowserState.snapshot?.owner).toBe(singleUserStorageOwner);
     const workflowRequestCounts = { mcpStatus: 0, agentRun: 0, legacyModuleSearch: 0 };
     const trackWorkflowRequest = (request: Request) => {
       const pathname = new URL(request.url()).pathname;

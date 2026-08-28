@@ -103,9 +103,7 @@ export function isVercelProtectionChallenge(
     return true;
   }
   if (![401, 403].includes(response.status)) return false;
-  const contentType = response.headers.get("content-type") ?? "";
   return response.headers.has("x-vercel-challenge-token") ||
-    contentType.includes("text/html") ||
     /vercel|deployment protection|authentication required/i.test(String(body));
 }
 
@@ -115,6 +113,12 @@ export async function throwIfVercelProtectionFailed(
 ) {
   if (!input || !isProtectedVercelOrigin(input, environment)) return;
   if (![301, 302, 303, 307, 308, 401, 403].includes(response.status)) return;
+  if ([301, 302, 303, 307, 308].includes(response.status)) {
+    throw new VercelProtectionError(
+      "受保护的 SceneCart 机器请求返回重定向；为防止凭据跨 origin 泄露，请求已停止",
+      { status: response.status, code: "vercel_protection_redirect_blocked" }
+    );
+  }
   const body = await response.clone().text().catch(() => "");
   if (!isVercelProtectionChallenge(response, { input, body, environment })) return;
   throw new VercelProtectionError(
@@ -128,8 +132,10 @@ export async function vercelProtectedFetch(
   init = {},
   { environment = process.env, fetchImpl = fetch } = {}
 ) {
+  const protectedRequest = isProtectedVercelOrigin(input, environment);
   const response = await fetchImpl(input, {
     ...init,
+    ...(protectedRequest ? { redirect: "manual" } : {}),
     headers: protectedRequestHeaders(input, init.headers, environment)
   });
   await throwIfVercelProtectionFailed(response, { input, environment });
