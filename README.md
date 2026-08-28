@@ -68,6 +68,8 @@ SceneCart AI 是一个正在按正式产品架构推进的“场景化购物 Age
 
 仓库采用“同一共享实现、两个独立应用”的结构：正式产品仍从仓库根目录构建；公开体验由 `apps/public-demo` 独立静态构建，只导出 `/`、`/demo`、`/product-guide` 和 404。Demo 直接复用正式产品的需求确认、购物规划、搜索进度、推荐、加购、购物清单与产品说明组件，不维护第二套产品交互；正式产品本身不再暴露 `/demo` 路由。
 
+线上长期保留两个职责明确的固定域名：正式产品使用 `https://scenecart-ai.vercel.app/`，公开体验使用 `https://scenecart-public-demo.vercel.app/`。正式产品的登录页和已登录顶部导航都提供“观看 Demo”入口，并在新标签页打开 `https://scenecart-public-demo.vercel.app/demo?autoplay=1`；这样不会中断正在填写的需求或购物任务。公开 Demo 仍是完全独立的冻结应用，不会继承正式站登录态，也不会连接正式数据库、DeepSeek、淘宝账户或本地执行器。
+
 区别只在数据与执行层：新车主场景使用 2026-08-08 的脱敏历史快照，其余已开放场景使用明确标注的本地冻结样本；这些样本不代表实时淘宝商品。Demo 不要求登录，也不会调用模型、数据库、淘宝 MCP、真实购物车、订单或支付能力。访问者可以按正式产品流程手动修改预算、查看规划、展开备选、加入演示清单和移除商品；右上角“启动自动演示”会用可见鼠标逐步点击同一批真实控件，播放中点击页面任意位置会暂停，点击“继续演示”会从中断步骤恢复。
 
 本地查看：
@@ -76,7 +78,7 @@ SceneCart AI 是一个正在按正式产品架构推进的“场景化购物 Age
 npm run demo:dev
 ```
 
-然后打开终端打印地址；根路径和 `/demo` 都进入同一冻结体验。每个分类默认只展示一个主推荐及推荐理由，点击后才展开传统商品列表样式的备选。公开 Demo 中真实产品按钮“加入购物车”的结果会明确标记为“演示清单”，只改变当前浏览器内存状态，不代表真实淘宝加购。设置、执行详情和淘宝购物车入口在冻结模式中只给出本地说明；商品详情保留正式产品的链接行为，可由体验者主动打开对应淘宝商品页，自动演示不会代为打开。
+然后打开终端打印地址；根路径和 `/demo` 都进入同一冻结体验。访问 `/demo?autoplay=1` 会在首次加载后自动启动现有演示，普通 `/demo` 仍保持手动探索；用户重置后不会因为查询参数再次自动启动。每个分类默认只展示一个主推荐及推荐理由，点击后才展开传统商品列表样式的备选。公开 Demo 中真实产品按钮“加入购物车”的结果会明确标记为“演示清单”，只改变当前浏览器内存状态，不代表真实淘宝加购。设置、执行详情和淘宝购物车入口在冻结模式中只给出本地说明；商品详情保留正式产品的链接行为，可由体验者主动打开对应淘宝商品页，自动演示不会代为打开。
 
 独立 Demo 构建使用 `npm run demo:build`；它会同步冻结素材、执行静态导出并验证没有登录、设置或 API 路由泄漏。Vercel 项目 `scenecart-public-demo` 的 Root Directory 固定为 `apps/public-demo`、不配置任何正式环境变量，并从完整仓库提交构建，以便继续复用共享组件。
 
@@ -190,6 +192,7 @@ AUTH_REQUIRED=true
 SCENECART_ACCESS_MODE=account
 SCENECART_SINGLE_USER_ID=
 APP_ORIGIN=https://your-scenecart.example.com
+NEXT_PUBLIC_SCENECART_PUBLIC_DEMO_URL=https://scenecart-public-demo.vercel.app
 SCENECART_API_URL=http://127.0.0.1:3000
 SCENECART_DEMO_CLOUD_URL=https://your-scenecart.example.com
 SCENECART_CLOUD_DEVICE_TOKEN=
@@ -214,6 +217,7 @@ SCENECART_CRON_SECRET=
 - `AUTH_REQUIRED=true`：正式部署必须开启，确保 Session、设备与任务按用户隔离。
 - `SCENECART_ACCESS_MODE=single_user`：仅用于本地或受 Vercel Deployment Protection 保护的 Preview。配合既有 `app_users` 的 `SCENECART_SINGLE_USER_ID` 后不再显示应用登录页，但 Session、设备和任务仍固定绑定该 owner；Vercel Production 会直接拒绝该模式。
 - `APP_ORIGIN`：正式产品允许发起写请求的网页 Origin；多个地址使用逗号分隔。
+- `NEXT_PUBLIC_SCENECART_PUBLIC_DEMO_URL`：正式站顶部“观看 Demo”入口使用的独立公开 Demo HTTPS origin。留空时安全回退到 `https://scenecart-public-demo.vercel.app`；正式站会固定打开 `/demo?autoplay=1`，不会把正式账户或运行环境参数传给 Demo。
 - `SCENECART_RELEASE_VERIFY_URL`：可选的正式发布探测地址；`npm run release:verify` 未显式传 `--url` 时优先使用它，否则使用 `APP_ORIGIN` 的第一个地址。
 - `SCENECART_DEMO_CLOUD_URL`：可选的云端面试网页根地址；`npm run demo:cloud` 未传 `--url` 时优先读取它。该命令只接受非本地 HTTPS 地址。
 - `SCENECART_CLOUD_DEVICE_TOKEN`：只保存在面试电脑 `.env.local` 的云端设备令牌；与纯本地 `SCENECART_DEVICE_TOKEN` 分离，不能上传 Vercel。

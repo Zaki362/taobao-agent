@@ -37,6 +37,31 @@ function productionOrigins(value) {
     .every((origin) => /^https:\/\//i.test(origin) && !/localhost|127\.0\.0\.1/i.test(origin));
 }
 
+function normalizeHttpsOrigin(value) {
+  if (!configured(value)) return null;
+  try {
+    const url = new URL(value.trim());
+    if (url.protocol !== "https:" || url.username || url.password) return null;
+    if ((url.pathname !== "/" && url.pathname !== "") || url.search || url.hash) return null;
+    return url.origin;
+  } catch {
+    return null;
+  }
+}
+
+function formalOrigins(value) {
+  return (value ?? "")
+    .split(",")
+    .map((origin) => normalizeHttpsOrigin(origin))
+    .filter(Boolean);
+}
+
+const publicDemoOrigin = normalizeHttpsOrigin(
+  process.env.NEXT_PUBLIC_SCENECART_PUBLIC_DEMO_URL ?? "https://scenecart-public-demo.vercel.app"
+);
+const demoOriginSeparated = Boolean(publicDemoOrigin)
+  && !formalOrigins(process.env.APP_ORIGIN).includes(publicDemoOrigin);
+
 function check(id, label, pass, detail, remediation) {
   return { id, label, status: pass ? "pass" : "fail", detail, remediation: pass ? undefined : remediation };
 }
@@ -101,6 +126,13 @@ const checks = [
     productionOrigins(process.env.APP_ORIGIN),
     productionOrigins(process.env.APP_ORIGIN) ? "APP_ORIGIN 均为正式 HTTPS 地址" : "APP_ORIGIN 缺失或仍包含本地/非 HTTPS 地址",
     "设置 APP_ORIGIN=https://你的正式域名"
+  ),
+  check(
+    "public_demo_origin",
+    "独立公开 Demo 域名",
+    demoOriginSeparated,
+    demoOriginSeparated ? "公开 Demo 与正式产品保持独立 origin" : "公开 Demo 地址无效或与正式产品 APP_ORIGIN 相同",
+    "将 NEXT_PUBLIC_SCENECART_PUBLIC_DEMO_URL 设置为独立 HTTPS origin，不能复用 APP_ORIGIN"
   ),
   check(
     "executor_backend",

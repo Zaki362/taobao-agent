@@ -23,6 +23,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { PublicDemoLink } from "@/components/public-demo-link";
 import { ProductGuideLink } from "@/components/product-guide-link";
 import { API_INPUT_LIMITS } from "@/lib/api/input-limits";
 import { Textarea } from "@/components/ui/textarea";
@@ -147,8 +148,9 @@ export function TopHeader({
           </span>
         ))}
       </div>
-      <span className="workflow-stage-pill lg:hidden">{stageLabels[currentStage]}</span>
+      <span className="workflow-stage-pill hidden md:inline-flex lg:hidden">{stageLabels[currentStage]}</span>
       <nav className="ml-auto flex items-center gap-1.5">
+        {authMode === "live" ? <PublicDemoLink compactOnMobile /> : null}
         {showProductGuideLink ? <ProductGuideLink compactOnMobile /> : null}
         <a
           href={onNavigationRequest ? "/demo" : "/hosted"}
@@ -283,6 +285,7 @@ export function LandingPage({
           <span className="hidden text-xs text-muted-foreground sm:inline">场景化购物助手</span>
         </a>
         <nav className="flex items-center gap-1.5">
+          {authMode === "live" ? <PublicDemoLink compactOnMobile /> : null}
           {showProductGuideLink ? <ProductGuideLink compactOnMobile /> : null}
           <a
             href={onNavigationRequest ? "/demo" : "#recent-tasks"}

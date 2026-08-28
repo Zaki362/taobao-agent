@@ -4,7 +4,9 @@
 
 正式部署只托管 Next.js、PostgreSQL、DeepSeek 调用和持久任务队列。用户本机运行 `worker:local`，用设备令牌领取任务并优先直连淘宝桌面版官方 HTTP MCP；HTTP 搜索异常时可降级桌面版官方 CLI，只读结果仍由本机回填。淘宝客户端、MCP/CLI、登录态与设备令牌都不进入 Web 容器，Qoder 不属于正式执行链路。
 
-公开体验是同仓库中的独立静态应用 `apps/public-demo`，部署到独立 Vercel 项目 `scenecart-public-demo`。该项目 Root Directory 为 `apps/public-demo`，允许构建步骤读取 Root Directory 外的共享源码，且环境变量保持为空。静态导出门禁只允许 `/`、`/demo` 和 404；正式产品继续从仓库根目录部署，不包含 `/demo` 路由。
+公开体验是同仓库中的独立静态应用 `apps/public-demo`，部署到独立 Vercel 项目 `scenecart-public-demo`。该项目 Root Directory 为 `apps/public-demo`，允许构建步骤读取 Root Directory 外的共享源码，且环境变量保持为空。静态导出门禁只允许 `/`、`/demo`、`/product-guide` 和 404；正式产品继续从仓库根目录部署，不包含 `/demo` 路由。
+
+双域名是长期架构，不是迁移期临时状态：正式产品固定使用 `https://scenecart-ai.vercel.app/`，公开冻结体验固定使用 `https://scenecart-public-demo.vercel.app/`。正式站只通过新标签页链接到公开 Demo 的 `/demo?autoplay=1`，两边不共享登录 Cookie、数据库、API、模型密钥、淘宝环境变量或本地执行器状态。正式站可选配置 `NEXT_PUBLIC_SCENECART_PUBLIC_DEMO_URL` 覆盖 Demo origin；该值必须是 HTTPS origin（本地联调仅允许 localhost HTTP），无效值会安全回退到固定公开域名。发布审计还会拒绝 Demo origin 与正式 `APP_ORIGIN` 相同的误配置。正式站 `/demo` 及 `/demo?autoplay=1` 必须继续返回 404。
 
 ## 本地生产预览
 
@@ -27,6 +29,7 @@ docker compose up --build
 SCENECART_PRODUCT_MODE=production
 ALLOW_DEMO_CART_FALLBACK=false
 APP_ORIGIN=https://scenecart.example.com
+NEXT_PUBLIC_SCENECART_PUBLIC_DEMO_URL=https://scenecart-public-demo.vercel.app
 AUTH_COOKIE_SECURE=true
 AUTH_REQUIRED=true
 SCENECART_ACCESS_MODE=account

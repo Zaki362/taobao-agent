@@ -4,6 +4,12 @@ This package is the independently deployable, static public experience for Scene
 It reuses the repository's shared `PublicDemo` UI and frozen fixture data, while its
 exported route contract is limited to `/`, `/demo`, `/product-guide`, and the 404 page.
 
+Its stable public domain is `https://scenecart-public-demo.vercel.app/`. The formal
+product remains a separate deployment at `https://scenecart-ai.vercel.app/`; the two
+applications share source code but never share authentication, APIs, databases, model
+keys, Taobao credentials, or executor state. `/demo?autoplay=1` starts the existing tour
+once after the page loads, while `/demo` remains manually explorable.
+
 ## Local verification
 
 ```bash

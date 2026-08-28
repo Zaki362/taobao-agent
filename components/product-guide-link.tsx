@@ -29,7 +29,7 @@ export function ProductGuideLink({
         onClick={() => { onBeforeOpen?.(); setOpen(true); }}
       >
         <BookOpenText className="h-4 w-4" aria-hidden="true" />
-        <span className={compactOnMobile ? "hidden min-[380px]:inline" : undefined}>产品说明</span>
+        <span className={compactOnMobile ? "hidden sm:inline" : undefined}>产品说明</span>
       </button>
       <ProductGuideDialog mode={mode} open={open} onOpenChange={setOpen} />
     </>

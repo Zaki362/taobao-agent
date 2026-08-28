@@ -279,6 +279,33 @@ test("auto narrator explains at the top before the cursor starts moving", async 
   await page.getByRole("button", { name: "暂停演示" }).click();
 });
 
+test("autoplay starts once while the normal Demo URL stays manually controlled", async ({ page }) => {
+  const apiRequests: string[] = [];
+  const popups: Page[] = [];
+  page.on("request", (request) => {
+    const pathname = new URL(request.url()).pathname;
+    if (pathname.startsWith("/api/")) apiRequests.push(pathname);
+  });
+  page.on("popup", (popup) => popups.push(popup));
+
+  await page.goto("/demo?demoSpeed=fast");
+  await expect(page.getByRole("button", { name: "启动自动演示" })).toBeVisible();
+  await expect(page.locator(".public-demo-narrator")).toHaveCount(0);
+
+  await page.goto("/demo?autoplay=1&demoSpeed=fast");
+  await expect(page.getByRole("button", { name: "暂停演示" })).toBeVisible();
+  await expect(page.locator(".public-demo-narrator")).toBeVisible();
+
+  await page.getByRole("button", { name: "暂停演示" }).click();
+  await page.getByRole("button", { name: "重置公开 Demo" }).click();
+  await expect(page.getByRole("button", { name: "启动自动演示" })).toBeVisible();
+  await expect(page.locator(".public-demo-narrator")).toHaveCount(0);
+  await page.waitForTimeout(250);
+  await expect(page.locator(".public-demo-narrator")).toHaveCount(0);
+  expect(apiRequests).toEqual([]);
+  expect(popups).toEqual([]);
+});
+
 test("auto tour moves its cursor onto real controls and reaches the real cart review", async ({ page }) => {
   await page.goto("/demo?demoSpeed=fast");
   await page.evaluate(() => {

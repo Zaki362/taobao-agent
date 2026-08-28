@@ -267,12 +267,24 @@ export function PublicDemo() {
   const cursorElementRef = useRef<HTMLDivElement | null>(null);
   const fastModeRef = useRef(false);
   const reducedMotionRef = useRef(false);
+  const autoplayHandledRef = useRef(false);
 
   useEffect(() => {
     const timers = timersRef.current;
-    fastModeRef.current = new URLSearchParams(window.location.search).get("demoSpeed") === "fast";
+    const searchParams = new URLSearchParams(window.location.search);
+    fastModeRef.current = searchParams.get("demoSpeed") === "fast";
     reducedMotionRef.current = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const autoplayFrame = searchParams.get("autoplay") === "1"
+      ? window.requestAnimationFrame(() => {
+          if (autoplayHandledRef.current) return;
+          const launchButton = document.querySelector<HTMLButtonElement>("[data-demo-autoplay-launch]");
+          if (!launchButton) return;
+          autoplayHandledRef.current = true;
+          launchButton.click();
+        })
+      : null;
     return () => {
+      if (autoplayFrame !== null) window.cancelAnimationFrame(autoplayFrame);
       tourControllerRef.current?.abort();
       for (const timer of timers) window.clearTimeout(timer);
       timers.clear();
@@ -957,6 +969,7 @@ export function PublicDemo() {
             size="sm"
             className={tourMode === "idle" ? "public-demo-launch-button" : undefined}
             onClick={launchTour}
+            data-demo-autoplay-launch
           >
             {tourMode === "completed" ? <RefreshCw className="h-4 w-4" /> : <Play className="h-4 w-4" />}
             {tourMode === "completed" ? "重新自动演示" : "启动自动演示"}
