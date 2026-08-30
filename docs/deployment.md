@@ -8,7 +8,7 @@
 
 公开体验是同仓库中的独立静态应用 `apps/public-demo`，部署到独立 Vercel 项目 `scenecart-public-demo`。该项目 Root Directory 为 `apps/public-demo`，允许构建步骤读取 Root Directory 外的共享源码，且环境变量保持为空。根路径是 Demo 唯一正式入口；旧 `/demo` 兼容回根路径，旧 `/product-guide` 回到 `/?guide=1`。
 
-双域名是长期架构，不是迁移期临时状态：正式产品固定使用 `https://scenecart-ai.vercel.app/`，公开冻结体验固定使用 `https://scenecart-public-demo.vercel.app/`。正式站 `/demo` 重定向到公开 Demo 根路径，`?autoplay=1` 可继续透传。两边不共享身份、数据库、API、模型密钥、淘宝环境变量或本地执行器状态，也不在页面展示自动生成的长 Preview 地址。
+双域名是长期架构，不是迁移期临时状态：正式产品固定使用 `https://scenecart-ai.vercel.app/`，公开冻结体验固定使用 `https://scenecart-public-demo.vercel.app/`。正式站 `/demo` 重定向到公开 Demo 根路径，`?autoplay=1` 可继续透传，但不会绕过入口说明或自动开始播放。两边不共享身份、数据库、API、模型密钥、淘宝环境变量或本地执行器状态，也不在页面展示自动生成的长 Preview 地址。
 
 正式产品固定使用服务端 `SCENECART_ACCESS_MODE=single_user` 和一个已存在 owner；没有场景购登录或注册页。远程运行默认 fail closed：优先使用经实际核验的 Vercel 外层保护；当前 Hobby 的 Standard Protection 不保护固定 Production 域名，因此只有用户明确知情接受公开固定 owner 风险、启用严格的服务端风险开关并取得独立正式 Production 授权后，才允许以 `unprotected_risk_accepted` 发布。受保护 Preview 仍可用于内部验收，但不能替代 Production 授权。
 

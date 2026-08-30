@@ -70,7 +70,7 @@
 
 仓库采用“同一共享实现、两个独立应用”的结构：正式产品从仓库根目录构建；公开体验由 `apps/public-demo` 独立静态构建。Demo 直接复用正式产品的需求确认、购物规划、搜索进度、推荐、加购、购物清单与产品说明浮层，不维护第二套产品交互；但两者的 runtime adapter、环境变量和持久状态严格隔离。
 
-线上长期保留两个职责明确的固定域名：正式产品使用 `https://scenecart-ai.vercel.app/`，公开体验使用 `https://scenecart-public-demo.vercel.app/`。正式站 `/demo` 重定向到公开 Demo 根路径；公开 Demo 的 `/` 是唯一正式入口，旧 `/demo` 只做兼容重定向，自动演示使用 `/?autoplay=1`。公开 Demo 不继承正式站身份，也不连接正式数据库、DeepSeek、正式 `/api/*`、淘宝账户或本地执行器。
+线上长期保留两个职责明确的固定域名：正式产品使用 `https://scenecart-ai.vercel.app/`，公开体验使用 `https://scenecart-public-demo.vercel.app/`。正式站 `/demo` 重定向到公开 Demo 根路径；公开 Demo 的 `/` 是唯一正式入口，旧 `/demo` 与 `/?autoplay=1` 只保留兼容，都会先显示体验说明并等待用户明确选择“自动演示”或关闭后手动探索。公开 Demo 不继承正式站身份，也不连接正式数据库、DeepSeek、正式 `/api/*`、淘宝账户或本地执行器。
 
 正式产品直接绑定服务端固定 owner，不再显示场景购登录、注册或创建账号入口。远程运行默认 fail closed：优先使用经过实际核验的 Vercel 外层保护；当前 Hobby 固定 Production 域名没有该保护，因此只在用户明确知情接受“知道域名的人可进入同一个固定 owner 产品”的风险、启用严格的服务端风险开关并取得独立 Production 授权后发布。readiness 会如实报告 `unprotected_risk_accepted`，不会把该状态伪装成外层保护已验证。
 
@@ -82,7 +82,7 @@
 npm run demo:dev
 ```
 
-然后打开终端打印地址。根路径进入冻结体验；旧 `/demo` 会保留查询参数和 hash 后回到根路径。访问 `/?autoplay=1` 会在首次加载后自动启动现有演示，普通 `/` 保持手动探索；用户重置后不会因为查询参数再次自动启动。每个分类默认只展示一个主推荐及推荐理由，点击后才展开传统商品列表样式的备选。公开 Demo 中“加入购物车”只改变当前浏览器内存中的演示清单，刷新即恢复初始冻结状态，不代表真实淘宝加购。商品详情保留主动打开链接的交互，自动演示不会代为打开。
+然后打开终端打印地址。根路径进入冻结体验；旧 `/demo` 会保留查询参数和 hash 后回到根路径。普通 `/` 与兼容的 `/?autoplay=1` 都会先显示体验说明，只有用户点击“自动演示”后才开始播放；关闭说明则保留原首页供手动探索。每个分类默认只展示一个主推荐及推荐理由，点击后才展开传统商品列表样式的备选。公开 Demo 中“加入购物车”只改变当前浏览器内存中的演示清单，刷新即恢复初始冻结状态，不代表真实淘宝加购。商品详情保留主动打开链接的交互，自动演示不会代为打开。
 
 正式产品和 Demo 右上角都从当前页面打开同一套“产品说明”浮层，支持左侧章节导航、关闭按钮、Esc、遮罩关闭、焦点锁定、键盘和移动端；关闭后不丢失原页面或自动演示状态。`?guide=1` 可直接打开浮层，旧 `/product-guide` 只重定向到该入口，不再维护独立说明页面。
 
@@ -233,7 +233,7 @@ SCENECART_CRON_SECRET=
 - `SCENECART_ALLOW_UNPROTECTED_SINGLE_USER_PRODUCTION=true`：仅供服务端在用户已经知情接受风险、固定域名精确为 `https://scenecart-ai.vercel.app`、`VERCEL_ENV=production` 且 `SCENECART_OUTER_PROTECTION_VERIFIED=false` 时启用。它不是保护措施，不得使用 `NEXT_PUBLIC_` 前缀；保护范围、核验时间、项目 ID、origin 与审计回执等旧保护证明必须保持未配置。
 - `SCENECART_OUTER_PROTECTION_VERIFIED`：受保护环境只有完成真实核验后才可设为 `true`。当前无保护 Hobby Production 必须明确为 `false`，readiness 会以 `unprotected_risk_accepted` 报告风险接受状态。
 - `APP_ORIGIN`：正式产品允许发起写请求的网页 Origin；多个地址使用逗号分隔。
-- `SCENECART_PUBLIC_DEMO_URL` / `NEXT_PUBLIC_SCENECART_PUBLIC_DEMO_URL`：正式站服务端重定向与“观看 Demo”入口使用的独立公开 Demo HTTPS origin。留空时安全回退到 `https://scenecart-public-demo.vercel.app`；正式站 `/demo` 会重定向到 Demo 根路径，可用 `?autoplay=1` 自动播放。
+- `SCENECART_PUBLIC_DEMO_URL` / `NEXT_PUBLIC_SCENECART_PUBLIC_DEMO_URL`：正式站服务端重定向与“观看 Demo”入口使用的独立公开 Demo HTTPS origin。留空时安全回退到 `https://scenecart-public-demo.vercel.app`；正式站 `/demo` 会重定向到 Demo 根路径，兼容的 `?autoplay=1` 也必须由用户在入口说明中明确点击后才开始演示。
 - `SCENECART_RELEASE_VERIFY_URL`：可选的正式发布探测地址；`npm run release:verify` 未显式传 `--url` 时优先使用它，否则使用 `APP_ORIGIN` 的第一个地址。
 - `SCENECART_DEMO_CLOUD_URL`：可选的云端面试网页根地址；`npm run demo:cloud` 未传 `--url` 时优先读取它。该命令只接受非本地 HTTPS 地址。
 - `SCENECART_CLOUD_DEVICE_TOKEN`：只保存在面试电脑 `.env.local` 的云端设备令牌；与纯本地 `SCENECART_DEVICE_TOKEN` 分离，不能上传 Vercel。
