@@ -33,8 +33,8 @@ test("public demo reuses the real product flow and keeps every action local", as
 
   await page.goto("/?demoSpeed=fast");
   await expect(page).toHaveTitle("场景购 · 公开体验");
-  await expect(page.getByRole("heading", { name: "说出场景，AI 帮你把想要的装进购物车" })).toBeVisible();
-  await expect(page.getByText("自动拆解需求、生成购物清单、搜索比选并组合推荐，确认后即可加购。", { exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "把一句需求，变成买得明白的方案" })).toBeVisible();
+  await expect(page.getByText("描述场景、预算和偏好，Agent 会先规划，再帮你找到合适商品。", { exact: true })).toBeVisible();
   await expect(page.locator(".public-demo-disclosure")).toHaveCount(0);
   await enterResultsManually(page);
 
@@ -108,7 +108,7 @@ test("refresh clears the in-memory Demo cart and restores the frozen initial sta
 
   await page.reload();
 
-  await expect(page.getByRole("heading", { name: "说出场景，AI 帮你把想要的装进购物车" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "把一句需求，变成买得明白的方案" })).toBeVisible();
   await expect(page.getByRole("button", { name: "启动自动演示" })).toBeVisible();
   await expect(page.getByRole("heading", { name: /购物清单共/ })).toHaveCount(0);
   await expect(page.locator(".public-demo-narrator")).toHaveCount(0);
@@ -316,7 +316,7 @@ test("opening the guide during autoplay pauses without losing the tour state", a
 
   await page.getByRole("button", { name: "关闭产品说明" }).click();
   await expect(dialog).toBeHidden();
-  await expect(page.getByRole("heading", { name: "说出场景，AI 帮你把想要的装进购物车" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "把一句需求，变成买得明白的方案" })).toBeVisible();
   await page.getByRole("button", { name: "继续演示" }).click();
   await expect(page.getByRole("heading", { name: "购物清单共 4 件" })).toBeVisible({ timeout: 20_000 });
   await expect(page.getByText("演示清单", { exact: true })).toHaveCount(4);
@@ -563,7 +563,7 @@ test("auto tour pauses on any page click and resumes without duplicate cart writ
   await page.locator('[data-demo-target="scene:example:new-car:1"]').click();
   await expect(page.locator(".public-demo-narrator")).toHaveAttribute("data-demo-phase", "paused");
   await expect(page.getByRole("button", { name: "继续演示" })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "说出场景，AI 帮你把想要的装进购物车" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "把一句需求，变成买得明白的方案" })).toBeVisible();
   await expect.poll(() => page.evaluate(() =>
     (window as unknown as { __resumeFirstTargetClickCount: number }).__resumeFirstTargetClickCount
   )).toBe(0);
@@ -600,7 +600,7 @@ test("mobile result and cart layouts have no horizontal overflow", async ({ page
     return { top: rect.top, width: rect.width, height: rect.height };
   });
   expect(narratorGeometry).toEqual({ top: 120, width: 366, height: 56 });
-  await page.getByRole("heading", { name: "说出场景，AI 帮你把想要的装进购物车" }).click();
+  await page.getByRole("heading", { name: "把一句需求，变成买得明白的方案" }).click();
   await expect(page.getByRole("button", { name: "继续演示" })).toBeVisible();
 
   await page.goto("/?demoSpeed=fast");

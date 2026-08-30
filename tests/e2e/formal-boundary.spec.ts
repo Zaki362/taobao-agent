@@ -84,8 +84,8 @@ test("formal fixed-owner navigation has no interactive login and opens the indep
 
   await page.goto("/");
   await expect(page).toHaveTitle("场景购");
-  await expect(page.getByRole("heading", { name: "说出场景，AI 帮你把想要的装进购物车" })).toBeVisible();
-  await expect(page.getByText("自动拆解需求、生成购物清单、搜索比选并组合推荐，确认后即可加购。", { exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "把一句需求，变成买得明白的方案" })).toBeVisible();
+  await expect(page.getByText("描述场景、预算和偏好，Agent 会先规划，再帮你找到合适商品。", { exact: true })).toBeVisible();
   const productDemoLink = page.getByRole("link", { name: /^观看 Demo 自动演示/ });
   await expect(productDemoLink).toBeVisible();
   await expect(productDemoLink).toHaveAttribute("href", expectedUrl);

@@ -254,9 +254,9 @@ export function LandingPage({
       <section className="landing-hero">
         <SceneSpirit />
         <div className="mx-auto max-w-3xl text-center">
-          <h1 className="landing-title">说出场景，AI 帮你把想要的装进购物车</h1>
+          <h1 className="landing-title">把一句需求，变成买得明白的方案</h1>
           <p className="landing-subtitle">
-            自动拆解需求、生成购物清单、搜索比选并组合推荐，确认后即可加购。
+            描述场景、预算和偏好，Agent 会先规划，再帮你找到合适商品。
           </p>
         </div>
 
