@@ -8,9 +8,11 @@ compatibility routes, alongside the 404 page.
 Its stable public domain is `https://scenecart-public-demo.vercel.app/`. The formal
 product remains a separate deployment at `https://scenecart-ai.vercel.app/`; the two
 applications share source code but never share authentication, APIs, databases, model
-keys, Taobao credentials, or executor state. `/?autoplay=1` starts the existing tour once
-after the page loads, while `/` remains manually explorable. `/?guide=1` opens the shared
-product-guide dialog in place and then removes only the `guide` query parameter.
+keys, Taobao credentials, or executor state. Every regular Demo entry first shows a local-data
+notice and waits for the visitor to choose “自动演示” or close the notice for manual exploration.
+The legacy `/?autoplay=1` URL remains compatible but no longer starts without that explicit click.
+`/?guide=1` opens the shared product-guide dialog in place and then removes only the `guide`
+query parameter.
 
 ## Local verification
 

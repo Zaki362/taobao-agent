@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { MouseEvent as ReactMouseEvent } from "react";
 import { flushSync } from "react-dom";
-import { MousePointer2, Pause, Play, RefreshCw } from "lucide-react";
+import { MousePointer2, Pause, Play, RefreshCw, X } from "lucide-react";
 import { LandingPage, RequirementPage, TopHeader } from "@/components/dashboard-intake";
 import type { DashboardNavigationDestination } from "@/components/dashboard-intake";
 import { StatusPage } from "@/components/dashboard-common";
@@ -225,6 +225,7 @@ function budgetFromInput(value: string) {
 }
 
 export function PublicDemo() {
+  const [entryDialogOpen, setEntryDialogOpen] = useState(true);
   const [stage, setStage] = useState<WorkflowStage>("landing");
   const [selectedScenario, setSelectedScenario] = useState<ScenarioId>("new-car");
   const [sceneInput, setSceneInput] = useState("");
@@ -265,31 +266,38 @@ export function PublicDemo() {
   const tourPausedSearchRef = useRef(false);
   const tourControllerRef = useRef<AbortController | null>(null);
   const cursorElementRef = useRef<HTMLDivElement | null>(null);
+  const entryCloseRef = useRef<HTMLButtonElement | null>(null);
+  const entryPrimaryActionRef = useRef<HTMLButtonElement | null>(null);
   const fastModeRef = useRef(false);
   const reducedMotionRef = useRef(false);
-  const autoplayHandledRef = useRef(false);
 
   useEffect(() => {
     const timers = timersRef.current;
     const searchParams = new URLSearchParams(window.location.search);
     fastModeRef.current = searchParams.get("demoSpeed") === "fast";
     reducedMotionRef.current = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    const autoplayFrame = searchParams.get("autoplay") === "1"
-      ? window.requestAnimationFrame(() => {
-          if (autoplayHandledRef.current) return;
-          const launchButton = document.querySelector<HTMLButtonElement>("[data-demo-autoplay-launch]");
-          if (!launchButton) return;
-          autoplayHandledRef.current = true;
-          launchButton.click();
-        })
-      : null;
+    if (searchParams.get("guide") === "1") setEntryDialogOpen(false);
     return () => {
-      if (autoplayFrame !== null) window.cancelAnimationFrame(autoplayFrame);
       tourControllerRef.current?.abort();
       for (const timer of timers) window.clearTimeout(timer);
       timers.clear();
     };
   }, []);
+
+  useEffect(() => {
+    if (!entryDialogOpen) return;
+    const focusFrame = window.requestAnimationFrame(() => entryPrimaryActionRef.current?.focus());
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      setEntryDialogOpen(false);
+    };
+    window.addEventListener("keydown", closeOnEscape);
+    return () => {
+      window.cancelAnimationFrame(focusFrame);
+      window.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [entryDialogOpen]);
 
   useEffect(() => {
     if (!demoNotice) return;
@@ -945,6 +953,67 @@ export function PublicDemo() {
           />
         ) : null}
       </div>
+
+      {entryDialogOpen ? (
+        <div
+          className="public-demo-entry-backdrop"
+          data-demo-tour-control
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) setEntryDialogOpen(false);
+          }}
+        >
+          <section
+            className="public-demo-entry-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="public-demo-entry-title"
+            aria-describedby="public-demo-entry-description"
+            onKeyDown={(event) => {
+              if (event.key !== "Tab") return;
+              const first = entryCloseRef.current;
+              const last = entryPrimaryActionRef.current;
+              if (!first || !last) return;
+              if (event.shiftKey && document.activeElement === first) {
+                event.preventDefault();
+                last.focus();
+              } else if (!event.shiftKey && document.activeElement === last) {
+                event.preventDefault();
+                first.focus();
+              }
+            }}
+          >
+            <button
+              ref={entryCloseRef}
+              type="button"
+              className="public-demo-entry-close"
+              onClick={() => setEntryDialogOpen(false)}
+              aria-label="关闭 Demo 说明"
+            >
+              <X className="h-5 w-5" aria-hidden="true" />
+            </button>
+            <div className="public-demo-entry-icon" aria-hidden="true">
+              <Play className="h-5 w-5" fill="currentColor" />
+            </div>
+            <p className="public-demo-entry-eyebrow">公开 Demo</p>
+            <h2 id="public-demo-entry-title">Demo 体验说明</h2>
+            <p id="public-demo-entry-description">
+              本产品由于需要访问本地淘宝数据，暂不支持直接体验，此处仅展示demo流程
+            </p>
+            <Button
+              ref={entryPrimaryActionRef}
+              type="button"
+              className="public-demo-entry-action"
+              onClick={(event) => {
+                setEntryDialogOpen(false);
+                launchTour(event);
+              }}
+            >
+              <Play className="h-4 w-4" fill="currentColor" aria-hidden="true" />
+              自动演示
+            </Button>
+          </section>
+        </div>
+      ) : null}
 
       <div className="public-demo-controls" data-demo-tour-control>
         <ProductGuideLink
