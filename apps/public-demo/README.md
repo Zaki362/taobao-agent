@@ -1,6 +1,6 @@
-# SceneCart Public Demo
+# 场景购 Public Demo
 
-This package is the independently deployable, static public experience for SceneCart.
+This package is the independently deployable, static public experience for 场景购.
 It reuses the repository's shared `PublicDemo` UI, product-guide dialog, and frozen fixture
 data. `/` is the only canonical Demo surface; `/demo` and `/product-guide` are redirect-only
 compatibility routes, alongside the 404 page.

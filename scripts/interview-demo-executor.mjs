@@ -12,7 +12,7 @@ if (process.env.SCENECART_INTERVIEW_DEMO !== "true") {
 
 const apiBaseUrl = new URL(process.env.SCENECART_API_URL || "http://127.0.0.1:3200");
 if (!['127.0.0.1', 'localhost'].includes(apiBaseUrl.hostname)) {
-  throw new Error("面试演示执行器只允许连接本机 SceneCart 服务");
+  throw new Error("面试演示执行器只允许连接本机场景购服务");
 }
 const deviceToken = process.env.SCENECART_DEVICE_TOKEN?.trim();
 if (!deviceToken) {

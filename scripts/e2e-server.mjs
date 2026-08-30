@@ -168,7 +168,7 @@ async function buildWithOneRetry(env, distDir) {
       return;
     } catch (error) {
       if (stopping || attempt === 2) throw error;
-      console.warn("[SceneCart E2E] 首次隔离构建未完成，清理测试产物后重试一次");
+      console.warn("[场景购 E2E] 首次隔离构建未完成，清理测试产物后重试一次");
       await fs.rm(distDir, { recursive: true, force: true });
     }
   }
@@ -216,6 +216,6 @@ async function main() {
 }
 
 main().catch((error) => {
-  console.error(`[SceneCart E2E] ${error instanceof Error ? error.message : String(error)}`);
+  console.error(`[场景购 E2E] ${error instanceof Error ? error.message : String(error)}`);
   process.exitCode = 1;
 });

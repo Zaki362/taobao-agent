@@ -23,7 +23,7 @@ export function updateCloudDemoEnv(content, cloudUrl) {
 
   if (!replaced) {
     if (lines.length > 0 && lines.at(-1)?.trim()) lines.push("");
-    lines.push("# SceneCart cloud interview demo", line);
+    lines.push("# 场景购 cloud interview demo", line);
   }
   return `${lines.join("\n")}\n`;
 }
@@ -45,7 +45,7 @@ export function updateCloudExecutorToken(content, token) {
 
   if (!replaced) {
     if (lines.length > 0 && lines.at(-1)?.trim()) lines.push("");
-    lines.push("# SceneCart cloud executor (keep the local device token above unchanged)", line);
+    lines.push("# 场景购 cloud executor (keep the local device token above unchanged)", line);
   }
   return `${lines.join("\n")}\n`;
 }

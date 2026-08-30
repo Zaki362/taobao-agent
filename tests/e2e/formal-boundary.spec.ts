@@ -83,7 +83,9 @@ test("formal fixed-owner navigation has no interactive login and opens the indep
   expect(authState).not.toHaveProperty("owner_id");
 
   await page.goto("/");
-  await expect(page.getByRole("heading", { name: "把一句需求，变成买得明白的方案" })).toBeVisible();
+  await expect(page).toHaveTitle("场景购");
+  await expect(page.getByRole("heading", { name: "说出场景，AI 帮你把想要的装进购物车" })).toBeVisible();
+  await expect(page.getByText("自动拆解需求、生成购物清单、搜索比选并组合推荐，确认后即可加购。", { exact: true })).toBeVisible();
   const productDemoLink = page.getByRole("link", { name: /^观看 Demo 自动演示/ });
   await expect(productDemoLink).toBeVisible();
   await expect(productDemoLink).toHaveAttribute("href", expectedUrl);
@@ -103,7 +105,7 @@ test("formal fixed-owner navigation has no interactive login and opens the indep
   const requirementBeforeGuide = await requirementInput.inputValue();
   const productGuideButton = page.getByRole("button", { name: "产品说明" });
   await productGuideButton.click();
-  await expect(page.getByRole("dialog", { name: "SceneCart AI 产品说明" })).toBeVisible();
+  await expect(page.getByRole("dialog", { name: "场景购产品说明" })).toBeVisible();
   const formalAccessCopy =
     "固定域名直接进入并绑定固定 owner；当前 Production 未启用 Vercel 外层保护";
   await expect(page.getByText(formalAccessCopy, { exact: true })).toHaveCount(0);
@@ -112,7 +114,7 @@ test("formal fixed-owner navigation has no interactive login and opens the indep
   await expect(fixedOwnerAccessCopy).toHaveCount(2);
   await expect(fixedOwnerAccessCopy.last()).toBeVisible();
   await page.keyboard.press("Escape");
-  await expect(page.getByRole("dialog", { name: "SceneCart AI 产品说明" })).toBeHidden();
+  await expect(page.getByRole("dialog", { name: "场景购产品说明" })).toBeHidden();
   await expect(productGuideButton).toBeFocused();
   await expect(requirementInput).toHaveValue(requirementBeforeGuide);
 

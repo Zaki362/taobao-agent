@@ -92,7 +92,7 @@ export async function resolveDevServer({
   if (requestedPort) {
     if (!(await isAvailable(requestedPort))) {
       throw new Error(
-        `SceneCart 端口 ${requestedPort} 已被占用。请关闭占用进程，或设置 SCENECART_DEV_PORT/SCENECART_API_URL 使用其他端口。`
+        `场景购端口 ${requestedPort} 已被占用。请关闭占用进程，或设置 SCENECART_DEV_PORT/SCENECART_API_URL 使用其他端口。`
       );
     }
     return {
@@ -143,10 +143,10 @@ export async function startDevServer(args = process.argv.slice(2)) {
   };
 
   if (selection.changedFromDefault && selection.source === "automatic") {
-    console.log(`[SceneCart dev] 3000 已被占用，自动使用 ${selection.port}。`);
+    console.log(`[场景购 dev] 3000 已被占用，自动使用 ${selection.port}。`);
   }
-  console.log(`[SceneCart dev] 页面地址：${selection.url}`);
-  console.log(`[SceneCart dev] 执行器设置：${selection.url}/settings/executor`);
+  console.log(`[场景购 dev] 页面地址：${selection.url}`);
+  console.log(`[场景购 dev] 执行器设置：${selection.url}/settings/executor`);
 
   const child = spawn(process.execPath, [nextCli, "dev", ...nextArgs], {
     stdio: "inherit",
@@ -164,7 +164,7 @@ export async function startDevServer(args = process.argv.slice(2)) {
 
   child.once("exit", (code, signal) => {
     if (!stopping && signal) {
-      console.error(`[SceneCart dev] Next.js 被信号 ${signal} 终止。`);
+      console.error(`[场景购 dev] Next.js 被信号 ${signal} 终止。`);
     }
     process.exitCode = typeof code === "number" ? code : stopping ? 0 : 1;
   });
@@ -172,7 +172,7 @@ export async function startDevServer(args = process.argv.slice(2)) {
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   startDevServer().catch((error) => {
-    console.error(`[SceneCart dev] ${error instanceof Error ? error.message : String(error)}`);
+    console.error(`[场景购 dev] ${error instanceof Error ? error.message : String(error)}`);
     process.exitCode = 1;
   });
 }

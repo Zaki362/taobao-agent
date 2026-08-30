@@ -93,7 +93,7 @@ async function writeAtomically(content) {
 
 async function main() {
   if (process.argv.includes("--help")) {
-    console.log("在交互式终端中安全配置 SceneCart 本地执行器；设备令牌和可选 Vercel Bypass Secret 均不会回显或进入 shell history。");
+    console.log("在交互式终端中安全配置场景购本地执行器；设备令牌和可选 Vercel Bypass Secret 均不会回显或进入 shell history。");
     return;
   }
 
@@ -108,7 +108,7 @@ async function main() {
   let protectionMode = "protected";
   try {
     apiUrl = normalizeExecutorApiUrl(
-      (await input.question(`SceneCart API 地址 [${currentApiUrl}]: `)).trim() || currentApiUrl
+      (await input.question(`场景购 API 地址 [${currentApiUrl}]: `)).trim() || currentApiUrl
     );
     const suggestedProtectedOrigin = preferredVercelProtectedOrigin(
       existing,
@@ -142,7 +142,7 @@ async function main() {
           ? normalizeProtectedOrigin(originInput)
           : suggestedProtectedOrigin;
         if (!protectedOrigin) {
-          throw new Error("protected 传输模式必须配置与 SceneCart API 完全一致的 Vercel HTTPS origin");
+          throw new Error("protected 传输模式必须配置与场景购 API 完全一致的 Vercel HTTPS origin");
         }
       }
     }
@@ -192,7 +192,7 @@ async function main() {
   if (protectionRequired) {
     console.log("Vercel Automation Bypass：已保存但不显示；Worker 子进程将从本机环境读取");
   } else if (protectionMode === "unprotected") {
-    console.log("Vercel 外层保护：显式未启用；只允许固定正式域名，仍必须使用 SceneCart 设备令牌");
+    console.log("Vercel 外层保护：显式未启用；只允许固定正式域名，仍必须使用场景购设备令牌");
   }
   console.log("下一步运行：npm run executor:doctor");
 }

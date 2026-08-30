@@ -12,7 +12,7 @@
   <circle cx="622" cy="102" r="154" fill="#FFBC70" opacity=".18"/>
   <circle cx="80" cy="650" r="180" fill="#FFFFFF" opacity=".55"/>
   <rect x="58" y="48" width="208" height="48" rx="24" fill="#FFFFFF" opacity=".88"/>
-  <text x="82" y="80" fill="#24483E" font-size="22" font-weight="700" font-family="-apple-system,BlinkMacSystemFont,'PingFang SC','Microsoft YaHei',sans-serif">SceneCart 演示封面</text>
+  <text x="82" y="80" fill="#24483E" font-size="22" font-weight="700" font-family="-apple-system,BlinkMacSystemFont,'PingFang SC','Microsoft YaHei',sans-serif">场景购演示封面</text>
   <g filter="url(#shadow)">
     <rect x="90" y="134" width="360" height="354" rx="72" fill="#FFFFFF" opacity=".92"/>
     <path d="M168 366 270 192l102 174H168Z" fill="none" stroke="#24483E" stroke-width="18" stroke-linejoin="round"/><path d="m270 192 36 174m-72 0 36-174" stroke="#24483E" stroke-width="14" stroke-linecap="round"/><path d="M152 390h236" stroke="#24483E" stroke-width="16" stroke-linecap="round"/>

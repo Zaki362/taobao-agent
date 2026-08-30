@@ -22,8 +22,8 @@ export function PublicDemoLink({
         descriptive && "header-demo-link-descriptive",
         className
       )}
-      aria-label="观看 Demo 自动演示（公开冻结、无需登录、不连接 SceneCart 账户或淘宝）"
-      title="公开冻结 Demo：无需登录，不连接你的 SceneCart 账户或淘宝"
+      aria-label="观看 Demo 自动演示（公开冻结、无需登录、不连接场景购账户或淘宝）"
+      title="公开冻结 Demo：无需登录，不连接你的场景购账户或淘宝"
     >
       <Play className="h-4 w-4 shrink-0" fill="currentColor" aria-hidden="true" />
       <span className={compactOnMobile ? "hidden sm:block" : "block"}>

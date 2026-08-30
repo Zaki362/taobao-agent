@@ -36,7 +36,7 @@ const DOCTOR_RETRY_BASE_MS = 2_000;
 const DOCTOR_RETRY_MAX_MS = 30_000;
 
 function help() {
-  process.stdout.write(`SceneCart 云端面试演示启动器
+  process.stdout.write(`场景购云端面试演示启动器
 
 用法：
   npm run demo:cloud -- --url https://你的域名

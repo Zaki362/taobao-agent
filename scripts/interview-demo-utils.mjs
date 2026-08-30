@@ -80,7 +80,7 @@ function historicalCandidates(snapshot, job) {
     risk_notes: [
       `面试演示数据：采集于 ${date}，价格、库存、规格与链接状态未做实时校验。`
     ],
-    fit_reason: `这是“${moduleName}”的历史淘宝搜索样本，只用于展示 SceneCart 的编排、筛选和确认流程，不代表当前价格或库存。`,
+    fit_reason: `这是“${moduleName}”的历史淘宝搜索样本，只用于展示场景购的编排、筛选和确认流程，不代表当前价格或库存。`,
     recommendation_type: recommendationTypes[index],
     module_id: moduleId
   }));
@@ -97,8 +97,8 @@ function fixedDemoCandidates(job) {
     product_id: `interview-demo-${moduleId}-${index + 1}`,
     title: `${moduleName}固定演示候选 ${index + 1}（非淘宝实时商品）`,
     price: prices[index],
-    source: "SceneCart 固定演示候选",
-    shop_name: "SceneCart 面试演示",
+    source: "场景购固定演示候选",
+    shop_name: "场景购面试演示",
     image_url: "",
     detail_url: "",
     shop_badges: ["演示候选"],
@@ -142,7 +142,7 @@ export function buildInterviewDemoCartResult(productId) {
     execution_mode: "interview_demo",
     product_id: requireText(productId, "job.payload.product_id"),
     selected_spec: "面试演示模式（未读取或选择淘宝规格）",
-    cart_note: "只写入 SceneCart 产品内演示清单；未调用淘宝加购、下单或支付能力。",
+    cart_note: "只写入场景购产品内演示清单；未调用淘宝加购、下单或支付能力。",
     message: "面试演示模式：已加入产品内演示清单；未调用淘宝加购或下单。"
   };
 }

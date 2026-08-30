@@ -476,7 +476,7 @@ export async function buildReleaseVerification(options = {}) {
 }
 
 function printReport(report) {
-  process.stdout.write(`SceneCart AI release verification (${report.scope})\n\n`);
+  process.stdout.write(`场景购 release verification (${report.scope})\n\n`);
   for (const item of report.checks) {
     process.stdout.write(`${item.status === "pass" ? "PASS" : "FAIL"}  ${item.label}: ${item.detail}\n`);
     if (item.remediation) process.stdout.write(`      下一步：${item.remediation}\n`);

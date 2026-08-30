@@ -181,7 +181,7 @@ async function verifyStartup() {
   });
   const payload = await response.json().catch(() => ({}));
   if (!response.ok || payload.status !== "healthy") {
-    throw new Error(payload.error || `SceneCart API health check failed with ${response.status}`);
+    throw new Error(payload.error || `场景购 API health check failed with ${response.status}`);
   }
   if (payload.executor_protocol_version !== executorProtocolVersion) {
     throw new Error(
@@ -233,7 +233,7 @@ async function verifyStartup() {
   const pausedWorkflowCount = Number(startupStandby.paused_workflows ?? 0);
   process.stdout.write(
     pausedWorkflowCount > 0
-      ? `[local-executor] startup standby established; paused ${pausedWorkflowCount} historical workflow(s). Open the SceneCart page and click 继续搜索 to resume\n`
+      ? `[local-executor] startup standby established; paused ${pausedWorkflowCount} historical workflow(s). Open the 场景购 page and click 继续搜索 to resume\n`
       : "[local-executor] startup standby established; no historical workflow requires confirmation\n"
   );
   process.stdout.write(

@@ -11,7 +11,7 @@ import { safeMachineErrorMessage } from "./vercel-protection-bypass.mjs";
 const { Pool } = pg;
 const ALLOWED_CAPABILITIES = new Set(["module_search", "add_to_cart"]);
 const DEFAULT_CAPABILITIES = ["module_search"];
-const DEFAULT_DEVICE_NAME = "SceneCart 单用户执行器";
+const DEFAULT_DEVICE_NAME = "场景购单用户执行器";
 const DEFAULT_ENV_KEY = "SCENECART_DEVICE_TOKEN";
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -33,7 +33,7 @@ export function updateProvisionedToken(content, token, key = DEFAULT_ENV_KEY) {
     .filter((line) => line !== null);
   if (!replaced) {
     if (lines.length > 0 && lines.at(-1)?.trim()) lines.push("");
-    lines.push("# SceneCart operator-provisioned single-user device", `${key}=${encodeEnvValue(token)}`);
+    lines.push("# 场景购 operator-provisioned single-user device", `${key}=${encodeEnvValue(token)}`);
   }
   return `${lines.join("\n")}\n`;
 }

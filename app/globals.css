@@ -1647,52 +1647,15 @@ body {
   }
 
   .product-guide-toc {
-    @apply m-0 flex flex-col gap-4;
+    @apply m-0 flex flex-col gap-1;
   }
 
-  .product-guide-nav-group {
-    @apply flex flex-col gap-1;
-  }
-
-  .product-guide-nav-group > p {
-    @apply px-3 pb-1.5 text-[10px] font-semibold tracking-[0.16em] text-muted-foreground/75;
-  }
-
-  .product-guide-nav-group button {
+  .product-guide-toc button {
     @apply min-h-10 rounded-[12px] border border-transparent px-3 py-2 text-left text-[13px] font-medium text-muted-foreground transition-colors hover:bg-white hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30;
   }
 
-  .product-guide-nav-group button.product-guide-nav-active {
+  .product-guide-toc button.product-guide-nav-active {
     @apply border-primary/20 bg-primary/[0.07] font-semibold text-primary shadow-sm;
-  }
-
-  .product-guide-mode-cards {
-    @apply mt-auto grid gap-2 border-t border-border/60 pt-4;
-  }
-
-  .product-guide-mode-cards > div {
-    @apply rounded-[12px] border border-border/65 bg-white/80 px-3 py-2.5;
-  }
-
-  .product-guide-mode-cards strong,
-  .product-guide-mode-cards span {
-    @apply block;
-  }
-
-  .product-guide-mode-cards strong {
-    @apply text-xs font-semibold text-foreground;
-  }
-
-  .product-guide-mode-cards span {
-    @apply mt-0.5 text-[10px] text-muted-foreground;
-  }
-
-  .product-guide-mode-cards > div.product-guide-mode-active {
-    @apply border-primary/25 bg-primary/[0.07];
-  }
-
-  .product-guide-mode-cards > div.product-guide-mode-active strong {
-    @apply text-primary;
   }
 
   .product-guide-panel {
@@ -1704,6 +1667,10 @@ body {
 
   .product-guide-panel .product-guide-section {
     @apply mx-auto max-w-[940px] border-0 px-12 py-10 xl:px-14 xl:py-12;
+  }
+
+  .product-guide-section-stack .product-guide-section + .product-guide-section {
+    @apply border-t border-border/60;
   }
 
   .product-guide-section-heading {
@@ -1769,9 +1736,6 @@ body {
     @apply text-[27px];
   }
 
-  .product-guide-mode-cards span {
-    @apply hidden;
-  }
 }
 
 @media (max-width: 767px) {
@@ -1840,16 +1804,7 @@ body {
     display: none;
   }
 
-  .product-guide-nav-group {
-    @apply contents;
-  }
-
-  .product-guide-nav-group > p,
-  .product-guide-mode-cards {
-    @apply hidden;
-  }
-
-  .product-guide-nav-group button {
+  .product-guide-toc button {
     @apply min-h-9 shrink-0 whitespace-nowrap rounded-full bg-white px-3 py-1.5 text-[12px];
     scroll-snap-align: center;
   }

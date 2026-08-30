@@ -1,6 +1,6 @@
-# SceneCart AI
+# 场景购
 
-SceneCart AI 是一个正在按正式产品架构推进的“场景化购物 Agent”。首页当前开放 **新车选购、露营准备、房间装饰、宿舍入学、搬家置办** 五个配置驱动场景；它们共享需求理解、规划、搜索、推荐与购买确认工作流。真实设备验收和面试演示仍以 **新车选购 / 新车用品首购** 为基准场景。
+场景购是一个正在按正式产品架构推进的“场景化购物 Agent”。首页当前开放 **新车选购、露营准备、房间装饰、宿舍入学、搬家置办** 五个配置驱动场景；它们共享需求理解、规划、搜索、推荐与购买确认工作流。真实设备验收和面试演示仍以 **新车选购 / 新车用品首购** 为基准场景。
 
 这个项目不是普通商品搜索页，也不是纯聊天机器人。它的重点是把用户原本需要自己完成的“买什么、先买什么、预算怎么分、每类商品怎么选”这套决策过程产品化。
 
@@ -32,7 +32,7 @@ SceneCart AI 是一个正在按正式产品架构推进的“场景化购物 Age
 - Agent Runtime 2.0：平衡/探索档位可由 DeepSeek `decide_next_action` 提议下一步动作；常规模块调度使用低延迟 chat，只有补搜、失败恢复或市场预算压力出现时才升级 reasoner。模型可以自主改写品牌、功能和价格带搜索词；若模型只遗漏品类词但所有筛选词均能由当前模块策略解释，后端会补齐品类锚点后继续执行，跨品类词、URL、工具名、命令参数和提示词控制语句仍会被拒绝。动作白名单、模块合法性、首搜前置条件、置信度、工具预算和重复调用继续由 guardrail 校验
 - Agent 建议补搜：当候选偏少或质量不足时，推荐页会展示建议搜索词，用户可以一键按 Agent 建议补搜当前模块
 - 快捷调整影响说明：用户点击快捷调整后，系统会生成 `last_refinement`，说明哪些模块需要重搜、哪些候选可复用、哪些模块被移除以及原因
-- 生产运行时：使用 PostgreSQL 持久化与服务端固定 owner 的 `single_user` 模式；不显示 SceneCart 邮箱登录或注册页，购物 Session、设备、Job Queue 和执行事件全部绑定同一个既有 owner
+- 生产运行时：使用 PostgreSQL 持久化与服务端固定 owner 的 `single_user` 模式；不显示场景购邮箱登录或注册页，购物 Session、设备、Job Queue 和执行事件全部绑定同一个既有 owner
 - 本地执行器：商品搜索与显式确认后的真实加购由独立 Worker 优先直连淘宝桌面版官方 HTTP MCP，不再经过 Qoder 或 Next.js 长请求；若 HTTP MCP 对只读搜索误报内测限制或传输中断，搜索可安全降级到同一桌面客户端自带的官方 CLI。加购不会走 CLI 自动兜底，也不会因传输恢复而重放
 - 启动待命：Worker 每次启动都会先让云端仍在自动推进的历史搜索进入安全暂停，待处理 Job 保留但不可领取；必须回到网页点击“继续搜索”才会从断点执行。Worker 在线后由用户新开始的搜索正常直接运行
 - 本地链路自愈：`npm run dev` 会监督唯一的正式 Worker，异常退出时按上限 30 秒的指数退避自动重启；淘宝 MCP 暂不可达或工具层未加载时，Worker 保持 `mcp_unavailable` 心跳、停止领取任务并持续探测，网页会显示“正在等待淘宝桌面版工具恢复”。同一 Worker 内工具恢复后会继续已经网页确认的队列；若 Worker 进程重新启动，历史搜索会进入待命并等待网页再次确认
@@ -72,7 +72,7 @@ SceneCart AI 是一个正在按正式产品架构推进的“场景化购物 Age
 
 线上长期保留两个职责明确的固定域名：正式产品使用 `https://scenecart-ai.vercel.app/`，公开体验使用 `https://scenecart-public-demo.vercel.app/`。正式站 `/demo` 重定向到公开 Demo 根路径；公开 Demo 的 `/` 是唯一正式入口，旧 `/demo` 只做兼容重定向，自动演示使用 `/?autoplay=1`。公开 Demo 不继承正式站身份，也不连接正式数据库、DeepSeek、正式 `/api/*`、淘宝账户或本地执行器。
 
-正式产品直接绑定服务端固定 owner，不再显示 SceneCart 登录、注册或创建账号入口。远程运行默认 fail closed：优先使用经过实际核验的 Vercel 外层保护；当前 Hobby 固定 Production 域名没有该保护，因此只在用户明确知情接受“知道域名的人可进入同一个固定 owner 产品”的风险、启用严格的服务端风险开关并取得独立 Production 授权后发布。readiness 会如实报告 `unprotected_risk_accepted`，不会把该状态伪装成外层保护已验证。
+正式产品直接绑定服务端固定 owner，不再显示场景购登录、注册或创建账号入口。远程运行默认 fail closed：优先使用经过实际核验的 Vercel 外层保护；当前 Hobby 固定 Production 域名没有该保护，因此只在用户明确知情接受“知道域名的人可进入同一个固定 owner 产品”的风险、启用严格的服务端风险开关并取得独立 Production 授权后发布。readiness 会如实报告 `unprotected_risk_accepted`，不会把该状态伪装成外层保护已验证。
 
 区别只在数据与执行层：新车主场景使用 2026-08-08 的脱敏历史快照，其余已开放场景使用明确标注的本地冻结样本；这些样本不代表实时淘宝商品。Demo 不要求登录，也不会调用模型、数据库、淘宝 MCP、真实购物车、订单或支付能力。访问者可以按正式产品流程手动修改预算、查看规划、展开备选、加入演示清单和移除商品；右上角“启动自动演示”会用可见鼠标逐步点击同一批真实控件，播放中点击页面任意位置会暂停，点击“继续演示”会从中断步骤恢复。
 
@@ -90,7 +90,7 @@ npm run demo:dev
 
 ## 面试演示：从网页触发真实淘宝全流程
 
-面试主路径是在 SceneCart 网页上逐步输入需求、确认 Scene Brief、确认规划并开始搜索。网页把任务写入持久 Job Queue，本机 `local_executor` 领取任务后优先直连淘宝桌面版官方 HTTP MCP，再把真实候选回填到同一个 Session；若桌面版 HTTP MCP 端口失效但官方 CLI 执行层仍可用，只读搜索会在同一次 Job 内安全降级，不消耗额外业务重试。面试前先运行 `npm run executor:doctor`，再用 `npm run dev` 启动网页和正式 Worker；不要切换到 Qoder、Codex hosted、experimental bridge 或 mock provider。
+面试主路径是在场景购网页上逐步输入需求、确认 Scene Brief、确认规划并开始搜索。网页把任务写入持久 Job Queue，本机 `local_executor` 领取任务后优先直连淘宝桌面版官方 HTTP MCP，再把真实候选回填到同一个 Session；若桌面版 HTTP MCP 端口失效但官方 CLI 执行层仍可用，只读搜索会在同一次 Job 内安全降级，不消耗额外业务重试。面试前先运行 `npm run executor:doctor`，再用 `npm run dev` 启动网页和正式 Worker；不要切换到 Qoder、Codex hosted、experimental bridge 或 mock provider。
 
 淘宝 MCP 暂不可达和淘宝掉登录是两种不同状态。前者会显示工具恢复提示，Worker 不领取新任务并自动退避探测；同一 Worker 内连接恢复后，已经网页确认的搜索队列会继续。若 Worker 进程重新启动，历史搜索会等待用户点击“继续搜索”。真实调用明确发现淘宝掉登录时，网站则显示“搜索已暂停，已有结果不会丢失”：此时必须先在淘宝桌面版重新登录，再由用户点击“重新登录后继续搜索”才会重试失败模块，登录恢复本身不会自动重放；也可点击“用已有部分结果进入选购”。已完成模块不会重跑，真实加购也不会因 MCP 或登录恢复而自动重放。
 
@@ -102,9 +102,9 @@ npm run demo:dev
 npm run demo:interview
 ```
 
-该命令会启动隔离的 SceneCart 服务和专用演示 Worker，自动走完产品 UI 流程，并让浏览器停在最终“购买确认清单”；按 `Ctrl+C` 关闭。它不要求淘宝登录，也不会连接淘宝 MCP。已覆盖的新车模块使用 **2026-08-08** 采集的淘宝历史搜索快照；快照未覆盖模块使用醒目标注的固定演示候选。它只能作为明确披露的数据演示，不能作为面试主路径，也不能证明网页当前触发了真实淘宝搜索。
+该命令会启动隔离的场景购服务和专用演示 Worker，自动走完产品 UI 流程，并让浏览器停在最终“购买确认清单”；按 `Ctrl+C` 关闭。它不要求淘宝登录，也不会连接淘宝 MCP。已覆盖的新车模块使用 **2026-08-08** 采集的淘宝历史搜索快照；快照未覆盖模块使用醒目标注的固定演示候选。它只能作为明确披露的数据演示，不能作为面试主路径，也不能证明网页当前触发了真实淘宝搜索。
 
-演示模式中的淘宝 `search`、`add`、`order`、`payment` 调用均为 **0**。用户确认“加入购物车”后，商品只进入 SceneCart 产品内的“演示购物车”，不会进入真实淘宝购物车，更不会下单或支付。它也显式关闭通用 `ALLOW_DEMO_CART_FALLBACK`，只接受专用演示 Worker 的隔离结果。
+演示模式中的淘宝 `search`、`add`、`order`、`payment` 调用均为 **0**。用户确认“加入购物车”后，商品只进入场景购产品内的“演示购物车”，不会进入真实淘宝购物车，更不会下单或支付。它也显式关闭通用 `ALLOW_DEMO_CART_FALLBACK`，只接受专用演示 Worker 的隔离结果。
 
 如需维护这条次级隔离模式，可用无界面命令验收：
 
@@ -145,7 +145,7 @@ npm run executor:configure
 
 轮换现有设备使用 `npm run executor:provision -- --rotate <设备UUID>`；目标不存在或不属于固定 owner 时整笔事务回滚。正式网页不会提供注册或 Token 签发入口。
 
-设置页复制的命令会显式携带当前 SceneCart 页面地址，即使 `3000` 被其他项目占用，也不会误用 `.env.local` 中的旧端口。配置脚本会隐藏令牌输入、保留其他配置、强制使用 `local_executor`，并将文件权限设为仅当前用户可读写。令牌不会进入 shell history。配置完成后可运行 `npm run executor:doctor` 做无副作用诊断；正在运行的默认 `npm run dev` 会自动启动 Worker。
+设置页复制的命令会显式携带当前场景购页面地址，即使 `3000` 被其他项目占用，也不会误用 `.env.local` 中的旧端口。配置脚本会隐藏令牌输入、保留其他配置、强制使用 `local_executor`，并将文件权限设为仅当前用户可读写。令牌不会进入 shell history。配置完成后可运行 `npm run executor:doctor` 做无副作用诊断；正在运行的默认 `npm run dev` 会自动启动 Worker。
 
 打开终端实际打印的地址，例如：
 
@@ -405,7 +405,7 @@ npm run executor:doctor
 npm run worker:local
 ```
 
-推荐用 `SCENECART_API_URL=https://受保护的内部验收地址 npm run executor:configure` 在交互式终端中隐藏写入精确受保护 origin、Vercel Bypass 和预置设备 Token；它不会回显凭据或覆盖 DeepSeek 等无关环境变量。受保护 origin 下，`worker:local` 会同时校验 Vercel Bypass 与 SceneCart 设备鉴权，只有两层鉴权和淘宝工具就绪后才领取任务。
+推荐用 `SCENECART_API_URL=https://受保护的内部验收地址 npm run executor:configure` 在交互式终端中隐藏写入精确受保护 origin、Vercel Bypass 和预置设备 Token；它不会回显凭据或覆盖 DeepSeek 等无关环境变量。受保护 origin 下，`worker:local` 会同时校验 Vercel Bypass 与场景购设备鉴权，只有两层鉴权和淘宝工具就绪后才领取任务。
 
 当前明确接受风险的无保护 Hobby Production 使用固定 `SCENECART_API_URL=https://scenecart-ai.vercel.app`，不配置 `SCENECART_VERCEL_PROTECTED_ORIGIN` 或 `SCENECART_VERCEL_PROTECTION_BYPASS_SECRET`。这只取消穿过 Vercel 外层保护所需的 Bypass；本机 `SCENECART_DEVICE_TOKEN` 仍然必需，缺失或失效时 Worker 不得注册心跳、领取任务或回传结果。无论哪种暴露策略，Worker 都会以 `mcp_unavailable` 状态等待淘宝桌面版官方 MCP 通过无副作用的工具检查。
 
@@ -414,7 +414,7 @@ npm run worker:local
 - 首页已开放新车选购、露营准备、房间装饰、宿舍入学和搬家置办五个场景，场景文案、字段、规划模板、搜索策略与快捷调整均由 `ScenarioConfig` 驱动；当前真实淘宝设备的回归与面试演示基线仍是“新车选购”，这不等于其他四个入口尚未开放。
 - 淘宝搜索能力相对稳定；商品详情页和真实加购受淘宝客户端、授权和登录态影响较大。
 - 淘宝搜索依赖用户本机淘宝桌面版官方 HTTP MCP 和登录态；不消耗 Qoder 额度，但桌面客户端与账号策略仍是外部依赖。
-- 加购具备显式确认、后台执行、重试与结果账本，但淘宝客户端权限或账号策略仍可能拒绝动作。SceneCart 的交易边界止于购买确认页和淘宝购物车：不会自动下单、提交订单或支付。
+- 加购具备显式确认、后台执行、重试与结果账本，但淘宝客户端权限或账号策略仍可能拒绝动作。场景购的交易边界止于购买确认页和淘宝购物车：不会自动下单、提交订单或支付。
 - 自动搜索支持“完成当前模块后暂停”和从原进度继续，不会通过强杀外部工具制造未知执行状态。
 - 正式产品模式不会把真实加购失败写成成功。产品内演示购物车只在 `SCENECART_PRODUCT_MODE=development`、`ALLOW_DEMO_CART_FALLBACK=true` 且使用同步开发兼容 provider 时，才会承接该次真实加购异常；正式 `local_executor` 异步任务失败会保留为可重试失败，不会自动生成演示项。
 - 产品不会伪装具备淘宝购物车删除能力。演示项可在产品内移除；真实淘宝项必须在淘宝购物车中管理，避免误删账号内其他商品。

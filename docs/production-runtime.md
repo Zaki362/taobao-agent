@@ -1,4 +1,4 @@
-# SceneCart AI 生产运行时与本地执行器
+# 场景购生产运行时与本地执行器
 
 > 发布边界以 [双应用运行时合同](./dual-app-runtime-matrix.md) 为准。正式产品是服务端固定 owner 的 `single_user` 应用；公开 Demo 是独立冻结静态应用。
 
@@ -6,7 +6,7 @@
 
 正式路径把云端产品与用户本机淘宝能力拆成两个安全边界：
 
-1. Next.js 服务按已验证的正式暴露策略把请求绑定到服务端固定 owner，并负责 Session、Agent 决策、任务入队和 SSE；SceneCart 不再提供普通用户登录或注册。暴露策略可以是经核验的 Vercel 外层保护，或仅针对 canonical Production、由用户明确知情接受的无保护风险模式。
+1. Next.js 服务按已验证的正式暴露策略把请求绑定到服务端固定 owner，并负责 Session、Agent 决策、任务入队和 SSE；场景购不再提供普通用户登录或注册。暴露策略可以是经核验的 Vercel 外层保护，或仅针对 canonical Production、由用户明确知情接受的无保护风险模式。
 2. PostgreSQL 保存用户、购物会话、执行设备、任务、租约和事件。
 3. owner 本机 `local-executor` 使用预置设备令牌领取属于固定 owner 的任务；凭据不由网页签发。
 4. 本地执行器优先通过淘宝桌面版官方 Streamable HTTP MCP 调用搜索与加购工具，并只把结构化商品、淘宝链接和执行结果回填服务端；不经过 Qoder。HTTP MCP 对只读搜索误报内测限制或传输中断时，可降级到桌面版自带的官方 CLI；加购不使用该兜底。
@@ -58,7 +58,7 @@ DEEPSEEK_REASONER_MODEL=deepseek-reasoner
 
 正式模式采用 fail-closed 运行契约：`SCENECART_SINGLE_USER_ID` 必须指向 PostgreSQL 中已存在的唯一 owner，不能是 anonymous 或 public-demo；缺失 owner、未启用 PostgreSQL、正式暴露策略无效或 Origin 不安全时拒绝运行，不会回退本地存储或公共身份。owner ID、数据库凭据和模型密钥不返回浏览器。
 
-受 Vercel Deployment Protection 保护、且只供 owner 使用的 Preview 使用同一 `single_user` 合同。网页跳过 SceneCart 登录，但所有 Session、设备和任务仍绑定固定 owner；旧 Cookie 不能切换身份。Preview 通过不代表 Production 获得保护或授权。
+受 Vercel Deployment Protection 保护、且只供 owner 使用的 Preview 使用同一 `single_user` 合同。网页跳过场景购登录，但所有 Session、设备和任务仍绑定固定 owner；旧 Cookie 不能切换身份。Preview 通过不代表 Production 获得保护或授权。
 
 当前 Hobby Standard Protection 只覆盖 Preview，不覆盖固定 Production 域名。固定 Production 只有在用户明确接受“知道域名的人可进入同一个固定 owner 产品”的风险、精确设置 `SCENECART_ALLOW_UNPROTECTED_SINGLE_USER_PRODUCTION=true` 与 `SCENECART_OUTER_PROTECTION_VERIFIED=false`、清除所有残留保护证明并取得独立 Production 授权后才可运行。readiness 必须把它标为 `unprotected_risk_accepted` 而非 protected；升级并实际验证 All Deployments Protection 后应切回 protected 策略。
 
@@ -118,7 +118,7 @@ npm run start
 npm run executor:configure
 ```
 
-命令会要求确认 SceneCart API 地址并隐藏输入设备令牌。若必须手动配置，受保护 origin 将以下内容保存到项目根目录的 `.env.local`：
+命令会要求确认场景购 API 地址并隐藏输入设备令牌。若必须手动配置，受保护 origin 将以下内容保存到项目根目录的 `.env.local`：
 
 ```dotenv
 TAOBAO_EXECUTION_BACKEND=local_executor
@@ -137,9 +137,9 @@ EXECUTOR_TAOBAO_READINESS_BACKOFF_BASE_MS=2000
 EXECUTOR_TAOBAO_READINESS_BACKOFF_MAX_MS=30000
 ```
 
-受保护 origin 下，Vercel Bypass 和 SceneCart 设备 Token 必须同时存在：前者只穿过外层保护，后者才授权设备 API。Worker 使用手动重定向策略，任何 3xx 或跨源跳转都 fail closed，防止把任一凭据带到其他 origin。完整凭据不得进入日志。Cron、Webhook、readiness 与后台恢复任务也必须分别验证外层 Bypass 和其内部 Bearer 鉴权。
+受保护 origin 下，Vercel Bypass 和场景购设备 Token 必须同时存在：前者只穿过外层保护，后者才授权设备 API。Worker 使用手动重定向策略，任何 3xx 或跨源跳转都 fail closed，防止把任一凭据带到其他 origin。完整凭据不得进入日志。Cron、Webhook、readiness 与后台恢复任务也必须分别验证外层 Bypass 和其内部 Bearer 鉴权。
 
-当前 `unprotected_risk_accepted` Production 只配置固定 `SCENECART_API_URL` 与 `SCENECART_DEVICE_TOKEN`，不配置 Protected Origin 或 Bypass。它无需穿过 Vercel 挑战，但设备 Bearer 仍然必需；缺失或失效时，Worker 不得注册心跳、领取任务或回传结果。Cron、readiness 与后台恢复任务也继续要求各自的 SceneCart Bearer Secret。
+当前 `unprotected_risk_accepted` Production 只配置固定 `SCENECART_API_URL` 与 `SCENECART_DEVICE_TOKEN`，不配置 Protected Origin 或 Bypass。它无需穿过 Vercel 挑战，但设备 Bearer 仍然必需；缺失或失效时，Worker 不得注册心跳、领取任务或回传结果。Cron、readiness 与后台恢复任务也继续要求各自的场景购 Bearer Secret。
 
 再执行：
 
@@ -277,4 +277,4 @@ npm run check
 npm run release:audit
 ```
 
-E2E 使用随机固定 owner 和预置设备 Token 验证无 SceneCart 登录的 `single_user` 访问、规划、持久任务、SSE、推荐回填与异步加购；测试不会触发真实淘宝账号动作。受保护远程 Worker 验收还必须分别证明：无 Bypass 被外层阻止、仅 Bypass 无设备 Token 被 SceneCart 阻止、双凭据下可以心跳、领取和回填；无保护风险模式则必须证明无需 Bypass 但缺少设备 Bearer 仍被 SceneCart 阻止。两种模式的失效恢复都不得泄漏凭据。
+E2E 使用随机固定 owner 和预置设备 Token 验证无场景购登录的 `single_user` 访问、规划、持久任务、SSE、推荐回填与异步加购；测试不会触发真实淘宝账号动作。受保护远程 Worker 验收还必须分别证明：无 Bypass 被外层阻止、仅 Bypass 无设备 Token 被场景购阻止、双凭据下可以心跳、领取和回填；无保护风险模式则必须证明无需 Bypass 但缺少设备 Bearer 仍被场景购阻止。两种模式的失效恢复都不得泄漏凭据。

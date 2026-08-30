@@ -581,7 +581,7 @@ export function ResultsPage({
           >
             查看购物清单<ArrowRight className="h-4 w-4" />
           </Button>
-          <p className="text-center text-[10px] leading-4 text-muted-foreground">SceneCart 不会自动下单或支付</p>
+          <p className="text-center text-[10px] leading-4 text-muted-foreground">场景购不会自动下单或支付</p>
         </aside>
       </div>
     </div>

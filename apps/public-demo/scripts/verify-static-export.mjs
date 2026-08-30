@@ -17,7 +17,7 @@ const forbiddenRuntimeMarkers = [
   { label: "Worker device token name", pattern: /SCENECART_(?:DEVICE|EXECUTOR)_TOKEN/i },
   { label: "Vercel protection bypass header", pattern: /x-vercel-protection-bypass/i },
   {
-    label: "formal SceneCart API or Worker origin",
+    label: "formal 场景购 API or Worker origin",
     pattern: /https:\/\/scenecart-ai\.vercel\.app\/(?:api|worker|executor)(?:\/|\b)/i
   }
 ];

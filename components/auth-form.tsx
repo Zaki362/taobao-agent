@@ -38,7 +38,7 @@ export function AuthForm({ returnTo = "/" }: { returnTo?: Route }) {
   return (
     <Card className="section-card w-full max-w-md">
       <CardHeader>
-        <CardTitle>{mode === "login" ? "登录 SceneCart AI" : "创建 SceneCart AI 账号"}</CardTitle>
+        <CardTitle>{mode === "login" ? "登录场景购" : "创建场景购账号"}</CardTitle>
       </CardHeader>
       <CardContent>
         <form onSubmit={submit} className="space-y-4">

@@ -53,13 +53,13 @@ export function normalizeExecutorApiUrl(value) {
   try {
     parsed = new URL(candidate);
   } catch {
-    throw new Error("SceneCart API 地址不是有效 URL");
+    throw new Error("场景购 API 地址不是有效 URL");
   }
   if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-    throw new Error("SceneCart API 地址只支持 http 或 https");
+    throw new Error("场景购 API 地址只支持 http 或 https");
   }
   if (parsed.username || parsed.password || parsed.search || parsed.hash) {
-    throw new Error("SceneCart API 地址不能包含账号、查询参数或锚点");
+    throw new Error("场景购 API 地址不能包含账号、查询参数或锚点");
   }
   return candidate;
 }
@@ -223,7 +223,7 @@ export function updateExecutorEnv(content, values) {
   const missing = Object.keys(updates).filter((key) => !seen.has(key));
   if (missing.length > 0) {
     if (lines.length > 0 && lines.at(-1)?.trim()) lines.push("");
-    lines.push("# SceneCart local executor");
+    lines.push("# 场景购 local executor");
     for (const key of missing) {
       lines.push(`${key}=${encodeEnvValue(updates[key])}`);
     }

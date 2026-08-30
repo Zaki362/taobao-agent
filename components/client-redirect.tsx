@@ -5,7 +5,7 @@ import { useEffect } from "react";
 export function ClientRedirect({
   pathname,
   query = {},
-  label = "正在返回 SceneCart…"
+  label = "正在返回场景购…"
 }: {
   pathname: string;
   query?: Record<string, string>;
@@ -21,7 +21,7 @@ export function ClientRedirect({
   }, [pathname, query]);
 
   return (
-    <main className="flex min-h-screen items-center justify-center px-6" aria-label="SceneCart 兼容入口">
+    <main className="flex min-h-screen items-center justify-center px-6" aria-label="场景购兼容入口">
       <p role="status" className="text-sm text-muted-foreground">{label}</p>
     </main>
   );

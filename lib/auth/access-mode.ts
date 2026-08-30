@@ -71,7 +71,7 @@ export async function inspectConfiguredSingleUserOwner() {
 
 export function assertInteractiveAuthenticationEnabled() {
   throw new ApiRouteError(
-    "SceneCart 使用固定单用户访问，不开放账号登录或注册",
+    "场景购使用固定单用户访问，不开放账号登录或注册",
     410,
     "interactive_authentication_disabled"
   );

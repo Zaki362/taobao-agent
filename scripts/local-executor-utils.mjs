@@ -249,7 +249,7 @@ export function normalizeTaobaoSearchEvidence(raw, context) {
       shop_badges: shopBadges,
       highlights,
       risk_notes: [SEARCH_RISK_NOTE],
-      fit_reason: `来自“${context.keyword}”的真实淘宝搜索结果，后续由 SceneCart 按预算与模块目标进行排序。`,
+      fit_reason: `来自“${context.keyword}”的真实淘宝搜索结果，后续由场景购按预算与模块目标进行排序。`,
       recommendation_type: RECOMMENDATION_TYPES[index % RECOMMENDATION_TYPES.length],
       module_id: context.moduleId
     });

@@ -117,7 +117,7 @@ export function vercelProtectionBypassHeaders(input, environment = process.env) 
   const secret = environment.SCENECART_VERCEL_PROTECTION_BYPASS_SECRET?.trim() ?? "";
   if (!secret) {
     throw new VercelProtectionConfigurationError(
-      "受保护的 SceneCart origin 缺少本机 SCENECART_VERCEL_PROTECTION_BYPASS_SECRET；请求已在发送前停止"
+      "受保护的场景购 origin 缺少本机 SCENECART_VERCEL_PROTECTION_BYPASS_SECRET；请求已在发送前停止"
     );
   }
   return { [VERCEL_PROTECTION_BYPASS_HEADER]: secret };
@@ -158,7 +158,7 @@ export async function throwIfVercelProtectionFailed(
   if (![301, 302, 303, 307, 308, 401, 403].includes(response.status)) return;
   if ([301, 302, 303, 307, 308].includes(response.status)) {
     throw new VercelProtectionError(
-      "SceneCart 机器请求返回重定向；为防止凭据跨 origin 泄露，请求已停止",
+      "场景购机器请求返回重定向；为防止凭据跨 origin 泄露，请求已停止",
       { status: response.status, code: "vercel_protection_redirect_blocked" }
     );
   }

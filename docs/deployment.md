@@ -1,4 +1,4 @@
-# SceneCart AI 部署指南
+# 场景购部署指南
 
 ## 部署边界
 
@@ -10,7 +10,7 @@
 
 双域名是长期架构，不是迁移期临时状态：正式产品固定使用 `https://scenecart-ai.vercel.app/`，公开冻结体验固定使用 `https://scenecart-public-demo.vercel.app/`。正式站 `/demo` 重定向到公开 Demo 根路径，`?autoplay=1` 可继续透传。两边不共享身份、数据库、API、模型密钥、淘宝环境变量或本地执行器状态，也不在页面展示自动生成的长 Preview 地址。
 
-正式产品固定使用服务端 `SCENECART_ACCESS_MODE=single_user` 和一个已存在 owner；没有 SceneCart 登录或注册页。远程运行默认 fail closed：优先使用经实际核验的 Vercel 外层保护；当前 Hobby 的 Standard Protection 不保护固定 Production 域名，因此只有用户明确知情接受公开固定 owner 风险、启用严格的服务端风险开关并取得独立正式 Production 授权后，才允许以 `unprotected_risk_accepted` 发布。受保护 Preview 仍可用于内部验收，但不能替代 Production 授权。
+正式产品固定使用服务端 `SCENECART_ACCESS_MODE=single_user` 和一个已存在 owner；没有场景购登录或注册页。远程运行默认 fail closed：优先使用经实际核验的 Vercel 外层保护；当前 Hobby 的 Standard Protection 不保护固定 Production 域名，因此只有用户明确知情接受公开固定 owner 风险、启用严格的服务端风险开关并取得独立正式 Production 授权后，才允许以 `unprotected_risk_accepted` 发布。受保护 Preview 仍可用于内部验收，但不能替代 Production 授权。
 
 ## 本地双应用预览
 
@@ -60,13 +60,13 @@ SCENECART_VERCEL_PROTECTION_BYPASS_SECRET=只保存在本机的旁路凭据
 SCENECART_DEVICE_TOKEN=只保存在本机的设备凭据
 ```
 
-Bypass 只穿过 Vercel 外层，设备 Token 才授权 SceneCart 的设备心跳、任务领取和结果回填。受保护 origin 缺任一凭据都必须失败；请求禁止跟随跨源重定向，日志必须脱敏。Cron、Webhook、内部 readiness 和后台恢复同样会被外层保护拦截，必须为每条机器调用分别配置 Vercel Automation Bypass 以及它自身的 SceneCart Bearer Secret。
+Bypass 只穿过 Vercel 外层，设备 Token 才授权场景购的设备心跳、任务领取和结果回填。受保护 origin 缺任一凭据都必须失败；请求禁止跟随跨源重定向，日志必须脱敏。Cron、Webhook、内部 readiness 和后台恢复同样会被外层保护拦截，必须为每条机器调用分别配置 Vercel Automation Bypass 以及它自身的场景购 Bearer Secret。
 
-当前 `unprotected_risk_accepted` Production 不配置 `SCENECART_VERCEL_PROTECTED_ORIGIN` 或 `SCENECART_VERCEL_PROTECTION_BYPASS_SECRET`，因为没有 Vercel 外层挑战需要穿过；但本机 Worker 仍必须携带 SceneCart 设备 Bearer Token，Cron、readiness 和后台恢复仍必须携带各自的 SceneCart Bearer Secret。风险接受开关不能替代任何机器鉴权。
+当前 `unprotected_risk_accepted` Production 不配置 `SCENECART_VERCEL_PROTECTED_ORIGIN` 或 `SCENECART_VERCEL_PROTECTION_BYPASS_SECRET`，因为没有 Vercel 外层挑战需要穿过；但本机 Worker 仍必须携带场景购设备 Bearer Token，Cron、readiness 和后台恢复仍必须携带各自的场景购 Bearer Secret。风险接受开关不能替代任何机器鉴权。
 
 ## 公开 Demo 环境
 
-`scenecart-public-demo` 必须保持环境变量为空，尤其不得配置数据库、DeepSeek、SceneCart 认证 Secret、Vercel Bypass、Worker Token、淘宝或 MCP 凭据。构建后应审计网络：页面只能读取打包的冻结资源，不得访问正式 `/api/*`。Demo 刷新恢复初始状态。
+`scenecart-public-demo` 必须保持环境变量为空，尤其不得配置数据库、DeepSeek、场景购认证 Secret、Vercel Bypass、Worker Token、淘宝或 MCP 凭据。构建后应审计网络：页面只能读取打包的冻结资源，不得访问正式 `/api/*`。Demo 刷新恢复初始状态。
 
 ## 发布检查
 
@@ -104,7 +104,7 @@ SCENECART_RELEASE_VERIFY_URL=https://当前正式验收地址 npm run release:ve
 
 正式环境不要配置 `HOSTED_WORKER_TOKEN`，也不要运行 `npm run worker:codex`。production 会直接拒绝 `/api/hosted/tasks*` 旧 Worker 协议；浏览器主流程也不会轮询旧宿主状态。`/hosted` 页面仍是当前会话、任务、模型和执行器的运维控制台，并不代表继续使用 Codex hosted 执行淘宝任务。
 
-SceneCart 的交易边界止于购买确认页与淘宝购物车。即使设备拥有 `add_to_cart` 能力，也必须由用户逐件显式确认；系统不会自动提交订单、结算或支付。面试环境的固定预检、现场步骤与无 MCP 兜底见 [面试演示 Runbook](./interview-demo.md)。
+场景购的交易边界止于购买确认页与淘宝购物车。即使设备拥有 `add_to_cart` 能力，也必须由用户逐件显式确认；系统不会自动提交订单、结算或支付。面试环境的固定预检、现场步骤与无 MCP 兜底见 [面试演示 Runbook](./interview-demo.md)。
 
 ## 回滚原则
 

@@ -224,7 +224,7 @@ export function decideNextActionPrompt(
   };
 
   return [
-    "你是 SceneCart AI Agent Runtime 2.0 的下一步决策器。",
+    "你是场景购 Agent Runtime 2.0 的下一步决策器。",
     "你只负责从动作白名单中选择下一步，不直接执行工具，也不能执行下单、付款、读取订单、地址或聊天记录。",
     "动作白名单：search_module、retry_module、skip_module、wait_for_tools、complete_workflow。",
     "决策原则：优先完成高价值模块；已有可用候选时不要重复首搜；候选质量薄或真实价格明显高于模块预算时可以用新关键词补搜；有活跃任务时应等待；非可选模块未搜索且未失败时不能跳过；工具预算耗尽时应结束。",

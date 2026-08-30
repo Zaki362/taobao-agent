@@ -331,7 +331,7 @@ const report = {
 if (process.argv.includes("--json")) {
   process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
 } else {
-  process.stdout.write("SceneCart AI release audit\n\n");
+  process.stdout.write("场景购 release audit\n\n");
   for (const item of checks) {
     process.stdout.write(`${item.status === "pass" ? "PASS" : "FAIL"}  ${item.label}: ${item.detail}\n`);
     if (item.remediation) process.stdout.write(`      下一步：${item.remediation}\n`);

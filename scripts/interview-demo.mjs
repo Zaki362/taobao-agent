@@ -95,7 +95,7 @@ async function waitForApp(timeoutMs = 210_000) {
   while (Date.now() < deadline) {
     if (appProcess.exitCode !== null) {
       throw new Error(
-        `SceneCart 演示服务提前退出。\n${recentServerOutput.slice(-10).join("\n")}`
+        `场景购演示服务提前退出。\n${recentServerOutput.slice(-10).join("\n")}`
       );
     }
     try {
@@ -106,7 +106,7 @@ async function waitForApp(timeoutMs = 210_000) {
     } catch {}
     await delay(500);
   }
-  throw new Error("等待 SceneCart 演示服务启动超时");
+  throw new Error("等待场景购演示服务启动超时");
 }
 
 async function launchBrowser() {
@@ -150,7 +150,7 @@ async function registerDemoIdentity(page, context) {
   const response = await context.request.post(`${baseUrl}/api/executor/devices`, {
     headers: { Origin: baseUrl },
     data: {
-      name: "SceneCart 面试演示执行器（不连接淘宝）",
+      name: "场景购面试演示执行器（不连接淘宝）",
       capabilities: ["module_search", "add_to_cart"]
     }
   });
@@ -248,7 +248,7 @@ async function runDemo(page, context) {
     if (!raw) return "";
     return String(JSON.parse(raw).state?.sessionId || "");
   });
-  if (!sessionId) throw new Error("页面没有保存 SceneCart session_id");
+  if (!sessionId) throw new Error("页面没有保存场景购 session_id");
 
   await step("启动 Agent Runtime；演示执行器只读取历史快照", async () => {
     await page.getByRole("button", { name: "就按这个方案开始找商品" }).click();

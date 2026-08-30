@@ -17,7 +17,7 @@ export default function NotFoundPage() {
               href="/"
               className="inline-flex h-11 items-center justify-center rounded-full bg-primary px-5 text-sm font-medium text-primary-foreground transition hover:bg-primary/90"
             >
-              回到 SceneCart AI 首页
+              回到场景购首页
             </Link>
           </CardContent>
         </Card>

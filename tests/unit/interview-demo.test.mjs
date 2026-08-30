@@ -54,7 +54,7 @@ describe("interview demo fixture", () => {
       expect(result.execution_mode).toBe("interview_demo");
       expect(result.summary).toContain("固定演示候选");
       expect(result.candidates).toHaveLength(3);
-      expect(result.candidates.every((item) => item.source === "SceneCart 固定演示候选")).toBe(true);
+      expect(result.candidates.every((item) => item.source === "场景购固定演示候选")).toBe(true);
       expect(result.candidates.every((item) => item.title.includes("非淘宝实时商品"))).toBe(true);
       expect(result.candidates.every((item) => item.detail_url === "")).toBe(true);
     }
@@ -67,7 +67,7 @@ describe("interview demo fixture", () => {
       execution_mode: "interview_demo",
       product_id: "demo-product",
       selected_spec: "面试演示模式（未读取或选择淘宝规格）",
-      cart_note: "只写入 SceneCart 产品内演示清单；未调用淘宝加购、下单或支付能力。",
+      cart_note: "只写入场景购产品内演示清单；未调用淘宝加购、下单或支付能力。",
       message: "面试演示模式：已加入产品内演示清单；未调用淘宝加购或下单。"
     });
   });

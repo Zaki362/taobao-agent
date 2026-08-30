@@ -178,13 +178,13 @@ describe("Agent purchase bundle adoption", () => {
       result_summary: "面试演示清单已更新，未调用淘宝",
       selected_spec: "面试演示模式（未读取淘宝规格）",
       cart_source: "demo",
-      cart_note: "只写入 SceneCart 产品内演示清单"
+      cart_note: "只写入场景购产品内演示清单"
     });
 
     expect(state.selected_items.find((item) => item.product_id === productId)).toMatchObject({
       cart_source: "demo",
       selected_spec: "面试演示模式（未读取淘宝规格）",
-      cart_note: "只写入 SceneCart 产品内演示清单"
+      cart_note: "只写入场景购产品内演示清单"
     });
     expect(state.bundle_adoption?.added_product_ids).toContain(productId);
   });

@@ -27,10 +27,7 @@ export type ProductGuideMode = "formal" | "demo";
 
 type GuideSectionId =
   | "positioning"
-  | "commerce-gap"
-  | "new-car-example"
-  | "solution"
-  | "capabilities"
+  | "core-advantages"
   | "architecture"
   | "product-and-demo"
   | "boundaries";
@@ -38,7 +35,6 @@ type GuideSectionId =
 type GuideSection = {
   id: GuideSectionId;
   label: string;
-  group: "产品认知" | "产品运行" | "版本与边界";
 };
 
 type Capability = {
@@ -48,14 +44,11 @@ type Capability = {
 };
 
 const guideSections: GuideSection[] = [
-  { id: "positioning", label: "产品定位", group: "产品认知" },
-  { id: "commerce-gap", label: "电商为何不够", group: "产品认知" },
-  { id: "new-car-example", label: "新车首购示例", group: "产品认知" },
-  { id: "solution", label: "工作流程", group: "产品运行" },
-  { id: "capabilities", label: "当前能力", group: "产品运行" },
-  { id: "architecture", label: "技术方案", group: "产品运行" },
-  { id: "product-and-demo", label: "正式产品与 Demo", group: "版本与边界" },
-  { id: "boundaries", label: "安全边界", group: "版本与边界" }
+  { id: "positioning", label: "产品定位" },
+  { id: "core-advantages", label: "核心优势" },
+  { id: "architecture", label: "技术方案" },
+  { id: "product-and-demo", label: "正式产品与 Demo" },
+  { id: "boundaries", label: "安全边界" }
 ];
 
 const productCapabilities: Capability[] = [
@@ -120,7 +113,7 @@ const architectureLayers: Array<{ icon: LucideIcon; title: string; detail: strin
   {
     icon: PackageSearch,
     title: "本地执行层",
-    detail: "用户电脑上的 SceneCart Worker 连接淘宝桌面版官方 MCP，执行真实搜索、只读详情和用户确认后的加购。"
+    detail: "用户电脑上的场景购 Worker 连接淘宝桌面版官方 MCP，执行真实搜索、只读详情和用户确认后的加购。"
   }
 ];
 
@@ -170,8 +163,7 @@ function ProcessLine({ label, highlighted = false, steps }: { label: string; hig
 }
 
 function GuidePanel({ sectionId, mode }: { sectionId: GuideSectionId; mode: ProductGuideMode }) {
-  if (sectionId === "positioning") {
-    return (
+  const positioningOverview = (
       <section className="product-guide-section">
         <SectionHeading
           eyebrow="01 · 产品定位"
@@ -179,7 +171,7 @@ function GuidePanel({ sectionId, mode }: { sectionId: GuideSectionId; mode: Prod
           description="用户的问题不是找不到商品，而是无法高效完成一个购物任务。"
         />
         <p className="product-guide-lead">
-          SceneCart AI 是一个场景化购物 Agent。它先理解用户正在完成什么生活任务，再拆分购物模块、安排优先级、分配预算、搜索商品并组织成可调整的购物清单。
+          场景购是一个场景化购物 Agent。它先理解用户正在完成什么生活任务，再拆分购物模块、安排优先级、分配预算、搜索商品并组织成可调整的购物清单。
         </p>
         <blockquote>AI 在这里不是替代搜索，而是在搜索与交易之前，增加一层“任务理解与决策组织”。</blockquote>
         <div className="product-guide-definition-grid">
@@ -207,14 +199,12 @@ function GuidePanel({ sectionId, mode }: { sectionId: GuideSectionId; mode: Prod
           </div>
         </div>
       </section>
-    );
-  }
+  );
 
-  if (sectionId === "commerce-gap") {
-    return (
+  const commerceGap = (
       <section className="product-guide-section">
         <SectionHeading
-          eyebrow="02 · 电商为何不够"
+          eyebrow="产品定位 · 电商为何不够"
           title="商品供给很丰富，任务决策仍要用户自己完成"
           description="淘宝更擅长承接明确单品需求，但任务型、场景型购物仍缺少决策组织层。"
         />
@@ -238,7 +228,7 @@ function GuidePanel({ sectionId, mode }: { sectionId: GuideSectionId; mode: Prod
           </div>
         </div>
         <p className="product-guide-plain-note">
-          信息过载并不等于决策充分。传统电商解决“已知目标商品”的查找问题，SceneCart 聚焦“尚未想清楚完整清单”的任务型购物问题。
+          信息过载并不等于决策充分。传统电商解决“已知目标商品”的查找问题，场景购聚焦“尚未想清楚完整清单”的任务型购物问题。
         </p>
         <div className="product-guide-problem-grid" aria-label="传统电商难以充分承接的购物问题">
           <div>
@@ -258,14 +248,12 @@ function GuidePanel({ sectionId, mode }: { sectionId: GuideSectionId; mode: Prod
           </div>
         </div>
       </section>
-    );
-  }
+  );
 
-  if (sectionId === "new-car-example") {
-    return (
+  const newCarExample = (
       <section className="product-guide-section">
         <SectionHeading
-          eyebrow="03 · 新车首购示例"
+          eyebrow="产品定位 · 新车首购示例"
           title="真实问题不是搜一个支架，而是完成提车后的第一阶段置办"
           description="一个看似简单的购物场景，实际包含清单、优先级、预算和具体商品四层决策。"
         />
@@ -282,7 +270,7 @@ function GuidePanel({ sectionId, mode }: { sectionId: GuideSectionId; mode: Prod
           </div>
           <div className="product-guide-scenario-output">
             <Sparkles className="h-5 w-5 text-primary" aria-hidden="true" />
-            <h3>SceneCart 交付</h3>
+            <h3>场景购交付</h3>
             <p>一套按必要程度、预算和模块组织的购买方案，而不是一张无差别商品列表。</p>
             <div>
               <span>安全必需</span>
@@ -293,35 +281,31 @@ function GuidePanel({ sectionId, mode }: { sectionId: GuideSectionId; mode: Prod
           </div>
         </div>
       </section>
-    );
-  }
+  );
 
-  if (sectionId === "solution") {
-    return (
+  const workflow = (
       <section className="product-guide-section">
         <SectionHeading
-          eyebrow="04 · 工作流程"
+          eyebrow="02 · 核心优势"
           title="把一次复杂购物任务，拆成可以确认和调整的连续阶段"
-          description="SceneCart 在搜索和交易之前，补上任务理解与决策组织。"
+          description="场景购在搜索和交易之前，补上任务理解与决策组织。"
         />
         <div className="product-guide-processes">
           <ProcessLine label="传统链路" steps={["模糊目标", "自己想关键词", "搜索商品", "反复比较", "下单"]} />
           <ProcessLine
-            label="SceneCart 链路"
+            label="场景购链路"
             highlighted
             steps={["澄清场景", "生成规划", "优先级与预算", "分模块搜索", "推荐与理由", "动态调整", "购物清单"]}
           />
         </div>
         <p className="product-guide-control-note">用户始终保留对需求、规划、推荐结果和加购动作的控制权。Agent 负责组织决策，不替用户自动下单。</p>
       </section>
-    );
-  }
+  );
 
-  if (sectionId === "capabilities") {
-    return (
+  const currentCapabilities = (
       <section className="product-guide-section">
         <SectionHeading
-          eyebrow="05 · 当前能力"
+          eyebrow="核心优势 · 当前能力"
           title="从一句需求，到一套可继续执行的购物清单"
           description="当前已开放新车选购、露营准备、房间装饰、宿舍入学和搬家置办，并以新车用品首购作为主要验证场景。"
         />
@@ -338,14 +322,21 @@ function GuidePanel({ sectionId, mode }: { sectionId: GuideSectionId; mode: Prod
           <p>礼物选购和价格决策也属于相似的非收敛问题。当前产品首先聚焦场景化购物，不把这些方向包装成已经完成的能力。</p>
         </div>
       </section>
-    );
+  );
+
+  if (sectionId === "positioning") {
+    return <div className="product-guide-section-stack">{positioningOverview}{commerceGap}{newCarExample}</div>;
+  }
+
+  if (sectionId === "core-advantages") {
+    return <div className="product-guide-section-stack">{workflow}{currentCapabilities}</div>;
   }
 
   if (sectionId === "architecture") {
     return (
       <section className="product-guide-section">
         <SectionHeading
-          eyebrow="06 · 技术方案"
+          eyebrow="03 · 技术方案"
           title="云端组织决策，本地执行器连接真实淘宝环境"
           description="模型、状态和任务在云端运行，淘宝桌面版登录态与真实工具能力留在用户电脑。"
         />
@@ -371,7 +362,7 @@ function GuidePanel({ sectionId, mode }: { sectionId: GuideSectionId; mode: Prod
     return (
       <section className="product-guide-section">
         <SectionHeading
-          eyebrow="07 · 运行方式"
+          eyebrow="04 · 正式产品与 Demo"
           title="正式产品与公开 Demo 共享界面，但不共享运行数据"
           description="Demo 用冻结样本还原完整流程，不连接正式数据库、模型、淘宝账户或真实购物车。"
         />
@@ -402,9 +393,9 @@ function GuidePanel({ sectionId, mode }: { sectionId: GuideSectionId; mode: Prod
   return (
     <section className="product-guide-section">
       <SectionHeading
-        eyebrow="08 · 安全边界"
+        eyebrow="05 · 安全边界"
         title="协助购物决策，不绕过平台规则"
-        description="SceneCart 不替用户执行不可逆交易，也不会把 Demo 的冻结数据包装成实时结果。"
+        description="场景购不替用户执行不可逆交易，也不会把 Demo 的冻结数据包装成实时结果。"
       />
       <div className="product-guide-boundary-list">
         <p><ShieldCheck aria-hidden="true" />不会接管用户的淘宝网页账号。</p>
@@ -422,7 +413,6 @@ export function ProductGuideDialog({ mode, open, onOpenChange }: { mode: Product
   const dialogRef = useRef<HTMLDialogElement>(null);
   const contentRef = useRef<HTMLElement>(null);
   const [activeSection, setActiveSection] = useState<GuideSectionId>("positioning");
-  const isDemo = mode === "demo";
 
   useEffect(() => {
     const dialog = dialogRef.current;
@@ -440,7 +430,6 @@ export function ProductGuideDialog({ mode, open, onOpenChange }: { mode: Product
   }, [activeSection]);
 
   const closeDialog = () => onOpenChange(false);
-  const groups = ["产品认知", "产品运行", "版本与边界"] as const;
 
   function handleNavigationKeyDown(event: KeyboardEvent<HTMLButtonElement>, sectionId: GuideSectionId) {
     const currentIndex = guideSections.findIndex((section) => section.id === sectionId);
@@ -509,8 +498,8 @@ export function ProductGuideDialog({ mode, open, onOpenChange }: { mode: Product
             <BrandMark />
             <div>
               <p>PRODUCT GUIDE</p>
-              <h1 id="product-guide-dialog-title">SceneCart AI 产品说明</h1>
-              <span id="product-guide-dialog-description">产品定位、当前能力、技术架构与公开 Demo 说明</span>
+              <h1 id="product-guide-dialog-title">场景购产品说明</h1>
+              <span id="product-guide-dialog-description">产品定位、核心优势、技术架构与公开 Demo 说明</span>
             </div>
           </div>
           <button type="button" className="product-guide-close" onClick={closeDialog} aria-label="关闭产品说明">
@@ -521,32 +510,23 @@ export function ProductGuideDialog({ mode, open, onOpenChange }: { mode: Product
         <div className="product-guide-modal-body">
           <aside className="product-guide-sidebar">
             <nav aria-label="产品说明目录" className="product-guide-toc">
-              {groups.map((group) => (
-                <div className="product-guide-nav-group" key={group}>
-                  <p>{group}</p>
-                  {guideSections.filter((section) => section.group === group).map((section) => (
-                    <button
-                      key={section.id}
-                      id={`product-guide-tab-${section.id}`}
-                      type="button"
-                      className={activeSection === section.id ? "product-guide-nav-active" : undefined}
-                      aria-current={activeSection === section.id ? "page" : undefined}
-                      aria-controls="scenecart-product-guide-panel"
-                      tabIndex={activeSection === section.id ? 0 : -1}
-                      data-guide-section={section.id}
-                      onClick={() => setActiveSection(section.id)}
-                      onKeyDown={(event) => handleNavigationKeyDown(event, section.id)}
-                    >
-                      {section.label}
-                    </button>
-                  ))}
-                </div>
+              {guideSections.map((section) => (
+                <button
+                  key={section.id}
+                  id={`product-guide-tab-${section.id}`}
+                  type="button"
+                  className={activeSection === section.id ? "product-guide-nav-active" : undefined}
+                  aria-current={activeSection === section.id ? "page" : undefined}
+                  aria-controls="scenecart-product-guide-panel"
+                  tabIndex={activeSection === section.id ? 0 : -1}
+                  data-guide-section={section.id}
+                  onClick={() => setActiveSection(section.id)}
+                  onKeyDown={(event) => handleNavigationKeyDown(event, section.id)}
+                >
+                  {section.label}
+                </button>
               ))}
             </nav>
-            <div className="product-guide-mode-cards" aria-label="当前运行版本">
-              <div className={!isDemo ? "product-guide-mode-active" : undefined}><strong>正式产品</strong><span>固定 owner 与真实任务环境；当前 Production 未启用外层保护</span></div>
-              <div className={isDemo ? "product-guide-mode-active" : undefined}><strong>公开 Demo</strong><span>冻结数据体验版</span></div>
-            </div>
           </aside>
 
           <article

@@ -7,7 +7,7 @@ import { formatCurrency } from "@/lib/utils";
 import { API_INPUT_LIMITS } from "@/lib/api/input-limits";
 
 export function AgentBrief({
-  eyebrow = "SceneCart Agent",
+  eyebrow = "场景购 Agent",
   title,
   description,
   highlights = [],
@@ -57,7 +57,7 @@ export function StatusPage({ title, description, loading }: { title: string; des
   return (
     <div className="workflow-content space-y-4">
       <AgentBrief
-        eyebrow="SceneCart 正在协作"
+        eyebrow="场景购正在协作"
         title={title}
         description={description}
         loading={loading}

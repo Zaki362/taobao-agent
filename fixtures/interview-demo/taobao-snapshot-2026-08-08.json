@@ -2,9 +2,9 @@
   "schema_version": 1,
   "kind": "historical_taobao_snapshot",
   "captured_at": "2026-08-08T14:33:55+08:00",
-  "captured_via": "Taobao Desktop taobao-native search_products through the SceneCart local executor",
+  "captured_via": "Taobao Desktop taobao-native search_products through the 场景购 local executor",
   "disclosure": "面试演示专用历史快照。价格、库存、规格与链接状态均未做实时校验，不代表当前淘宝结果。",
-  "safety_boundary": "演示执行器不会调用淘宝搜索、加购、下单或支付能力；确认加购只会写入 SceneCart 产品内演示清单。",
+  "safety_boundary": "演示执行器不会调用淘宝搜索、加购、下单或支付能力；确认加购只会写入场景购产品内演示清单。",
   "source_snapshots": {
     "safety-essential": ".data/local-executor/results/8fc86a9a-fb0a-41bc-b85f-eb1aac6b8cbf.json",
     "cleaning-care": ".data/local-executor/results/2bec1c1c-671c-4f33-b7a3-390b02f94725.json",

@@ -154,7 +154,7 @@ export function evaluateRuntimeHealth(input: RuntimeHealthInput) {
         "critical",
         "有任务等待，但本地执行器离线",
         `当前有 ${queuedWork} 个待执行或执行中任务，没有响应设备领取。`,
-        "在淘宝桌面版所在电脑运行 executor:doctor，确认官方 HTTP MCP 与 SceneCart API 都通过后启动 worker:local。"
+        "在淘宝桌面版所在电脑运行 executor:doctor，确认官方 HTTP MCP 与场景购 API 都通过后启动 worker:local。"
       ));
     }
   }

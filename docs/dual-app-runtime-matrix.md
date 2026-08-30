@@ -1,6 +1,6 @@
-# SceneCart 双应用运行时合同
+# 场景购双应用运行时合同
 
-本文件是 SceneCart 当前发布边界的权威摘要。仓库只维护一份共享 UI 与稳定业务逻辑，但构建为两个相互隔离的应用；任何旧文档与本表冲突时，以本表和当前代码门禁为准。
+本文件是场景购当前发布边界的权威摘要。仓库只维护一份共享 UI 与稳定业务逻辑，但构建为两个相互隔离的应用；任何旧文档与本表冲突时，以本表和当前代码门禁为准。
 
 | 边界 | 正式产品 | 公开 Demo |
 | --- | --- | --- |
@@ -21,7 +21,7 @@
 
 正式产品只供一个 owner 使用。`SCENECART_SINGLE_USER_ID` 指向正式数据库中已经存在的唯一 owner，并且只能保存在服务端环境；不得使用 `NEXT_PUBLIC_` 前缀、写入前端、日志、仓库或 Demo。数据库凭据、DeepSeek Key、Cron Secret、Vercel Protection Bypass Secret 和设备 Token 同样只能存在于各自的服务端或本机 Worker。
 
-SceneCart 不再显示登录、注册或创建账号入口。进入正式产品后直接绑定服务端固定 owner；`/login` 回到首页，注册页面或普通登录/注册 API 不再提供公众账号能力。固定 owner 不能是 anonymous、public-demo 或临时身份。
+场景购不再显示登录、注册或创建账号入口。进入正式产品后直接绑定服务端固定 owner；`/login` 回到首页，注册页面或普通登录/注册 API 不再提供公众账号能力。固定 owner 不能是 anonymous、public-demo 或临时身份。
 
 ## 正式产品暴露策略门禁
 
@@ -34,12 +34,12 @@ SceneCart 不再显示登录、注册或创建账号入口。进入正式产品�
 
 ## Worker 机器鉴权
 
-Vercel 外层保护与 SceneCart 设备鉴权是两个独立边界。连接受保护 origin 时，远程 Worker 请求必须同时携带：
+Vercel 外层保护与场景购设备鉴权是两个独立边界。连接受保护 origin 时，远程 Worker 请求必须同时携带：
 
 1. `SCENECART_VERCEL_PROTECTED_ORIGIN` 与 `SCENECART_VERCEL_PROTECTION_BYPASS_SECRET`，只用于穿过 Vercel Protection；
-2. `SCENECART_DEVICE_TOKEN`（或云端专用设备 Token），只用于 SceneCart Worker API 鉴权。
+2. `SCENECART_DEVICE_TOKEN`（或云端专用设备 Token），只用于场景购 Worker API 鉴权。
 
-只有 Bypass 没有设备 Token 时，仍不得注册心跳、领取任务或回传结果；只有设备 Token 没有 Bypass 时，请求应被 Vercel 外层拦截。无保护的 `unprotected_risk_accepted` Production 不配置 Vercel Protected Origin 或 Bypass，但 SceneCart 设备 Bearer Token 仍是必需鉴权，缺失或失效时必须拒绝 Worker API。所有凭据只保存在 Worker 所在机器的 `0600` 本地环境文件或系统密钥存储中。日志必须脱敏，跨源重定向必须 fail closed。Cron、Webhook、readiness 与后台恢复调用也要按实际暴露策略配置，并始终保留各自的 SceneCart Bearer Secret。
+只有 Bypass 没有设备 Token 时，仍不得注册心跳、领取任务或回传结果；只有设备 Token 没有 Bypass 时，请求应被 Vercel 外层拦截。无保护的 `unprotected_risk_accepted` Production 不配置 Vercel Protected Origin 或 Bypass，但场景购设备 Bearer Token 仍是必需鉴权，缺失或失效时必须拒绝 Worker API。所有凭据只保存在 Worker 所在机器的 `0600` 本地环境文件或系统密钥存储中。日志必须脱敏，跨源重定向必须 fail closed。Cron、Webhook、readiness 与后台恢复调用也要按实际暴露策略配置，并始终保留各自的场景购 Bearer Secret。
 
 ## Demo 冻结边界
 

@@ -108,7 +108,7 @@ export function TopHeader({
       >
         <BrandMark />
         <span>
-          <span className="block text-[15px] font-semibold leading-none tracking-tight">SceneCart</span>
+          <span className="block text-[15px] font-semibold leading-none tracking-tight">场景购</span>
           <span className="mt-1 hidden text-[11px] text-muted-foreground sm:block">场景化购物助手</span>
         </span>
       </button>
@@ -216,7 +216,7 @@ export function LandingPage({
           }}
         >
           <BrandMark />
-          <span className="text-[15px] font-semibold tracking-tight">SceneCart</span>
+          <span className="text-[15px] font-semibold tracking-tight">场景购</span>
           <span className="hidden text-xs text-muted-foreground sm:inline">场景化购物助手</span>
         </a>
         <nav className="flex items-center gap-1.5">
@@ -254,9 +254,9 @@ export function LandingPage({
       <section className="landing-hero">
         <SceneSpirit />
         <div className="mx-auto max-w-3xl text-center">
-          <h1 className="landing-title">把一句需求，变成买得明白的方案</h1>
+          <h1 className="landing-title">说出场景，AI 帮你把想要的装进购物车</h1>
           <p className="landing-subtitle">
-            描述场景、预算和偏好，Agent 会先规划，再帮你找到合适商品。
+            自动拆解需求、生成购物清单、搜索比选并组合推荐，确认后即可加购。
           </p>
         </div>
 

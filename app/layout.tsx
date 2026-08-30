@@ -3,8 +3,8 @@ import "./globals.css";
 import type { ReactNode } from "react";
 
 export const metadata: Metadata = {
-  title: "SceneCart AI",
-  description: "帮你分阶段完成场景化购物决策的 AI Agent"
+  title: "场景购",
+  description: "说出场景，AI 自动拆解需求、搜索比选并组合推荐，确认后即可加购"
 };
 
 export default function RootLayout({

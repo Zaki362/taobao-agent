@@ -67,7 +67,7 @@ async function recover() {
     ? payload.items.filter((item) => item?.reason === "recovery_failed").length
     : 0;
   process.stdout.write(
-    `[SceneCart Recovery] ${timestamp} scanned=${payload.scanned ?? 0} recovered=${payload.recovered ?? 0} failed=${failed}\n`
+    `[场景购 Recovery] ${timestamp} scanned=${payload.scanned ?? 0} recovered=${payload.recovered ?? 0} failed=${failed}\n`
   );
 }
 
@@ -80,7 +80,7 @@ for (const signal of ["SIGINT", "SIGTERM"]) {
 do {
   await recover().catch((error) => {
     const message = safeMachineErrorMessage(error);
-    process.stderr.write(`[SceneCart Recovery] ${new Date().toISOString()} ${message}\n`);
+    process.stderr.write(`[场景购 Recovery] ${new Date().toISOString()} ${message}\n`);
     if (isVercelProtectionError(error) || error instanceof RecoveryAuthenticationError) {
       fatalAuthenticationError = error;
       stopped = true;

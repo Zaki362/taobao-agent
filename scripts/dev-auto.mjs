@@ -207,7 +207,7 @@ export async function startDevelopmentStack(args = process.argv.slice(2)) {
     }
   });
 
-  console.log("[dev] 正在启动 SceneCart AI 网页与本地执行器管理器...");
+  console.log("[dev] 正在启动场景购网页与本地执行器管理器...");
   console.log(`[dev] 页面地址：${apiBaseUrl}`);
   console.log(`[dev] 执行器设置：${apiBaseUrl}/settings/executor`);
 
